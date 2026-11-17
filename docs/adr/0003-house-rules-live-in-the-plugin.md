@@ -11,4 +11,4 @@ The rules that hold in every session of every project (the Git rule, for one) ar
 
 - The rules reach only sessions that have the plugin. That is every session today: Joseph runs local sessions only, with the plugin installed for his user. A cloud session, or the Claude GitHub Action without the plugin loaded, would get none of them, and that would be the moment to revisit this.
 - The plugin is installed per machine and a project does not declare it in its own settings, because a committed setting does not install anything.
-- The Code Reviewer's agents are unaffected either way. They run with no project or user settings and read neither `CLAUDE.md` nor the plugin.
+- The code reviewer's agents are unaffected either way. They run with no project or user settings and read neither `CLAUDE.md` nor the plugin.

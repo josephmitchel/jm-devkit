@@ -36,9 +36,9 @@ _Avoid_: design system (the tokens and components a canvas is drawn with)
 The shared code that builds a project's boards from its real screens and checks them. Each project supplies its own screens and demo data.
 _Avoid_: canvas tooling, canvas scripts
 
-**Code Reviewer**:
+**Code reviewer**:
 The part of the kit that audits a project's code on GitHub and files what it finds as tickets.
-_Avoid_: reviewer service, bot, sweep (one thing the Code Reviewer does)
+_Avoid_: Code Reviewer (it is one process among others, not a proper noun), reviewer service, bot, sweep (one thing the code reviewer does)
 
 **House rule**:
 A rule that holds in every session of every project, whichever skill is running. House rules belong to the kit, never to a project.
@@ -57,7 +57,7 @@ A file in a project that install writes once if it is missing and the kit never 
 _Avoid_: scaffold, starter file
 
 **House standard**:
-A coding standard the Code Reviewer holds every project to, alongside the project's own standards.
+A coding standard the code reviewer holds every project to, alongside the project's own standards.
 _Avoid_: shared rule, house rule (which governs how agents work, not what the code must be)
 
 **Install**:
