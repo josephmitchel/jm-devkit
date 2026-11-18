@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://raw.githubusercontent.com/josephmitchel/jm-devkit/main/plugin/devkit.schema.json",
   "title": "devkit.json",
-  "description": "A project's config: how it uses the kit, and the facts about itself the kit needs. It sits at the project root and is project-owned. The code reviewer reads it from the project's checkout on every run, and the generator turns it into the project's kit-owned files. The code reviewer validates against this file with a small interpreter of its own (reviewer/src/project-config.ts), which understands only the keywords used here: a new keyword fails its tests until it learns it.",
+  "description": "A project's config: how it uses the kit, and the facts about itself the kit needs. It sits at the project root and is project-owned. The code reviewer reads it from the project's checkout on every run, and the generator turns it into the project's kit-owned files. Both validate against this file through one small interpreter (plugin/devkit-config.mjs), which understands only the keywords used here: a new keyword fails its tests until it learns it.",
   "type": "object",
   "required": ["modules", "sweep", "reviewer"],
   "additionalProperties": false,
@@ -78,7 +78,7 @@
           "additionalProperties": { "type": "string" }
         },
         "services": {
-          "description": "Services the tests need, a database say, in the shape of a GitHub Actions job's `services:` map, keyed by the service's id. The generator writes them into the project's review and sweep workflows; the code reviewer itself ignores them. Their connection details reach the tests through `env`.",
+          "description": "Services the tests need, a database say, in the shape of a GitHub Actions job's `services:` map, keyed by the service's id. The generator writes them onto the jobs of the project's sweep workflow that run the tests (`sweep` and `review-now`); the code reviewer itself ignores them. Their connection details reach the tests through `env`.",
           "type": "object",
           "propertyNames": { "pattern": "^[A-Za-z_][A-Za-z0-9_-]*$" },
           "additionalProperties": {
