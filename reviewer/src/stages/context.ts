@@ -1,5 +1,6 @@
 import type { InferSelectModel } from 'drizzle-orm';
 import type { schema } from '../db/client.js';
+import type { ProjectSetup } from '../project-config.js';
 
 export type RepoRow = InferSelectModel<typeof schema.repos>;
 export type ReviewRow = InferSelectModel<typeof schema.reviews>;
@@ -16,6 +17,8 @@ export interface RunCtx {
   repo: RepoRow;
   round: RoundRow | null;
   workspaceDir: string | null;
+  /** How to set up and test the project, read from the checkout each time one is prepared. */
+  project: ProjectSetup | null;
 }
 
 /** A PR review in progress. */
@@ -79,4 +82,9 @@ export function requireRound(ctx: RunCtx): RoundRow {
 export function requireWorkspace(ctx: RunCtx): string {
   if (!ctx.workspaceDir) throw new Error('workspace not prepared');
   return ctx.workspaceDir;
+}
+
+export function requireProject(ctx: RunCtx): ProjectSetup {
+  if (!ctx.project) throw new Error('project setup not read: the workspace was not prepared');
+  return ctx.project;
 }

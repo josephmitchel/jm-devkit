@@ -13,7 +13,7 @@ import {
 } from '../workspace.js';
 import { renderPolicies, renderRepoStandards } from './audit.js';
 import { reviewConcerns } from './report.js';
-import { requireRound, requireWorkspace, type Ctx } from './context.js';
+import { requireProject, requireRound, requireWorkspace, type Ctx } from './context.js';
 
 async function renderAnswers(roundId: number): Promise<string> {
   const rows = await db.select().from(schema.questions).where(eq(schema.questions.roundId, roundId));
@@ -168,7 +168,7 @@ export async function runFixing(ctx: Ctx): Promise<void> {
         PR_BRANCH: ctx.review.prBranch,
         HEAD_SHA: round.headSha,
         PLAN: planBlock,
-        TEST_COMMANDS: ctx.repo.testCommands.map((t) => `- ${t.command}`).join('\n') || '(none configured)',
+        TEST_COMMANDS: requireProject(ctx).testCommands.map((t) => `- ${t.command}`).join('\n') || '(none configured)',
         COMMIT_MESSAGE: round.plan.commitMessage,
       }) +
       '\n\nWhen done, return the commit message you used via the structured output.',

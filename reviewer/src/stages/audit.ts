@@ -11,6 +11,7 @@ import { ensurePrSummaryComment } from './pr-summary.js';
 import {
   AGENT_CONCURRENCY,
   AUDITOR_CHARACTERISTICS,
+  requireProject,
   requireRound,
   requireWorkspace,
   type Ctx,
@@ -128,7 +129,7 @@ export async function auditRound(ctx: RunCtx, options: AuditOptions): Promise<vo
   const blastList = blastRadius.map((f) => `- ${f.path} (${f.reason})`).join('\n');
 
   // A verification round's scope is one fix commit's diff — redundant passes add cost, not recall.
-  const redundancy = round.kind === 'verification' ? 1 : Math.max(1, ctx.repo.redundancy);
+  const redundancy = round.kind === 'verification' ? 1 : Math.max(1, requireProject(ctx).redundancy);
   const preamble =
     round.kind === 'verification'
       ? 'shared/auditor-preamble-verification.md'
@@ -151,7 +152,7 @@ export async function auditRound(ctx: RunCtx, options: AuditOptions): Promise<vo
             .join('\n\n');
 
     let definition = loadPrompt(`auditors/${characteristic}.md`, {
-      HARNESS_NOTES: ctx.repo.harnessNotes ?? '(no harness notes provided)',
+      HARNESS_NOTES: requireProject(ctx).harnessNotes ?? '(no harness notes provided)',
     });
     const prompt =
       loadPrompt(preamble, {

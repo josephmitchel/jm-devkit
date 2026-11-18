@@ -54,6 +54,31 @@ One database serves every project. A `CODING_STANDARDS.md` at the repo root is r
 commit on every round and put in front of the auditors, the synthesis and the fix planner beside
 those policies, so written rules and answered questions bind the same way.
 
+## The project config: `devkit.json`
+
+A project can say how it is set up and tested in a `devkit.json` at its root, instead of in its
+database row. The format is defined once, as a JSON Schema at `plugin/devkit.schema.json`, whose
+descriptions document each field; the kit's own `devkit.json` is an example. Its `reviewer`
+section holds `setup`, `tests` (`[{ "name", "command" }]`), `env`, `services`, `harnessNotes`,
+`redundancy` and `extraContext`.
+
+On every run, in the PR loop and in the sweep, the code reviewer reads the file from the checkout
+it has just made (so a PR that changes it is set up and tested as it says):
+
+- **With a `devkit.json`**, its `reviewer` section is the whole answer and the database row's setup,
+  tests, harness notes, redundancy and extra context are not consulted; a field the file leaves out
+  means none (redundancy 1). `harnessNotes` is a path to a doc in the project, which must exist.
+  `env` is applied to the project's setup and test commands only; the action's `repo-env` input is
+  applied over it and wins on a name both set, because the input is where a secret comes from.
+  `services` is for the workflow generator and ignored here.
+- **Without one**, everything comes from the database row, exactly as before.
+- **A malformed one** fails the run, with a message naming each field at fault
+  (`reviewer.tests[0].command is required`). It never falls back to the row.
+
+The code reviewer validates the file with a small interpreter of the schema's keywords
+(`src/project-config.ts`), so the schema stays the one definition; its tests fail if the schema
+starts using a keyword the interpreter does not enforce.
+
 ## The nightly sweep (advisory mode)
 
 The PR loop above gates every PR on a full review, fix cycle and verification — tens of minutes
