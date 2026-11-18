@@ -1,0 +1,25 @@
+{
+  "description": "Puts the house rules in every session and every subagent",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/house-rules.mjs\""
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/house-rules.mjs\""
+          }
+        ]
+      }
+    ]
+  }
+}
