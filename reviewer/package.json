@@ -1,0 +1,31 @@
+{
+  "name": "code-reviewer",
+  "version": "0.1.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "worker:deploy": "npx --yes wrangler@4.153.0 deploy --config worker/wrangler.toml",
+    "worker:tail": "npx --yes wrangler@4.153.0 tail --config worker/wrangler.toml"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.296",
+    "dotenv": "^17.4.2",
+    "drizzle-orm": "^0.45.2",
+    "pg": "^8.23.0",
+    "tsx": "^4.23.13",
+    "typescript": "^7.0.2",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^26.5.1",
+    "@types/pg": "^8.23.1",
+    "drizzle-kit": "^0.31.10",
+    "vitest": "^5.0.2"
+  }
+}

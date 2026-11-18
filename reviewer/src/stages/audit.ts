@@ -1,0 +1,198 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { and, eq } from 'drizzle-orm';
+import { db, schema } from '../db/client.js';
+import { getPr } from '../github.js';
+import { loadPrompt, runAgent, withConcurrency } from '../agents/run-agent.js';
+import { changedFilePaths } from '../workspace.js';
+import { auditorOutputSchema, scoutOutputSchema } from '../agents/schemas.js';
+import type { TestResult } from '../db/schema.js';
+import { ensurePrSummaryComment } from './pr-summary.js';
+import {
+  AGENT_CONCURRENCY,
+  AUDITOR_CHARACTERISTICS,
+  requireRound,
+  requireWorkspace,
+  type Ctx,
+  type RunCtx,
+} from './context.js';
+
+/** Which flow a round belongs to. Decides the prompts: a PR branch and a default-branch sweep are described differently. */
+export type AuditMode = 'pr' | 'sweep';
+
+export interface AuditOptions {
+  mode: AuditMode;
+  /** The files the round's diff touches — what the scout starts from. */
+  changedFiles: () => Promise<string[]>;
+  /** Runs once the scout has produced the round's summary (the PR flow posts its patch notes here). */
+  onScouted?: () => Promise<void>;
+}
+
+/** The PR flow's prompts live at the top of `prompts/`; the sweep's under `prompts/sweep/`. */
+export function promptPath(mode: AuditMode, name: string): string {
+  return mode === 'sweep' ? `sweep/${name}` : name;
+}
+
+export function renderTestResults(results: TestResult[] | null): string {
+  if (!results || results.length === 0) return 'No test suites are configured for this repo.';
+  return results
+    .map((r) => {
+      if (r.passed) return `- ${r.name} (\`${r.command}\`): PASS`;
+      // A killed command is not evidence of broken code, and saying FAIL here invited ten auditors
+      // to explain a failure that never happened from a log that was merely cut off.
+      const verdict = r.timedOut ? 'TIMED OUT — did not finish, so it says nothing either way' : 'FAIL';
+      return `- ${r.name} (\`${r.command}\`): ${verdict}\n\`\`\`\n${r.trimmedOutput ?? ''}\n\`\`\``;
+    })
+    .join('\n');
+}
+
+// The repo's own judgement-call rules, read from the checkout under review so the file and the
+// code are the same commit. Policies are what the owner answered on PRs; this is what they wrote
+// down. Placeholder braces are broken so a rule quoting one never reads as a template slot.
+export const REPO_STANDARDS_FILE = 'CODING_STANDARDS.md';
+
+export function renderRepoStandards(workspace: string): string {
+  const file = path.join(workspace, REPO_STANDARDS_FILE);
+  if (!fs.existsSync(file)) return `(none: the repo has no ${REPO_STANDARDS_FILE})`;
+  const text = fs.readFileSync(file, 'utf8').trim();
+  return text === '' ? `(${REPO_STANDARDS_FILE} is empty)` : text.replaceAll('{{', '{ {');
+}
+
+export async function renderPolicies(repoId: number): Promise<string> {
+  const rows = await db.select().from(schema.policies).where(eq(schema.policies.repoId, repoId));
+  if (rows.length === 0) return '(none yet)';
+  return rows.map((p) => `- Q: ${p.question}\n  A: ${p.answer}`).join('\n');
+}
+
+/** Audit the current round of a PR review. */
+export async function runAudit(ctx: Ctx): Promise<void> {
+  await auditRound(ctx, {
+    mode: 'pr',
+    changedFiles: async () => (await getPr(ctx.repo.slug, ctx.review.prNumber)).changedFiles,
+    onScouted: () => ensurePrSummaryComment(ctx),
+  });
+}
+
+/** Scout the blast radius, then run the ten auditors over it. Shared by PR reviews and sweeps. */
+export async function auditRound(ctx: RunCtx, options: AuditOptions): Promise<void> {
+  const round = requireRound(ctx);
+  const workspace = requireWorkspace(ctx);
+
+  let blastRadius = round.blastRadius;
+  if (!blastRadius) {
+    if (round.kind === 'verification') {
+      // Verification rounds audit only the fix diff — no scout, no consumer tracing.
+      const files = await changedFilePaths(workspace, round.baseSha, round.headSha);
+      blastRadius = files.map((path) => ({ path, reason: 'changed by fix commits' }));
+      await db.update(schema.rounds).set({ blastRadius }).where(eq(schema.rounds.id, round.id));
+      ctx.round = { ...round, blastRadius };
+    } else {
+      const changed = await options.changedFiles();
+      const scout = await runAgent({
+        roundId: round.id,
+        role: 'scout',
+        cwd: workspace,
+        outputSchema: scoutOutputSchema,
+        prompt: loadPrompt(promptPath(options.mode, 'scout.md'), {
+          HEAD_SHA: round.headSha,
+          BASE_SHA: round.baseSha,
+          CHANGED_FILES: changed.map((f) => `- ${f}`).join('\n'),
+        }),
+      });
+      blastRadius = scout.output.files;
+      await db
+        .update(schema.rounds)
+        .set({ blastRadius, prSummary: scout.output.pr_summary })
+        .where(eq(schema.rounds.id, round.id));
+      ctx.round = { ...round, blastRadius, prSummary: scout.output.pr_summary };
+    }
+  }
+  console.log(`blast radius (${round.kind}): ${blastRadius.length} files`);
+
+  if (round.kind !== 'verification' && options.onScouted) {
+    await options.onScouted();
+  }
+
+  const blastPaths = new Set(blastRadius.map((f) => f.path));
+  const openConcerns = await db
+    .select()
+    .from(schema.concerns)
+    .where(and(eq(schema.concerns.repoId, ctx.repo.id), eq(schema.concerns.status, 'open')));
+  const relevantConcerns = openConcerns.filter((c) =>
+    c.locations.some((l) => blastPaths.has(l.file)),
+  );
+
+  const policies = await renderPolicies(ctx.repo.id);
+  const standards = renderRepoStandards(workspace);
+  const testResults = renderTestResults(round.testResults);
+  const blastList = blastRadius.map((f) => `- ${f.path} (${f.reason})`).join('\n');
+
+  // A verification round's scope is one fix commit's diff — redundant passes add cost, not recall.
+  const redundancy = round.kind === 'verification' ? 1 : Math.max(1, ctx.repo.redundancy);
+  const preamble =
+    round.kind === 'verification'
+      ? 'shared/auditor-preamble-verification.md'
+      : options.mode === 'sweep'
+        ? 'sweep/auditor-preamble.md'
+        : 'shared/auditor-preamble.md';
+  const jobs: Array<() => Promise<void>> = [];
+  for (const characteristic of AUDITOR_CHARACTERISTICS) {
+    const priors = relevantConcerns.filter((c) => c.characteristics.includes(characteristic));
+    const priorsBlock =
+      priors.length === 0
+        ? '(none)'
+        : priors
+            .map(
+              (c) =>
+                `#### ${c.slug} (${c.level})\n${c.title}\nLocations: ${c.locations
+                  .map((l) => `${l.file}${l.line ? `:${l.line}` : ''}`)
+                  .join(', ')}\n\n${c.body}`,
+            )
+            .join('\n\n');
+
+    let definition = loadPrompt(`auditors/${characteristic}.md`, {
+      HARNESS_NOTES: ctx.repo.harnessNotes ?? '(no harness notes provided)',
+    });
+    const prompt =
+      loadPrompt(preamble, {
+        CHARACTERISTIC: characteristic,
+        BASE_SHA: round.baseSha,
+        HEAD_SHA: round.headSha,
+        BLAST_RADIUS: blastList,
+        POLICIES: policies,
+        TEST_RESULTS: testResults,
+        DEFINITION: definition,
+        REPO_STANDARDS: standards,
+      }) + `\n\n## Prior open concerns\n\n${priorsBlock}\n`;
+
+    for (let i = 1; i <= redundancy; i++) {
+      const role = redundancy === 1 ? `auditor-${characteristic}` : `auditor-${characteristic}-${i}`;
+      jobs.push(async () => {
+        const res = await runAgent({
+          roundId: round.id,
+          role,
+          cwd: workspace,
+          outputSchema: auditorOutputSchema,
+          prompt,
+        });
+        const already = await db
+          .select({ id: schema.findings.id })
+          .from(schema.findings)
+          .where(and(eq(schema.findings.roundId, round.id), eq(schema.findings.auditor, role)));
+        if (already.length === 0) {
+          await db.insert(schema.findings).values({
+            roundId: round.id,
+            auditor: role,
+            agentSessionId: res.sessionRowId,
+            payload: res.output,
+          });
+        }
+        // Report what was actually recorded, not what the agent claimed about itself.
+        const n = res.output.findings.length;
+        console.log(`  [${role}] ${n === 0 ? 'nothing found' : `${n} finding(s)`}`);
+      });
+    }
+  }
+
+  await withConcurrency(jobs, AGENT_CONCURRENCY);
+}

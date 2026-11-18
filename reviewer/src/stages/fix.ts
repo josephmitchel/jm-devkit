@@ -1,0 +1,226 @@
+import { eq } from 'drizzle-orm';
+import { z } from 'zod';
+import { db, schema } from '../db/client.js';
+import { loadPrompt, MODELS, runAgent } from '../agents/run-agent.js';
+import { fixPlanOutputSchema } from '../agents/schemas.js';
+import { isOwnFix } from '../fix-commit.js';
+import {
+  commitFacts,
+  configuredAuthorEmail,
+  localHeadSha,
+  pushHeadTo,
+  remoteBranchSha,
+} from '../workspace.js';
+import { renderPolicies, renderRepoStandards } from './audit.js';
+import { reviewConcerns } from './report.js';
+import { requireRound, requireWorkspace, type Ctx } from './context.js';
+
+async function renderAnswers(roundId: number): Promise<string> {
+  const rows = await db.select().from(schema.questions).where(eq(schema.questions.roundId, roundId));
+  const answered = rows.filter((q) => q.answer !== null).sort((a, b) => a.ordinal - b.ordinal);
+  if (answered.length === 0) return '(no questions were asked this round)';
+  return answered.map((q) => `- Q: ${q.text}\n  A: ${q.answer}`).join('\n');
+}
+
+function renderConcernsBlock(
+  concerns: Array<{ slug: string; level: string; title: string; body: string; locations: Array<{ file: string; line: number | null }> }>,
+): string {
+  return concerns
+    .map(
+      (c) =>
+        `### ${c.slug} (${c.level})\n${c.title}\nLocations: ${c.locations
+          .map((l) => `${l.file}${l.line ? `:${l.line}` : ''}`)
+          .join(', ')}\n\n${c.body}`,
+    )
+    .join('\n\n');
+}
+
+export async function runFixPlanning(ctx: Ctx): Promise<void> {
+  const round = requireRound(ctx);
+  if (round.plan) return;
+
+  // Every user-facing question is answered before this stage runs (runAwaitAnswers blocks
+  // on them), so nothing is held back here. Non-blocking verification-round discoveries stay
+  // out of the plan — they are recorded for a future PR, never fixed in this one. That future PR
+  // is any later review whose audit carries them: gateBlocking is fixed at creation, so filtering
+  // on it alone kept them out of every plan in every PR, re-reported forever and never fixed.
+  // Inherited concerns are planned here but still never block this review's gate (isBlocking).
+  const open = (await reviewConcerns(ctx)).filter(
+    (c) => c.status === 'open' && (c.gateBlocking || c.originReviewId !== ctx.review.id),
+  );
+  if (open.length === 0) return;
+
+  const res = await runAgent({
+    roundId: round.id,
+    role: 'fix-planner',
+    cwd: requireWorkspace(ctx),
+    outputSchema: fixPlanOutputSchema,
+    model: MODELS.author,
+    prompt: loadPrompt('fix-planner.md', {
+      HEAD_SHA: round.headSha,
+      CONCERNS: renderConcernsBlock(open),
+      ANSWERS: await renderAnswers(round.id),
+      POLICIES: await renderPolicies(ctx.repo.id),
+      REPO_STANDARDS: renderRepoStandards(requireWorkspace(ctx)),
+    }),
+  });
+
+  const plan = {
+    steps: res.output.steps.map((s) => ({
+      concernSlug: s.concern_slug,
+      approach: s.approach,
+      files: s.files,
+    })),
+    commitMessage: res.output.commit_message,
+  };
+  await db.update(schema.rounds).set({ plan }).where(eq(schema.rounds.id, round.id));
+  ctx.round = { ...round, plan };
+  console.log(`fix plan: ${plan.steps.length} step(s)`);
+}
+
+/** Record the head our own push left on the branch — what judging grades and every resume trusts. */
+export async function recordFix(ctx: Ctx, sha: string): Promise<void> {
+  const round = requireRound(ctx);
+  await db.update(schema.rounds).set({ fixSha: sha }).where(eq(schema.rounds.id, round.id));
+  ctx.round = { ...round, fixSha: sha };
+}
+
+/** The remote head when it is the commit this workspace built on top of `preFixSha`, else null. */
+async function landedFix(workspace: string, branch: string, preFixSha: string): Promise<string | null> {
+  const remote = await remoteBranchSha(workspace, branch);
+  return remote !== preFixSha && remote === (await localHeadSha(workspace)) ? remote : null;
+}
+
+export async function runFixing(ctx: Ctx): Promise<void> {
+  const round = requireRound(ctx);
+  const workspace = requireWorkspace(ctx);
+  if (!round.plan) throw new Error('fixing without a stored plan');
+
+  // Two very different things used to look identical here: our own fix already being on the
+  // branch (a run died after pushing, so re-entering must not fix twice) and somebody else having
+  // pushed while the round waited for answers. Inequality alone cannot tell them apart, and under
+  // CI the waiting window is hours, so the second case was common — and it silently skipped the
+  // fixer, leaving the judges to grade the owner's unrelated commits and the gate to pass over
+  // concerns no one had touched. `fixSha` is the recorded, verified head of our own push.
+  const remoteSha = await remoteBranchSha(workspace, ctx.review.prBranch);
+  if (round.fixSha && remoteSha === round.fixSha) {
+    console.log(`remote is at this round's fix ${remoteSha.slice(0, 10)} — already pushed, skipping fixer`);
+    return;
+  }
+  if (round.fixSha && remoteSha === round.headSha) {
+    // We provably pushed (fixSha is set) and the branch is back at the pre-fix head, so our commit
+    // was removed. Re-running the fixer here would silently re-apply work somebody deliberately
+    // force-pushed away — the one case these guards used to fall straight through.
+    throw new Error(
+      `our fix ${round.fixSha.slice(0, 10)} is no longer on the branch, which is back at ` +
+        `${remoteSha.slice(0, 10)} — it was force-pushed away; not re-applying it. Comment on the PR ` +
+        'to review the branch as it now stands',
+    );
+  }
+  if (remoteSha !== round.headSha && !round.fixSha) {
+    // fixSha is written immediately after the push, but a run killed in that gap would leave our
+    // own fix looking exactly like somebody else's — and the loud failure below would then repeat
+    // on every retry, because nothing later can supply the missing fixSha. isOwnFix settles it. The
+    // identity is read from the workspace's own git config rather than from the environment: it can
+    // come from a global config too, and comparing against the variable left this disabled wherever
+    // it was not set — and wrong across any change to the default.
+    const head = await commitFacts(workspace, `origin/${ctx.review.prBranch}`);
+    const ours = (await configuredAuthorEmail(workspace)) ?? process.env.REVIEWER_GIT_EMAIL ?? null;
+    if (isOwnFix(head, round, ours)) {
+      console.log(`remote head ${remoteSha.slice(0, 10)} is this round's own fix — recording it`);
+      await recordFix(ctx, remoteSha);
+      return;
+    }
+  }
+  if (remoteSha !== round.headSha) {
+    // Loudly, and without rebasing: the plan names files and approaches derived from a diff that
+    // no longer describes the branch. A fresh round has to re-read the new head.
+    throw new Error(
+      `branch moved during the fix round — plan is stale (round audited ${round.headSha.slice(0, 10)}, ` +
+        `remote is now ${remoteSha.slice(0, 10)}` +
+        `${round.fixSha ? `, our own fix was ${round.fixSha.slice(0, 10)}` : ''}) — ` +
+        'the plan was never written against this head; comment on the PR to start a fresh round',
+    );
+  }
+
+  const planBlock = round.plan.steps
+    .map((s, i) => `${i + 1}. [${s.concernSlug}] ${s.approach}\n   Files: ${s.files.join(', ')}`)
+    .join('\n');
+
+  const fixer = runAgent({
+    roundId: round.id,
+    role: 'fixer',
+    cwd: workspace,
+    outputSchema: z.object({ commit_message: z.string() }),
+    model: MODELS.author,
+    tools: 'write',
+    // Never reuse a succeeded fixer session: its product is the pushed commit, not the text it
+    // returned, and a session that "succeeded" with a failed push would otherwise be replayed
+    // forever while the branch never moves.
+    reuseSucceeded: false,
+    // And no in-call retry. Every other agent is idempotent — it reads and reports — but a second
+    // fixer attempt starts in a tree the first one already edited and committed, against a prompt
+    // that still describes the original head, and is told to implement the whole plan again. A fresh
+    // run with a clean clone is the only safe retry.
+    maxRetries: 0,
+    prompt:
+      loadPrompt('fixer.md', {
+        PR_BRANCH: ctx.review.prBranch,
+        HEAD_SHA: round.headSha,
+        PLAN: planBlock,
+        TEST_COMMANDS: ctx.repo.testCommands.map((t) => `- ${t.command}`).join('\n') || '(none configured)',
+        COMMIT_MESSAGE: round.plan.commitMessage,
+      }) +
+      '\n\nWhen done, return the commit message you used via the structured output.',
+  });
+  try {
+    await fixer;
+  } catch (err) {
+    // The push is the fixer's last action, so a fixer that dies after it has still done the round's
+    // work: PR #32's stalled for 15 minutes once its push had landed. Judging that fix is the next
+    // step either way, and failing here left a pushed commit that no retry could attribute.
+    const landed = await landedFix(workspace, ctx.review.prBranch, round.headSha).catch(() => null);
+    if (!landed) throw err;
+    console.log(`fixer failed after its push landed (${String(err).split('\n')[0]}) — recording it`);
+    await recordFix(ctx, landed);
+    console.log(`fix pushed: ${landed.slice(0, 10)}`);
+    return;
+  }
+
+  let pushed = await remoteBranchSha(workspace, ctx.review.prBranch);
+  if (pushed === round.headSha) {
+    // The fixer's own push did not land. If it committed, the work is right here, so push it
+    // ourselves: a transient rejection then simply succeeds, and a refusal we cannot recover from is
+    // one we can finally read and report instead of guessing from a branch that failed to move.
+    const localHead = await localHeadSha(workspace);
+    if (localHead === round.headSha) {
+      throw new Error('fixer finished without committing anything — nothing to push');
+    }
+    console.log(`fixer's push did not land; pushing ${localHead.slice(0, 10)} from the reviewer`);
+    const attempt = await pushHeadTo(workspace, ctx.review.prBranch);
+    if (!attempt.pushed) {
+      throw new Error(
+        `the fixer committed ${localHead.slice(0, 10)} but it cannot be pushed:\n${attempt.error}\n` +
+          '(a change under .github/workflows/ needs the GitHub App to hold the Workflows permission)',
+      );
+    }
+    pushed = await remoteBranchSha(workspace, ctx.review.prBranch);
+  }
+  // "The branch moved" is not the same as "we moved it". If the owner pushed while the fixer was
+  // working, the fixer's own push is rejected as non-fast-forward (its prompt forbids force-pushing,
+  // so it cannot recover) and it still returns a commit message — leaving the remote at THEIR commit,
+  // past our head, which the check above happily accepts. Recording that as fixSha then disarmed the
+  // judging guard and let the judges grade the owner's diff as our fix: the exact mis-attribution
+  // this column exists to prevent. The fixer's commit is still in the workspace, so compare.
+  const localHead = await localHeadSha(workspace);
+  if (pushed !== localHead) {
+    throw new Error(
+      `the branch is at ${pushed.slice(0, 10)}, which is not the commit the fixer produced ` +
+        `(${localHead.slice(0, 10)}) — our push did not land, most likely rejected because the branch ` +
+        'moved during the fix round; the plan is stale, so comment on the PR to start a fresh round',
+    );
+  }
+  // Recorded from the remote we just re-read, and only once it matches what we built.
+  await recordFix(ctx, pushed);
+  console.log(`fix pushed: ${pushed.slice(0, 10)}`);
+}
