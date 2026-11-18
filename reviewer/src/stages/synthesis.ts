@@ -1,0 +1,248 @@
+import { and, eq } from 'drizzle-orm';
+import { db, schema } from '../db/client.js';
+import { loadPrompt, MODELS, runAgent } from '../agents/run-agent.js';
+import { synthesisOutputSchema, type SynthesisOutput } from '../agents/schemas.js';
+import { promptPath, renderPolicies, renderRepoStandards, renderTestResults, type AuditMode } from './audit.js';
+import { requireRound, requireWorkspace, type Ctx, type RunCtx } from './context.js';
+
+/** Who the round's concerns and questions belong to. */
+export type SynthesisOrigin = { reviewId: number; sweepId?: undefined } | { sweepId: number; reviewId?: undefined };
+
+export interface SynthesisOptions {
+  mode: AuditMode;
+  origin: SynthesisOrigin;
+}
+
+/** Synthesize the current round of a PR review. */
+export async function runSynthesis(ctx: Ctx): Promise<void> {
+  await synthesizeRound(ctx, { mode: 'pr', origin: { reviewId: ctx.review.id } });
+}
+
+/** Turn the round's raw findings into concern actions and questions. Shared by PR reviews and sweeps. */
+export async function synthesizeRound(ctx: RunCtx, options: SynthesisOptions): Promise<void> {
+  const round = requireRound(ctx);
+  if (round.synthesizedAt) return;
+  const { origin } = options;
+
+  const findingRows = await db
+    .select()
+    .from(schema.findings)
+    .where(eq(schema.findings.roundId, round.id));
+  const openConcerns = await db
+    .select()
+    .from(schema.concerns)
+    .where(and(eq(schema.concerns.repoId, ctx.repo.id)));
+
+  const openBlock =
+    openConcerns.length === 0
+      ? '(none)'
+      : openConcerns
+          .map(
+            (c) =>
+              `- \`${c.slug}\` [${c.status}] (${c.level}; ${c.characteristics.join(', ')}) ${c.title}`,
+          )
+          .join('\n');
+
+  const failedSuites = (round.testResults ?? []).filter((t) => !t.passed);
+
+  const basePrompt = loadPrompt(promptPath(options.mode, 'synthesis.md'), {
+    ROUND_NO: String(round.roundNo),
+    ROUND_KIND: round.kind,
+    FINDINGS: JSON.stringify(
+      findingRows.map((f) => ({ auditor: f.auditor, ...(f.payload as object) })),
+      null,
+      2,
+    ),
+    OPEN_CONCERNS: openBlock,
+    POLICIES: await renderPolicies(ctx.repo.id),
+    REPO_STANDARDS: renderRepoStandards(requireWorkspace(ctx)),
+    TEST_RESULTS: renderTestResults(round.testResults),
+  });
+
+  let output: SynthesisOutput | null = null;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const prompt =
+      attempt === 1
+        ? basePrompt
+        : `${basePrompt}\n\nIMPORTANT: your previous synthesis omitted concerns for these failed test suites: ` +
+          `${failedSuites.map((t) => t.name).join(', ')}. Every failed suite must be represented by a concern.`;
+    const res = await runAgent({
+      roundId: round.id,
+      role: attempt === 1 ? 'synthesis' : 'synthesis-retry',
+      cwd: requireWorkspace(ctx),
+      outputSchema: synthesisOutputSchema,
+      model: MODELS.author,
+      // Synthesis emits one very large structured output and goes quiet for long stretches
+      // while it does — 28m between messages in the slowest succeeded run, far past the
+      // default stall budget every other role runs under.
+      stallTimeoutMs: 45 * 60 * 1000,
+      prompt,
+    });
+    output = res.output;
+    const missing = failedSuites.filter(
+      (t) =>
+        !output!.concerns.some(
+          (c) =>
+            c.action !== 'resolve' &&
+            (c.title.toLowerCase().includes(t.name.toLowerCase()) ||
+              c.body.toLowerCase().includes(t.name.toLowerCase())),
+        ),
+    );
+    if (missing.length === 0) break;
+    if (attempt === 2) {
+      console.warn(
+        `synthesis still missing concerns for failed suites: ${missing.map((t) => t.name).join(', ')} — proceeding with what we have`,
+      );
+    }
+  }
+  if (!output) throw new Error('synthesis produced no output');
+
+  const slugSet = new Set(openConcerns.map((c) => c.slug));
+  await db.transaction(async (tx) => {
+    for (const action of output!.concerns) {
+      const existing = openConcerns.find((c) => c.slug === action.slug);
+      if (action.action === 'create') {
+        if (slugSet.has(action.slug)) {
+          throw new Error(`synthesis tried to create duplicate slug ${action.slug}`);
+        }
+        await tx.insert(schema.concerns).values({
+          repoId: ctx.repo.id,
+          originReviewId: origin.reviewId ?? null,
+          originSweepId: origin.sweepId ?? null,
+          slug: action.slug,
+          title: action.title,
+          body: action.body,
+          level: action.level,
+          status: 'open',
+          characteristics: action.characteristics,
+          locations: action.locations,
+          lastSeenRoundId: round.id,
+          // Rising bar: late (verification-round) discoveries only block the gate when
+          // they are major regressions the fix itself introduced.
+          gateBlocking:
+            round.kind === 'full' || (action.level === 'major' && action.introduced_by_fix),
+        });
+      } else if (existing) {
+        if (action.action === 'carry' || action.action === 'reopen') {
+          await tx
+            .update(schema.concerns)
+            .set({
+              status: 'open',
+              title: action.title,
+              body: action.body,
+              level: action.level,
+              characteristics: action.characteristics,
+              locations: action.locations,
+              lastSeenRoundId: round.id,
+              resolvedAt: null,
+              resolutionNote: null,
+            })
+            .where(eq(schema.concerns.id, existing.id));
+        } else if (action.action === 'resolve') {
+          await tx
+            .update(schema.concerns)
+            .set({
+              status: 'resolved',
+              resolvedAt: new Date(),
+              resolutionNote: action.body,
+              lastSeenRoundId: round.id,
+            })
+            .where(eq(schema.concerns.id, existing.id));
+        }
+      } else {
+        console.warn(`synthesis referenced unknown slug ${action.slug} with action ${action.action} — skipped`);
+      }
+    }
+
+    // User-facing question ordinals are unique across the whole review, so replies like
+    // "3. <answer>" stay unambiguous even when questions from earlier rounds are still pending.
+    // A sweep numbers them per concern instead: each concern's questions sit in its own issue,
+    // and the reply is read from that issue's thread.
+    const priorOrdinals =
+      origin.reviewId !== undefined
+        ? await tx
+            .select({ ordinal: schema.questions.ordinal })
+            .from(schema.questions)
+            .where(eq(schema.questions.reviewId, origin.reviewId))
+        : [];
+    let ordinal = priorOrdinals.reduce((m, r) => Math.max(m, r.ordinal), 0) + 1;
+    const owner = { reviewId: origin.reviewId ?? null, sweepId: origin.sweepId ?? null };
+    for (const q of output!.questions) {
+      const concern = q.concern_slug
+        ? (await tx
+            .select({ id: schema.concerns.id })
+            .from(schema.concerns)
+            .where(
+              and(eq(schema.concerns.repoId, ctx.repo.id), eq(schema.concerns.slug, q.concern_slug)),
+            ))[0]
+        : undefined;
+      let userFacing = q.user_facing;
+      if (userFacing && origin.sweepId !== undefined && !concern) {
+        // A sweep has no page of its own to ask on: questions live in concern issues. One without a
+        // concern has nowhere to go, so it is kept as guidance rather than lost — and never asked.
+        console.warn(`sweep question has no concern to live in — recorded as guidance only: ${q.text}`);
+        userFacing = false;
+      }
+      if (userFacing) {
+        let next = ordinal++;
+        if (origin.sweepId !== undefined && concern) {
+          const own = await tx
+            .select({ ordinal: schema.questions.ordinal })
+            .from(schema.questions)
+            .where(eq(schema.questions.concernId, concern.id));
+          next = own.reduce((m, r) => Math.max(m, r.ordinal), 0) + 1;
+        }
+        await tx.insert(schema.questions).values({
+          ...owner,
+          roundId: round.id,
+          concernId: concern?.id ?? null,
+          ordinal: next,
+          text: q.text,
+          recommendation: q.recommendation,
+          userFacing: true,
+        });
+      } else {
+        // Not a user-facing functionality decision: apply the recommendation immediately.
+        // Deliberately no policies row — auto-applied decisions are not owner decisions
+        // and stay vetoable; only real user answers become repo policy. In a sweep nothing
+        // applies it; the recommendation is shown in the issue as the suggested direction.
+        await tx.insert(schema.questions).values({
+          ...owner,
+          roundId: round.id,
+          concernId: concern?.id ?? null,
+          ordinal: 0,
+          text: q.text,
+          recommendation: q.recommendation,
+          userFacing: false,
+          autoApplied: true,
+          answer: `(auto-applied recommendation) ${q.recommendation}`,
+          answeredAt: new Date(),
+        });
+      }
+    }
+
+    await tx
+      .update(schema.rounds)
+      .set({ synthesizedAt: new Date(), roundSummary: output!.round_summary })
+      .where(eq(schema.rounds.id, round.id));
+  });
+  ctx.round = { ...round, synthesizedAt: new Date(), roundSummary: output.round_summary };
+  // Only user-facing questions ever reach the PR, so count them separately — a bare question
+  // total reads as "you will be asked" when every one of them was decided here and now.
+  const asked = output.questions.filter((q) => q.user_facing);
+  const auto = output.questions.filter((q) => !q.user_facing);
+  console.log(
+    `synthesis: ${output.concerns.length} concern action(s), ` +
+      `${asked.length} question(s) for you, ${auto.length} decided automatically`,
+  );
+  for (const q of auto) {
+    // Silent in PR comments by design; the terminal is the one place these are visible.
+    console.log(`  [auto] ${oneLine(q.text)} -> ${oneLine(q.recommendation)}`);
+  }
+}
+
+/** Collapse a question/recommendation to a single readable log line. */
+function oneLine(s: string, max = 140): string {
+  const flat = s.replace(/\s+/g, ' ').trim();
+  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+}

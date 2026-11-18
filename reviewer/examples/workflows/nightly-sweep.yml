@@ -1,0 +1,83 @@
+# Copy this into the repository you want swept, as .github/workflows/nightly-sweep.yml.
+#
+# The nightly sweep replaces per-PR review with an advisory backlog. Every night it:
+#   1. applies your decisions: a ticket labelled `wontfix` is closed as not planned, its blocking
+#      edges lifted, and the comment you gave with the label saved as a repo policy; a reviewer
+#      issue you closed by hand is final and never judged;
+#   2. reads your replies on issues labelled `needs-answer` and saves them as policy;
+#   3. audits what landed on the default branch since the last sweep (ISO/IEC 25010, ten auditors)
+#      and files each major or moderate concern as an issue, minors into one digest issue;
+#   4. judges every ticket labelled `needs-judging` — the reviewer's own issues included — against
+#      its text and the repo's standards: closed as completed, or `needs-work` with a brief;
+# It never pushes a fix and never sets a commit status, so nothing blocks a merge.
+#
+# The `landed` job runs when a PR merges: every ticket the PR body names with `Addresses #N` is
+# labelled `needs-judging` for that night's judge, and the tickets it blocked are unblocked (the
+# "blocked by" edge becomes "relates to"), so dependent work can start the same day.
+#
+# The `review-now` job is the escape hatch: put the `review-now` label on a PR to get the full
+# per-PR review (questions, fixes, gate) on demand. Delete that job if you never want it.
+name: Code Reviewer sweep
+
+on:
+  # The schedule lives in the Cloudflare Worker (worker/README.md), which dispatches this workflow
+  # on the minute; GitHub's own `schedule` runs hours late. Add a `schedule:` block only as a
+  # backstop while rolling the Worker out.
+  workflow_dispatch:
+  pull_request:
+    types: [labeled, closed]
+
+permissions: {}
+
+jobs:
+  sweep:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    # One sweep at a time per repo. A second run while one is still going waits for it.
+    concurrency:
+      group: code-reviewer-sweep-${{ github.repository }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    # A repo whose suites need a real database declares it here (see code-review.yml).
+    steps:
+      - uses: josephmitchel/code-reviewer@main
+        with:
+          command: sweep
+          database-url: ${{ secrets.DATABASE_URL }}
+          claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          app-client-id: ${{ secrets.REVIEWER_APP_CLIENT_ID }}
+          app-private-key: ${{ secrets.REVIEWER_APP_PRIVATE_KEY }}
+          # repo-env: |
+          #   TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/myapp_test
+
+  landed:
+    if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: josephmitchel/code-reviewer@main
+        with:
+          command: landed
+          pr: ${{ github.event.pull_request.number }}
+          database-url: ${{ secrets.DATABASE_URL }}
+          claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          app-client-id: ${{ secrets.REVIEWER_APP_CLIENT_ID }}
+          app-private-key: ${{ secrets.REVIEWER_APP_PRIVATE_KEY }}
+
+  review-now:
+    if: >-
+      github.event_name == 'pull_request' && github.event.action == 'labeled' &&
+      github.event.label.name == 'review-now' && github.event.pull_request.draft == false
+    concurrency:
+      group: code-reviewer-${{ github.repository }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - uses: josephmitchel/code-reviewer@main
+        with:
+          pr: ${{ github.event.pull_request.number }}
+          database-url: ${{ secrets.DATABASE_URL }}
+          claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          app-client-id: ${{ secrets.REVIEWER_APP_CLIENT_ID }}
+          app-private-key: ${{ secrets.REVIEWER_APP_PRIVATE_KEY }}

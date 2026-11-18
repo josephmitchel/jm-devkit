@@ -24,3 +24,29 @@ jobs:
         run: claude plugin validate plugin
       - name: Test the plugin
         run: node --test 'plugin/**/*.test.mjs'
+
+  reviewer:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: reviewer
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          # The code reviewer pins no version of its own; its action defaults to 24.
+          node-version: 24
+          cache: npm
+          cache-dependency-path: reviewer/package-lock.json
+      - run: npm ci
+      # The package has no typecheck script; its tsconfig is noEmit, so tsc is the typecheck.
+      - name: Typecheck
+        run: npx --no-install tsc -p .
+      # Covers src/ and the Worker's tests (worker/src/index.test.ts) through vitest.config.ts.
+      - name: Test the code reviewer and the Worker
+        run: npm test
+        env:
+          # src/db/client.ts throws at import time without it, and six test files import it.
+          # No test connects, so an unreachable address is enough and keeps any future test that
+          # does connect from passing by accident.
+          DATABASE_URL: postgres://nobody@127.0.0.1:1/none
