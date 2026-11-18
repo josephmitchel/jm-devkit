@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { and, eq } from 'drizzle-orm';
 import { db, schema } from '../db/client.js';
 import { getPr } from '../github.js';
@@ -58,10 +59,41 @@ export function renderRepoStandards(workspace: string): string {
   return text === '' ? `(${REPO_STANDARDS_FILE} is empty)` : text.replaceAll('{{', '{ {');
 }
 
+// The kit's own rules, held in every project alongside the repo's file. Resolved from this source
+// file, not the working directory: the action runs from the kit's checkout, and the repo under
+// review is a separate checkout that knows nothing of it.
+export const HOUSE_STANDARDS_PATH = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '../../house-standards.md',
+);
+
+/**
+ * Every coding standard a review holds the repo to, as two labelled sources: the house standards
+ * first, then the repo's own file. A repo with no file of its own still gets the house standards.
+ */
+export function renderStandards(workspace: string): string {
+  const house = fs.readFileSync(HOUSE_STANDARDS_PATH, 'utf8').trim().replaceAll('{{', '{ {');
+  return [
+    '<house-standards source="the code reviewer\'s house standards, held in every project">',
+    house,
+    '</house-standards>',
+    '',
+    `<repo-standards source="${REPO_STANDARDS_FILE} at the head commit">`,
+    renderRepoStandards(workspace),
+    '</repo-standards>',
+  ].join('\n');
+}
+
 export async function renderPolicies(repoId: number): Promise<string> {
   const rows = await db.select().from(schema.policies).where(eq(schema.policies.repoId, repoId));
   if (rows.length === 0) return '(none yet)';
   return rows.map((p) => `- Q: ${p.question}\n  A: ${p.answer}`).join('\n');
+}
+
+/** The prompt every auditor in a round starts from: a verification round's, the sweep's, or a PR round's. */
+export function auditorPreamble(kind: 'full' | 'verification', mode: AuditMode): string {
+  if (kind === 'verification') return 'shared/auditor-preamble-verification.md';
+  return mode === 'sweep' ? 'sweep/auditor-preamble.md' : 'shared/auditor-preamble.md';
 }
 
 /** Audit the current round of a PR review. */
@@ -123,18 +155,13 @@ export async function auditRound(ctx: RunCtx, options: AuditOptions): Promise<vo
   );
 
   const policies = await renderPolicies(ctx.repo.id);
-  const standards = renderRepoStandards(workspace);
+  const standards = renderStandards(workspace);
   const testResults = renderTestResults(round.testResults);
   const blastList = blastRadius.map((f) => `- ${f.path} (${f.reason})`).join('\n');
 
   // A verification round's scope is one fix commit's diff — redundant passes add cost, not recall.
   const redundancy = round.kind === 'verification' ? 1 : Math.max(1, ctx.repo.redundancy);
-  const preamble =
-    round.kind === 'verification'
-      ? 'shared/auditor-preamble-verification.md'
-      : options.mode === 'sweep'
-        ? 'sweep/auditor-preamble.md'
-        : 'shared/auditor-preamble.md';
+  const preamble = auditorPreamble(round.kind, options.mode);
   const jobs: Array<() => Promise<void>> = [];
   for (const characteristic of AUDITOR_CHARACTERISTICS) {
     const priors = relevantConcerns.filter((c) => c.characteristics.includes(characteristic));
@@ -162,7 +189,7 @@ export async function auditRound(ctx: RunCtx, options: AuditOptions): Promise<vo
         POLICIES: policies,
         TEST_RESULTS: testResults,
         DEFINITION: definition,
-        REPO_STANDARDS: standards,
+        STANDARDS: standards,
       }) + `\n\n## Prior open concerns\n\n${priorsBlock}\n`;
 
     for (let i = 1; i <= redundancy; i++) {

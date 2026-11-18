@@ -2,7 +2,7 @@ import { and, eq } from 'drizzle-orm';
 import { db, schema } from '../db/client.js';
 import { loadPrompt, MODELS, runAgent } from '../agents/run-agent.js';
 import { synthesisOutputSchema, type SynthesisOutput } from '../agents/schemas.js';
-import { promptPath, renderPolicies, renderRepoStandards, renderTestResults, type AuditMode } from './audit.js';
+import { promptPath, renderPolicies, renderStandards, renderTestResults, type AuditMode } from './audit.js';
 import { requireRound, requireWorkspace, type Ctx, type RunCtx } from './context.js';
 
 /** Who the round's concerns and questions belong to. */
@@ -55,7 +55,7 @@ export async function synthesizeRound(ctx: RunCtx, options: SynthesisOptions): P
     ),
     OPEN_CONCERNS: openBlock,
     POLICIES: await renderPolicies(ctx.repo.id),
-    REPO_STANDARDS: renderRepoStandards(requireWorkspace(ctx)),
+    STANDARDS: renderStandards(requireWorkspace(ctx)),
     TEST_RESULTS: renderTestResults(round.testResults),
   });
 
