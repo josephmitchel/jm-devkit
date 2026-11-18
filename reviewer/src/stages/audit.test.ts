@@ -1,8 +1,16 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
-import { renderRepoStandards, renderTestResults, REPO_STANDARDS_FILE } from './audit.js';
+import { loadPrompt } from '../agents/run-agent.js';
+import {
+  auditorPreamble,
+  renderRepoStandards,
+  renderStandards,
+  renderTestResults,
+  REPO_STANDARDS_FILE,
+} from './audit.js';
 import { testsLine } from './report.js';
 
 /**
@@ -123,4 +131,65 @@ describe('renderRepoStandards', () => {
       'Never write { {POLICIES}} by hand.',
     );
   });
+});
+
+/**
+ * The house standards are held in every project, beside the repo's own file, so every auditor in
+ * every round reads both: PR rounds, verification rounds and the sweep alike. A repo with no
+ * standards file of its own is the case most at risk of reading as having no rules at all.
+ */
+describe('renderStandards', () => {
+  const HOUSE_RULE = '## Invariant comments move with the code';
+  const promptsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../prompts');
+  const dirs: string[] = [];
+  const workspace = (contents?: string) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cr-house-'));
+    dirs.push(dir);
+    if (contents !== undefined) fs.writeFileSync(path.join(dir, REPO_STANDARDS_FILE), contents);
+    return dir;
+  };
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  // Fills every slot in an auditor preamble, as auditRound does, with the standards in theirs.
+  const auditorPrompt = (preamble: string, standards: string) => {
+    const raw = fs.readFileSync(path.join(promptsDir, preamble), 'utf8');
+    const slots = [...raw.matchAll(/\{\{([A-Z_]+)\}\}/g)].map((m) => m[1]);
+    expect(slots).toContain('STANDARDS');
+    return loadPrompt(preamble, Object.fromEntries(slots.map((s) => [s, s === 'STANDARDS' ? standards : '-'])));
+  };
+  const rounds = [
+    ['a PR round', auditorPreamble('full', 'pr')],
+    ['a PR verification round', auditorPreamble('verification', 'pr')],
+    ['a sweep round', auditorPreamble('full', 'sweep')],
+  ] as const;
+
+  it('gives the house standards and the repo file as two labelled sources', () => {
+    const out = renderStandards(workspace('# Coding standards\n\n## Repo rule\n'));
+    const house = out.indexOf('<house-standards');
+    const repo = out.indexOf('<repo-standards source="CODING_STANDARDS.md at the head commit">');
+    expect(house).toBe(0);
+    expect(repo).toBeGreaterThan(house);
+    expect(out.slice(house, repo)).toContain(HOUSE_RULE);
+    expect(out.slice(repo)).toContain('## Repo rule');
+    expect(out.trimEnd().endsWith('</repo-standards>')).toBe(true);
+  });
+
+  it('still gives the house standards when the repo has no file of its own', () => {
+    const out = renderStandards(workspace());
+    expect(out).toContain(HOUSE_RULE);
+    expect(out).toContain('(none: the repo has no CODING_STANDARDS.md)');
+  });
+
+  for (const [name, preamble] of rounds) {
+    it(`reaches every auditor in ${name}, with or without a repo file`, () => {
+      const withFile = auditorPrompt(preamble, renderStandards(workspace('## Repo rule\n')));
+      expect(withFile).toContain(HOUSE_RULE);
+      expect(withFile).toContain('## Repo rule');
+      const without = auditorPrompt(preamble, renderStandards(workspace()));
+      expect(without).toContain(HOUSE_RULE);
+      expect(without).toContain('(none: the repo has no CODING_STANDARDS.md)');
+    });
+  }
 });
