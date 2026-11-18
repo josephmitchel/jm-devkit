@@ -15,4 +15,5 @@ export interface SweptRepo {
 export const REPOS: SweptRepo[] = [
   { slug: 'josephmitchel/vices', cron: '17 7 * * *' },
   { slug: 'josephmitchel/spendright', cron: '17 8 * * *' },
+  { slug: 'josephmitchel/jm-devkit', cron: '17 9 * * *' },
 ];
