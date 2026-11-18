@@ -52,7 +52,9 @@ Everything that accumulates is scoped per repo: the review slot (one active revi
 so projects never queue behind each other), concerns, and the policies built from your answers.
 One database serves every project. A `CODING_STANDARDS.md` at the repo root is read from the head
 commit on every round and put in front of the auditors, the synthesis and the fix planner beside
-those policies, so written rules and answered questions bind the same way.
+those policies, so written rules and answered questions bind the same way. The kit's own
+`house-standards.md`, beside this README, goes with it as a second, separately labelled source:
+house standards hold in every project, including one with no `CODING_STANDARDS.md` of its own.
 
 ## The project config: `devkit.json`
 

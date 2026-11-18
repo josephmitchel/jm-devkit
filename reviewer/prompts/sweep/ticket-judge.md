@@ -12,11 +12,11 @@ A ticket labelled `concern` is a concern this sweep raised itself on an earlier 
 
 {{LANDED}}
 
-## Repo standards
+## Coding standards
 
-The repo's own coding standards, from `CODING_STANDARDS.md` at the head commit. Work that breaks one is not finished.
+Two sources, each in its own labelled block below: the house standards the code reviewer holds every project to, and the repo's own coding standards from `CODING_STANDARDS.md` at the head commit. Work that breaks one is not finished.
 
-{{REPO_STANDARDS}}
+{{STANDARDS}}
 
 ## Established policies
 
@@ -35,7 +35,7 @@ The sweep's auditors reviewed everything that landed today against the ISO/IEC 2
 Two questions, both answered against the actual code at {{HEAD_SHA}}, never against the pull request's description:
 
 1. **Spec.** Did the work deliver what the ticket asked for — every acceptance criterion, every listed behaviour, the stated scope and nothing clearly outside it? Read the ticket as the specification. Where the ticket is silent, the codebase's existing conventions decide.
-2. **Standards.** Is it finished to the repo's standards and the quality characteristics — tested where the repo tests such things, consistent with the surrounding code, free of the concerns listed above?
+2. **Standards.** Is it finished to the coding standards above and the quality characteristics — tested where the repo tests such things, consistent with the surrounding code, free of the concerns listed above?
 
 Verdict `solved` means both hold. Verdict `needs_work` means either does not. A partial delivery, an untested change in a tested area, or a major/moderate audit concern inside the work is `needs_work`.
 

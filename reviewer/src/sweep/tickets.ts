@@ -14,7 +14,7 @@ import {
   type IssueTimelineEvent,
   type MergedPrFacts,
 } from '../github.js';
-import { renderPolicies, renderRepoStandards } from '../stages/audit.js';
+import { renderPolicies, renderStandards } from '../stages/audit.js';
 import { AGENT_CONCURRENCY, requireRound, requireWorkspace, type ConcernRow, type SweepCtx } from '../stages/context.js';
 import { changedFilePaths, isAncestor } from '../workspace.js';
 import { LABELS, withStatus } from './render.js';
@@ -49,7 +49,7 @@ export async function judgeTickets(ctx: SweepCtx): Promise<JudgedTicket[]> {
     .where(and(eq(schema.concerns.repoId, ctx.repo.id), eq(schema.concerns.status, 'open')));
   // The reviewer's own concerns, by issue: judged like any ticket, and resolved in the database on `solved`.
   const ownConcerns = new Map(tonight.filter((c) => c.issueNumber !== null).map((c) => [c.issueNumber!, c]));
-  const standards = renderRepoStandards(workspace);
+  const standards = renderStandards(workspace);
   const policies = await renderPolicies(ctx.repo.id);
 
   const out: JudgedTicket[] = [];
@@ -94,7 +94,7 @@ export async function judgeTickets(ctx: SweepCtx): Promise<JudgedTicket[]> {
         TICKET_TITLE: ticket.title,
         TICKET_BODY: ticket.body.trim() || '(no body)',
         LANDED: landed.text,
-        REPO_STANDARDS: standards,
+        STANDARDS: standards,
         POLICIES: policies,
         AUDIT_CONCERNS: renderAuditConcerns(inside),
       }),
