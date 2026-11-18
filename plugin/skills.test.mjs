@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { basename, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const pluginRoot = fileURLToPath(new URL('.', import.meta.url));
@@ -42,3 +42,44 @@ for (const path of manifest.skills ?? []) {
     assert.ok(fields.description, 'frontmatter has no description');
   });
 }
+
+// Every file under the plugin, as a path relative to the plugin root.
+function pluginFiles(dir = pluginRoot) {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const path = join(dir, entry.name);
+    return entry.isDirectory() ? pluginFiles(path) : [relative(pluginRoot, path)];
+  });
+}
+
+const files = pluginFiles();
+const skillFiles = files.filter((path) => path.startsWith('skills/'));
+
+test('every plugin doc a skill points at exists', () => {
+  const missing = [];
+  for (const path of skillFiles) {
+    const text = readFileSync(join(pluginRoot, path), 'utf8');
+    for (const [, doc] of text.matchAll(/\$\{CLAUDE_PLUGIN_ROOT\}\/(docs\/[^\s`'")]+)/g)) {
+      if (!existsSync(join(pluginRoot, doc))) missing.push(`${path} -> ${doc}`);
+    }
+  }
+  assert.deepEqual(missing, []);
+});
+
+// The kit is public and never names a project. Whole words only, so that ordinary
+// English that contains one ("services", "blockers") is not caught.
+const forbidden = ['spendright', 'outlier', 'vices', 'blocker', 'josephmitchel/spendright', 'josephmitchel/vices'];
+const forbiddenPattern = new RegExp(`\\b(${forbidden.map((word) => word.replace(/[/]/g, '\\/')).join('|')})\\b`, 'gi');
+const thisFile = relative(pluginRoot, fileURLToPath(import.meta.url));
+
+test('no file under the plugin names a project', () => {
+  assert.ok(files.includes('docs/issue-tracker.md'), 'the walk did not reach the docs');
+  const found = [];
+  for (const path of files) {
+    if (path === thisFile) continue;
+    for (const [i, line] of readFileSync(join(pluginRoot, path), 'utf8').split('\n').entries()) {
+      for (const [word] of line.matchAll(forbiddenPattern)) found.push(`${path}:${i + 1}: ${word}`);
+    }
+    for (const [word] of path.matchAll(forbiddenPattern)) found.push(`${path}: ${word} in the path`);
+  }
+  assert.deepEqual(found, []);
+});
