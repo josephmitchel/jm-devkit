@@ -24,11 +24,11 @@ Finding nothing is the expected outcome for a sound fix. If the fix diff introdu
 
 `findings` is the only field required of you. Return it even when empty.
 
-## Repo standards
+## Coding standards
 
-The repo's own coding standards, from `CODING_STANDARDS.md` at the head commit. They are the owner's written rules, as authoritative as the policies below: a change that breaks one is a concern, and a concern that contradicts one is wrong.
+Two sources, each in its own labelled block below: the house standards the code reviewer holds every project to, and the repo's own coding standards from `CODING_STANDARDS.md` at the head commit. They are the owner's written rules, as authoritative as the policies below: a change that breaks one is a concern, and a concern that contradicts one is wrong.
 
-{{REPO_STANDARDS}}
+{{STANDARDS}}
 
 ## Established policies
 

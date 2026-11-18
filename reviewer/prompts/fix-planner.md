@@ -8,11 +8,11 @@ You are the fix-planning agent for a pull-request review. The working directory 
 
 {{ANSWERS}}
 
-## Repo standards
+## Coding standards
 
-The repo's own coding standards, from `CODING_STANDARDS.md` at the head commit. Every fix you plan follows them.
+Two sources, each in its own labelled block below: the house standards the code reviewer holds every project to, and the repo's own coding standards from `CODING_STANDARDS.md` at the head commit. Every fix you plan follows them.
 
-{{REPO_STANDARDS}}
+{{STANDARDS}}
 
 ## Established policies
 

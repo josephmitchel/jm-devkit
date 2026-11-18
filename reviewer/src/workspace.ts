@@ -243,16 +243,26 @@ function repoCommandHome(source: NodeJS.ProcessEnv): string | null {
   }
 }
 
-/** The environment a reviewed repo's own command gets: ours, minus anything that is ours. */
-export function repoCommandEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+/**
+ * The environment a reviewed repo's own command gets: ours, minus anything that is ours, plus what
+ * the project asks for — its `devkit.json` env, then the `repo-env` input over it. The input wins a
+ * name both set because it is the only one of the two that can carry a secret, and the per-run
+ * value a workflow sets on purpose should not be undone by a committed default.
+ */
+export function repoCommandEnv(
+  source: NodeJS.ProcessEnv = process.env,
+  projectEnv: Record<string, string> = {},
+): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...source, CI: 'true' };
   const home = repoCommandHome(source);
   if (home) env.HOME = home;
   for (const key of REVIEWER_ONLY_ENV) delete env[key];
   for (const key of Object.keys(env)) if (key.startsWith('REVIEWER_')) delete env[key];
 
-  // Applied last, so a repo CAN legitimately set a name on the strip list for its own commands —
-  // which is the point — without that name ever having existed in the reviewer's environment.
+  // Both applied after the strip, so a repo CAN legitimately set a name on the strip list for its
+  // own commands — which is the point — without that name ever having existed in the reviewer's
+  // environment.
+  Object.assign(env, projectEnv);
   for (const line of (source[REPO_ENV_CARRIER] ?? '').split('\n')) {
     const trimmed = line.trim();
     if (trimmed === '' || trimmed.startsWith('#')) continue;
@@ -266,10 +276,14 @@ export function repoCommandEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.
   return env;
 }
 
-/** Run a repo command (setup or tests); returns pass/fail with trimmed output on failure. */
+/**
+ * Run a repo command (setup or tests); returns pass/fail with trimmed output on failure.
+ * `projectEnv` is the environment the project's `devkit.json` asks for (see repoCommandEnv).
+ */
 export async function runRepoCommand(
   dir: string,
   command: string,
+  projectEnv: Record<string, string> = {},
   timeoutMs = COMMAND_TIMEOUT_MS,
   maxBuffer = 32 * 1024 * 1024,
 ): Promise<CommandResult> {
@@ -279,7 +293,7 @@ export async function runRepoCommand(
       cwd: dir,
       timeout: timeoutMs,
       maxBuffer,
-      env: repoCommandEnv(),
+      env: repoCommandEnv(process.env, projectEnv),
     });
     return { passed: true, trimmedOutput: null };
   } catch (err) {

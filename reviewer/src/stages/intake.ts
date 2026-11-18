@@ -2,7 +2,8 @@ import { and, eq, notInArray } from 'drizzle-orm';
 import { db, schema } from '../db/client.js';
 import { getPr } from '../github.js';
 import { prepareWorkspace, runRepoCommand } from '../workspace.js';
-import { MAX_ROUNDS, requireWorkspace, type Ctx } from './context.js';
+import { MAX_ROUNDS, requireProject, requireWorkspace, type Ctx } from './context.js';
+import { readProjectSetup } from '../project-config.js';
 
 export interface ReviewSlotConflict {
   reviewId: number;
@@ -160,10 +161,20 @@ export async function resolveSlot(
  * again costs a minute rather than correctness.
  */
 export async function runSetup(ctx: Ctx): Promise<void> {
-  if (!ctx.repo.setupCommand) return;
-  console.log(`running setup: ${ctx.repo.setupCommand}`);
-  const setup = await runRepoCommand(requireWorkspace(ctx), ctx.repo.setupCommand);
+  const project = requireProject(ctx);
+  if (!project.setupCommand) return;
+  console.log(`running setup: ${project.setupCommand}`);
+  const setup = await runRepoCommand(requireWorkspace(ctx), project.setupCommand, project.env);
   if (!setup.passed) throw new Error(`setup command failed:\n${setup.trimmedOutput}`);
+}
+
+/**
+ * Learn how to set up and test the project from the checkout just prepared. Read on every
+ * checkout, not once per review: the PR under review can change its own `devkit.json`.
+ */
+export function readProject(ctx: Ctx): void {
+  ctx.project = readProjectSetup(requireWorkspace(ctx), ctx.repo);
+  console.log(`project setup read from ${ctx.project.source === 'devkit.json' ? 'devkit.json' : 'the database row'}`);
 }
 
 export async function runIntake(ctx: Ctx): Promise<void> {
@@ -231,13 +242,15 @@ export async function runIntake(ctx: Ctx): Promise<void> {
     pr.headSha,
   );
   console.log(`workspace ready at ${ctx.workspaceDir}`);
+  readProject(ctx);
 
   if (!round.testResults) {
     await runSetup(ctx);
+    const project = requireProject(ctx);
     const results = [];
-    for (const tc of ctx.repo.testCommands) {
+    for (const tc of project.testCommands) {
       console.log(`running tests: ${tc.name} (${tc.command})`);
-      const res = await runRepoCommand(ctx.workspaceDir, tc.command);
+      const res = await runRepoCommand(ctx.workspaceDir, tc.command, project.env);
       results.push({
         name: tc.name,
         command: tc.command,

@@ -52,7 +52,34 @@ Everything that accumulates is scoped per repo: the review slot (one active revi
 so projects never queue behind each other), concerns, and the policies built from your answers.
 One database serves every project. A `CODING_STANDARDS.md` at the repo root is read from the head
 commit on every round and put in front of the auditors, the synthesis and the fix planner beside
-those policies, so written rules and answered questions bind the same way.
+those policies, so written rules and answered questions bind the same way. The kit's own
+`house-standards.md`, beside this README, goes with it as a second, separately labelled source:
+house standards hold in every project, including one with no `CODING_STANDARDS.md` of its own.
+
+## The project config: `devkit.json`
+
+A project can say how it is set up and tested in a `devkit.json` at its root, instead of in its
+database row. The format is defined once, as a JSON Schema at `plugin/devkit.schema.json`, whose
+descriptions document each field; the kit's own `devkit.json` is an example. Its `reviewer`
+section holds `setup`, `tests` (`[{ "name", "command" }]`), `env`, `services`, `harnessNotes`,
+`redundancy` and `extraContext`.
+
+On every run, in the PR loop and in the sweep, the code reviewer reads the file from the checkout
+it has just made (so a PR that changes it is set up and tested as it says):
+
+- **With a `devkit.json`**, its `reviewer` section is the whole answer and the database row's setup,
+  tests, harness notes, redundancy and extra context are not consulted; a field the file leaves out
+  means none (redundancy 1). `harnessNotes` is a path to a doc in the project, which must exist.
+  `env` is applied to the project's setup and test commands only; the action's `repo-env` input is
+  applied over it and wins on a name both set, because the input is where a secret comes from.
+  `services` is for the workflow generator and ignored here.
+- **Without one**, everything comes from the database row, exactly as before.
+- **A malformed one** fails the run, with a message naming each field at fault
+  (`reviewer.tests[0].command is required`). It never falls back to the row.
+
+The code reviewer validates the file with the kit's one small interpreter of the schema's keywords
+(`plugin/devkit-config.mjs`, which the workflow generator uses too), so the schema stays the one
+definition; its tests fail if the schema starts using a keyword the interpreter does not enforce.
 
 ## The nightly sweep (advisory mode)
 
@@ -98,8 +125,9 @@ settle owner decisions → read answers → audit base...head → synthesis → 
   GitHub's failed-run notification is the alert; the next run resumes where it stopped.
   `code-reviewer status` lists the recent sweeps.
 
-Run it with `node bin/code-reviewer.mjs sweep owner/name`, or on Actions with
-`examples/workflows/nightly-sweep.yml` (`command: sweep`). GitHub's `schedule` trigger is
+Run it with `node bin/code-reviewer.mjs sweep owner/name`, or on Actions with the
+`.github/workflows/nightly-sweep.yml` that `plugin/generator/` writes from the project's
+`devkit.json` (`command: sweep`). GitHub's `schedule` trigger is
 best-effort (hours late in practice), so the schedule lives in a Cloudflare Worker that dispatches
 each repo's workflow on the minute as the reviewer's App: `worker/README.md`. That workflow also carries a
 `review-now` job: label a PR `review-now` to get the full PR review on demand. The two modes share
