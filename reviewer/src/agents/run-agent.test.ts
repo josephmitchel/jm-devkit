@@ -6,8 +6,32 @@ import {
   STALL_TIMEOUT_MS,
   StallWatch,
   StreamStalledError,
+  fillPrompt,
   isConnectionRetry,
 } from './run-agent.js';
+
+describe('fillPrompt', () => {
+  it('fills every placeholder in the template', () => {
+    expect(fillPrompt('a {{X}} b {{Y}} {{X}}', { X: '1', Y: '2' }, 't.md')).toBe('a 1 b 2 1');
+  });
+
+  it('throws on a placeholder the caller did not supply', () => {
+    expect(() => fillPrompt('a {{X}} {{MISSING}}', { X: '1' }, 't.md')).toThrow(
+      'unfilled placeholder {{MISSING}} in t.md',
+    );
+  });
+
+  it('leaves a placeholder inside a value alone: ticket text that mentions {{NAME}} is not a gap', () => {
+    const ticket = 'renamed {{REPO_STANDARDS}} to {{STANDARDS}}';
+    expect(fillPrompt('ticket: {{TICKET}}\nrules: {{STANDARDS}}', { TICKET: ticket, STANDARDS: 'S' }, 't.md')).toBe(
+      `ticket: ${ticket}\nrules: S`,
+    );
+  });
+
+  it('never substitutes into a value, so one value cannot inject another', () => {
+    expect(fillPrompt('{{A}} {{B}}', { A: '{{B}}', B: 'secret' }, 't.md')).toBe('{{B}} secret');
+  });
+});
 
 /**
  * The guard these cover exists because a stalled SDK stream is silent rather than broken:
