@@ -33,6 +33,7 @@
     "./skills/productivity/to-questionnaire",
     "./skills/productivity/wait-what",
     "./skills/productivity/writing-for-agents",
-    "./skills/kit/install"
+    "./skills/kit/install",
+    "./skills/kit/sync"
   ]
 }
