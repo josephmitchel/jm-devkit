@@ -41,7 +41,7 @@ State what is out of scope. This prevents the agent from gold-plating or making 
 ```markdown
 ## Agent Brief
 
-**Category:** bug / enhancement
+**Category:** bug / spec
 **Summary:** one-line description of what needs to happen
 
 **Current behavior:**
@@ -104,12 +104,12 @@ and append "..." to indicate truncation.
 - Multi-line description support
 ```
 
-### Good agent brief (enhancement)
+### Good agent brief (spec)
 
 ```markdown
 ## Agent Brief
 
-**Category:** enhancement
+**Category:** spec
 **Summary:** Add `.out-of-scope/` directory support for tracking rejected feature requests
 
 **Current behavior:**
@@ -152,7 +152,7 @@ For a PR, "Current behavior" describes the state of the diff, and the brief asks
 ```markdown
 ## Agent Brief
 
-**Category:** enhancement
+**Category:** spec
 **Summary:** Finish the contributor's `--json` output flag for `triage list`
 
 **Current behavior:**

@@ -6,17 +6,17 @@ disable-model-invocation: true
 
 This skill takes the current conversation context and codebase understanding and produces a spec. Do NOT interview the user; just synthesize what you already know.
 
-The issue tracker and triage label vocabulary should have been provided to you. If not, tell the user to run `/devkit:install`.
+Read the issue tracker rules in `${CLAUDE_PLUGIN_ROOT}/docs/issue-tracker.md` and the ticket label scheme in `${CLAUDE_PLUGIN_ROOT}/docs/ticket-labels.md`, then the project's `docs/agents/issue-tracker.md` and `docs/agents/ticket-labels.md` if it has them, for what is true only of that project. If the repository has none of the scheme's labels, it is not set up: tell the user to run `/devkit:install`.
 
 ## Process
 
-1. Explore the repo to understand the current state of the codebase, if you haven't already. Use the project's domain glossary vocabulary throughout the spec, and respect any ADRs in the area you're touching.
+1. Explore the repo to understand the current state of the codebase, if you haven't already. Use the project's domain glossary vocabulary (found as `${CLAUDE_PLUGIN_ROOT}/docs/domain.md` says) throughout the spec, and respect any ADRs in the area you're touching.
 
 2. Sketch out the seams at which you're going to test the feature. Existing seams should be preferred to new ones. Use the highest seam possible. If new seams are needed, propose them at the highest point you can. The fewer seams across the codebase, the better - the ideal number is one.
 
 Check with the user that these seams match their expectations.
 
-3. Write the spec using the template below, then publish it to the project issue tracker. Apply the `ready-for-agent` triage label - no need for additional triage.
+3. Write the spec using the template below, then publish it to the project issue tracker. Apply the kind `spec` and the status `ready-for-agent` - no need for additional triage.
 
 <spec-template>
 
