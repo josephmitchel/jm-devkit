@@ -4,7 +4,7 @@ import { isOwnFix } from './fix-commit.js';
 import { getCommit, getPr } from './github.js';
 import { markStage } from './heartbeat.js';
 import { prepareWorkspace, workspacePath } from './workspace.js';
-import { claimReviewSlot, runIntake, runSetup } from './stages/intake.js';
+import { claimReviewSlot, readProject, runIntake, runSetup } from './stages/intake.js';
 import { runAudit } from './stages/audit.js';
 import { runSynthesis } from './stages/synthesis.js';
 import { runReport, blockingConcerns, postFailureNotice } from './stages/report.js';
@@ -52,7 +52,7 @@ async function loadCtx(repoSlug: string, prNumber: number): Promise<Ctx> {
     ? (await db.select().from(schema.rounds).where(eq(schema.rounds.id, review.currentRoundId)))[0] ?? null
     : null;
 
-  return { repo, review, round, workspaceDir: null };
+  return { repo, review, round, workspaceDir: null, project: null };
 }
 
 /** Where a run left the review: finished, waiting on the owner, or waiting for the slot. */
@@ -251,6 +251,7 @@ async function runIntakeWorkspaceOnly(ctx: Ctx): Promise<void> {
     ctx.review.prBranch,
     ctx.round.headSha,
   );
+  readProject(ctx);
   await runSetup(ctx);
 }
 

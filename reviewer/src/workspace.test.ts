@@ -114,6 +114,31 @@ describe('repoCommandEnv with a repo-env carrier', () => {
 });
 
 /**
+ * A project's `devkit.json` env plays the carrier's role from a committed file. The carrier wins a
+ * name both set: it is the only one of the two a secret can come from.
+ */
+describe('repoCommandEnv with a devkit.json env', () => {
+  const source = { PATH: '/usr/bin', DATABASE_URL: 'postgresql://reviewer/neondb', REVIEWER_REPO_ENV: '' };
+
+  it('passes the project its variables, including a name that is otherwise stripped', () => {
+    const env = repoCommandEnv(source, { TEST_FLAG: '1', DATABASE_URL: 'postgresql://localhost/app_test' });
+    expect(env.TEST_FLAG).toBe('1');
+    expect(env.DATABASE_URL).toBe('postgresql://localhost/app_test');
+  });
+
+  it('gives way to the repo-env input on a name both set', () => {
+    const env = repoCommandEnv({ ...source, REVIEWER_REPO_ENV: 'SHARED=from-input' }, { SHARED: 'from-file', OWN: 'x' });
+    expect(env.SHARED).toBe('from-input');
+    expect(env.OWN).toBe('x');
+  });
+
+  it('reaches the command itself', async () => {
+    const res = await runRepoCommand('/tmp', 'test "$DEVKIT_PROBE" = here', { DEVKIT_PROBE: 'here' }, 10_000);
+    expect(res.passed).toBe(true);
+  });
+});
+
+/**
  * A command killed for running too long used to be recorded as `passed: false` with a partial log,
  * indistinguishable from a suite that genuinely failed — and ten auditors were then handed that log
  * as evidence of broken code. The detection relies on what execFile actually reports when it kills a
@@ -121,20 +146,20 @@ describe('repoCommandEnv with a repo-env carrier', () => {
  */
 describe('runRepoCommand timeouts', () => {
   it('marks a command killed for exceeding its budget, and says so in the output', async () => {
-    const res = await runRepoCommand('/tmp', 'sleep 5', 400);
+    const res = await runRepoCommand('/tmp', 'sleep 5', {}, 400);
     expect(res.passed).toBe(false);
     expect(res.timedOut).toBe(true);
     expect(res.trimmedOutput).toContain('killed after');
   });
 
   it('does not mark an ordinary failure as a timeout', async () => {
-    const res = await runRepoCommand('/tmp', 'echo boom >&2; exit 1', 10_000);
+    const res = await runRepoCommand('/tmp', 'echo boom >&2; exit 1', {}, 10_000);
     expect(res.passed).toBe(false);
     expect(res.timedOut).toBe(false);
   });
 
   it('passes a command that succeeds', async () => {
-    expect((await runRepoCommand('/tmp', 'true', 10_000)).passed).toBe(true);
+    expect((await runRepoCommand('/tmp', 'true', {}, 10_000)).passed).toBe(true);
   });
 });
 
@@ -145,7 +170,7 @@ describe('runRepoCommand timeouts', () => {
  */
 describe('runRepoCommand output overflow', () => {
   it('reports a command killed for flooding its buffer as inconclusive, not failed', async () => {
-    const res = await runRepoCommand('/tmp', 'yes hello', 10_000, 1024);
+    const res = await runRepoCommand('/tmp', 'yes hello', {}, 10_000, 1024);
     expect(res.passed).toBe(false);
     expect(res.timedOut).toBe(true); // carried on the same flag: both mean "this says nothing"
     expect(res.trimmedOutput).toContain('more output than the reviewer will buffer');

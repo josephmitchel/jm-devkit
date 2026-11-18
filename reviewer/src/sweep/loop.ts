@@ -6,7 +6,8 @@ import { markStage } from '../heartbeat.js';
 import { changedFilePaths, prepareWorkspace, runRepoCommand } from '../workspace.js';
 import { auditRound } from '../stages/audit.js';
 import { synthesizeRound } from '../stages/synthesis.js';
-import { requireRound, type RepoRow, type SweepCtx, type SweepRow } from '../stages/context.js';
+import { requireProject, requireRound, type RepoRow, type SweepCtx, type SweepRow } from '../stages/context.js';
+import { readProjectSetup } from '../project-config.js';
 import { settleOwnerDecisions } from './judge.js';
 import { collectIssueAnswers } from './answers.js';
 import { publishIssues } from './publish.js';
@@ -31,7 +32,13 @@ export async function runSweep(repoSlug: string): Promise<'swept' | 'failed'> {
   const [repo] = await db.select().from(schema.repos).where(eq(schema.repos.slug, repoSlug));
   if (!repo) throw new Error(`repo ${repoSlug} not registered — run: code-reviewer repo add ${repoSlug} …`);
 
-  const ctx: SweepCtx = { repo, sweep: await loadOrCreateSweep(repo), round: null, workspaceDir: null };
+  const ctx: SweepCtx = {
+    repo,
+    sweep: await loadOrCreateSweep(repo),
+    round: null,
+    workspaceDir: null,
+    project: null,
+  };
   if (ctx.sweep.currentRoundId) {
     [ctx.round] = await db.select().from(schema.rounds).where(eq(schema.rounds.id, ctx.sweep.currentRoundId));
   }
@@ -223,10 +230,11 @@ async function runSweepIntake(ctx: SweepCtx): Promise<number> {
     });
     console.log(`${commits} commit(s) landed since the last sweep`);
     if (!round.testResults) {
+      const project = requireProject(ctx);
       const results = [];
-      for (const tc of ctx.repo.testCommands) {
+      for (const tc of project.testCommands) {
         console.log(`running tests: ${tc.name} (${tc.command})`);
-        const res = await runRepoCommand(ctx.workspaceDir!, tc.command);
+        const res = await runRepoCommand(ctx.workspaceDir!, tc.command, project.env);
         results.push({
           name: tc.name,
           command: tc.command,
@@ -250,9 +258,12 @@ async function prepareSweepWorkspace(ctx: SweepCtx): Promise<void> {
   if (!headSha) throw new Error(`sweep ${ctx.sweep.id} in state ${ctx.sweep.state} has no head`);
   ctx.workspaceDir = await prepareWorkspace(ctx.repo.slug, ctx.repo.cloneUrl, ctx.sweep.branch, headSha);
   console.log(`workspace ready at ${ctx.workspaceDir}`);
-  if (ctx.repo.setupCommand) {
-    console.log(`running setup: ${ctx.repo.setupCommand}`);
-    const setup = await runRepoCommand(ctx.workspaceDir, ctx.repo.setupCommand);
+  const project = readProjectSetup(ctx.workspaceDir, ctx.repo);
+  ctx.project = project;
+  console.log(`project setup read from ${project.source === 'devkit.json' ? 'devkit.json' : 'the database row'}`);
+  if (project.setupCommand) {
+    console.log(`running setup: ${project.setupCommand}`);
+    const setup = await runRepoCommand(ctx.workspaceDir, project.setupCommand, project.env);
     if (!setup.passed) throw new Error(`setup command failed:\n${setup.trimmedOutput}`);
   }
 }

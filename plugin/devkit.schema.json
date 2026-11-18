@@ -1,0 +1,178 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/josephmitchel/jm-devkit/main/plugin/devkit.schema.json",
+  "title": "devkit.json",
+  "description": "A project's config: how it uses the kit, and the facts about itself the kit needs. It sits at the project root and is project-owned. The code reviewer reads it from the project's checkout on every run, and the generator turns it into the project's kit-owned files. The code reviewer validates against this file with a small interpreter of its own (reviewer/src/project-config.ts), which understands only the keywords used here: a new keyword fails its tests until it learns it.",
+  "type": "object",
+  "required": ["modules", "sweep", "reviewer"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "description": "Where this schema lives, for editors. Ignored by the kit.",
+      "type": "string"
+    },
+    "modules": {
+      "description": "The kit's modules the project uses. Only \"process\" exists so far, so it must be listed; \"web\" and \"canvas\" are accepted and not yet acted on.",
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "enum": ["process", "web", "canvas"] },
+      "contains": { "const": "process" }
+    },
+    "kit": {
+      "description": "The kit commit the project's kit-owned files were last generated from, as a full or abbreviated SHA. For the record only: whether a project is behind the kit is decided by regenerating its files, not by this value.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{7,40}$"
+    },
+    "sweep": {
+      "description": "The nightly sweep.",
+      "type": "object",
+      "required": ["hour"],
+      "additionalProperties": false,
+      "properties": {
+        "hour": {
+          "description": "The hour of the day, in UTC, at which the project's nightly sweep is dispatched. Each project has its own hour, so sweeps do not compete for the one subscription.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 23
+        }
+      }
+    },
+    "reviewer": {
+      "description": "How the code reviewer sets the project up and tests it. Commands run with `sh -c` from the project root of a fresh checkout, without the code reviewer's own credentials in their environment.",
+      "type": "object",
+      "required": ["tests"],
+      "additionalProperties": false,
+      "properties": {
+        "setup": {
+          "description": "Run once after each checkout, before the tests and before any agent works in the tree, to install dependencies and the like. Must be safe to run again on a tree it has already run in.",
+          "type": "string",
+          "minLength": 1
+        },
+        "tests": {
+          "description": "The project's test suites. Each is run on every audit round, and its result is put in front of the auditors; the fixer is told to run them.",
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["name", "command"],
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "description": "A short name for the suite, shown in the reports.",
+                "type": "string",
+                "minLength": 1
+              },
+              "command": {
+                "description": "The shell command that runs the suite. A non-zero exit is a failing suite.",
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        "env": {
+          "description": "Environment variables for the project's setup and test commands, and only for them. The same role as the action's `repo-env` input, which wins on a name both set: the input is where a secret can come from, and this file is committed. A name the code reviewer keeps for itself, `DATABASE_URL` say, may be set here; it reaches the project's commands without ever entering the code reviewer's own environment.",
+          "type": "object",
+          "propertyNames": { "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+          "additionalProperties": { "type": "string" }
+        },
+        "services": {
+          "description": "Services the tests need, a database say, in the shape of a GitHub Actions job's `services:` map, keyed by the service's id. The generator writes them into the project's review and sweep workflows; the code reviewer itself ignores them. Their connection details reach the tests through `env`.",
+          "type": "object",
+          "propertyNames": { "pattern": "^[A-Za-z_][A-Za-z0-9_-]*$" },
+          "additionalProperties": {
+            "type": "object",
+            "required": ["image"],
+            "additionalProperties": false,
+            "properties": {
+              "image": {
+                "description": "The Docker image to run, `postgres:16` say.",
+                "type": "string",
+                "minLength": 1
+              },
+              "env": {
+                "description": "Environment variables for the service container.",
+                "type": "object",
+                "propertyNames": { "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+                "additionalProperties": { "type": "string" }
+              },
+              "ports": {
+                "description": "Ports to publish, as GitHub Actions takes them: `5432:5432` or a bare container port.",
+                "type": "array",
+                "items": { "type": ["string", "integer"] }
+              },
+              "volumes": {
+                "description": "Volumes to mount, as GitHub Actions takes them.",
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "options": {
+                "description": "Extra `docker create` options, a health check say.",
+                "type": "string"
+              },
+              "credentials": {
+                "description": "Registry credentials for a private image.",
+                "type": "object",
+                "required": ["username", "password"],
+                "additionalProperties": false,
+                "properties": {
+                  "username": { "type": "string" },
+                  "password": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "harnessNotes": {
+          "description": "Path, relative to the project root, to a project-owned doc of notes for the testing auditor: how the suites are laid out and the conventions they follow. It must exist in the checkout; a path that leaves the project is refused.",
+          "type": "string",
+          "minLength": 1
+        },
+        "redundancy": {
+          "description": "How many auditors look at each quality characteristic in a full round. More finds more and costs more. Defaults to 1.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "extraContext": {
+          "description": "Free text about the project for the code reviewer, carried over from the database row it replaces.",
+          "type": "string"
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "modules": ["process"],
+      "sweep": { "hour": 3 },
+      "reviewer": {
+        "tests": [{ "name": "unit", "command": "npm test" }]
+      }
+    },
+    {
+      "$schema": "https://raw.githubusercontent.com/josephmitchel/jm-devkit/main/plugin/devkit.schema.json",
+      "modules": ["process", "web"],
+      "kit": "0123abc",
+      "sweep": { "hour": 22 },
+      "reviewer": {
+        "setup": "npm ci",
+        "tests": [
+          { "name": "unit", "command": "npm test" },
+          { "name": "db", "command": "npm run test:db" }
+        ],
+        "env": { "TEST_DATABASE_URL": "postgres://postgres:postgres@localhost:5432/app_test" },
+        "services": {
+          "postgres": {
+            "image": "postgres:16",
+            "env": { "POSTGRES_PASSWORD": "postgres", "POSTGRES_DB": "app_test" },
+            "ports": ["5432:5432"],
+            "options": "--health-cmd pg_isready --health-interval 5s --health-retries 10"
+          }
+        },
+        "harnessNotes": "docs/agents/harness-notes.md",
+        "redundancy": 2,
+        "extraContext": "The billing module is generated; review its generator, not its output."
+      }
+    }
+  ]
+}
