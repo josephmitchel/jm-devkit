@@ -45,24 +45,20 @@ to the workflow's dispatch endpoint. Nothing expires. The App's installation alr
 
 ## Add a repo
 
-1. Install the App on the repo (GitHub → the App's settings → Install App), as the reviewer
+1. Install the App on the repo (GitHub → the App's settings → Install App), as the code reviewer
    itself needs anyway.
-2. Add `.github/workflows/nightly-sweep.yml` to the repo from `examples/workflows/`, with
-   `workflow_dispatch` in its `on:` block and **without** a `schedule` entry — the Worker is
-   the schedule.
-3. Add one line to `worker/src/repos.ts` with the repo and its slot. Slots are an hour apart
-   so two sweeps never share the Claude subscription; if the slot is new, add it to `crons` in
-   `worker/wrangler.toml` too (a test fails if a repo names a cron the file does not list).
-4. Deploy: `npx --yes wrangler@4.153.0 deploy --config worker/wrangler.toml`.
+2. Run `/devkit:install` in the repo. It writes `devkit.json`, with the repo's sweep hour in
+   `sweep.hour`, and runs the generator (`plugin/generator/`), which writes
+   `.github/workflows/nightly-sweep.yml`: dispatchable, with no `schedule`, since the Worker is
+   the schedule. Never write or edit that workflow by hand; change `devkit.json` and sync.
+3. Temporary, until the Worker finds projects through the App and reads each one's hour from
+   its `devkit.json` (ADR 0004): add one line to `worker/src/repos.ts` with the repo and its
+   slot, at the hour its `devkit.json` gives. Slots are an hour apart so two sweeps never share
+   the Claude subscription; if the slot is new, add it to `crons` in `worker/wrangler.toml` too
+   (a test fails if a repo names a cron the file does not list). Then deploy:
+   `npx --yes wrangler@4.153.0 deploy --config worker/wrangler.toml`.
 
 Times are UTC: `17 7 * * *` is 2:17 am Eastern in winter and 3:17 in summer.
-
-## Rollout order
-
-vices first, keeping GitHub's `schedule` on its workflow for one night as a backstop. When the
-Worker's dispatched run shows up at 07:17 UTC, delete the `schedule` block from the workflow
-(two sweeps that one night is fine: the second finds nothing new and only republishes). Then
-the next repo.
 
 ## When it fails
 

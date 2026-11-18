@@ -13,7 +13,10 @@ Extracted from SpendRight's in-repo audit system. State lives in Postgres (`code
 ## Usage
 
 ```sh
-# one-time repo registration
+# one-time repo registration; a project with a devkit.json needs no options
+node bin/code-reviewer.mjs repo add owner/name
+
+# the fallback for a project with no devkit.json: its setup and tests go in the database row
 node bin/code-reviewer.mjs repo add owner/name \
   --setup "npm ci" \
   --tests "unit=npm test" --tests "db=npm run test:db" \
@@ -30,18 +33,24 @@ node bin/code-reviewer.mjs reset owner/name 42   # forget a review (keeps concer
 
 `action.yml` runs one slice of the loop on a GitHub runner, so reviews happen on GitHub rather
 than on your machine. State lives in Postgres and nothing blocks: a review that needs an answer
-exits, and your reply on the PR starts the run that continues it.
+exits, and a later run continues it once you have replied.
 
-Adding a project takes three steps, none of which touch this repo:
+A project's workflow is never written by hand. It is the kit-owned
+`.github/workflows/nightly-sweep.yml`, which `plugin/generator/` writes from the project's
+`devkit.json` (ADR 0004): the `sweep` job, the `landed` job, and the `review-now` job, which is the
+per-PR review, run on demand by labelling a PR `review-now`. Adding a project:
 
-1. Register it, which is the only project-specific configuration there is:
-   ```
-   node bin/code-reviewer.mjs repo add owner/name \
-     --setup "npm ci" --tests "unit=npm test" --harness-notes-file harness-notes/name.md
-   ```
-2. Copy `examples/workflows/code-review.yml` into the project's `.github/workflows/`.
-3. Set four secrets on it: `DATABASE_URL`, `CLAUDE_CODE_OAUTH_TOKEN`,
-   `REVIEWER_APP_CLIENT_ID`, `REVIEWER_APP_PRIVATE_KEY` — and install the GitHub App on it.
+1. Run `/devkit:install` in the project. It writes `devkit.json`, runs the generator to write the
+   workflow, sets the secrets (`DATABASE_URL`, `CLAUDE_CODE_OAUTH_TOKEN`,
+   `REVIEWER_APP_CLIENT_ID`, `REVIEWER_APP_PRIVATE_KEY`) and creates the `review-now` label
+   (`plugin/skills/kit/install/SKILL.md`).
+2. Install the code reviewer's GitHub App on the project. This is the owner's step: a `gh` login
+   cannot add a repository to an App's installation.
+3. Until the Worker finds projects through the App, give the project its sweep slot in the Worker
+   (`worker/README.md`, "Add a repo").
+4. Until the code reviewer creates a project's database row on its first run, create it:
+   `node bin/code-reviewer.mjs repo add owner/name`, with no options, since `devkit.json` holds the
+   setup and tests.
 
 The App needs these repository permissions: Contents, Issues, Pull requests, Commit statuses and
 Actions (all read and write), Metadata (read), and **Workflows (read and write)** — without the last
@@ -109,8 +118,8 @@ settle owner decisions → read answers → audit base...head → synthesis → 
 - **Labels:** every ticket carries exactly one kind (`spec`, `bug`, `concern`) and, while open,
   exactly one status; colour tells the groups apart, so names carry no prefix. The sweep and the
   `landed` job rename a repo's old labels in place and set the colours (`code-reviewer labels
-  <owner/repo>` does it on demand). `examples/ticket-labels.md` is the scheme, written for a repo's
-  `docs/agents/`.
+  <owner/repo>` does it on demand). The scheme is the plugin's `plugin/docs/ticket-labels.md`,
+  which every agent reads.
 - **Closing by hand** is final for every ticket and never judged — the way to close a ticket with no
   code behind it. For a concern it is neither a fix claim nor a dismissal.
 - **Questions:** a concern whose fix needs a product decision gets the question in its issue and
@@ -118,8 +127,8 @@ settle owner decisions → read answers → audit base...head → synthesis → 
   becomes policy. Everything with a technical default is shown as the suggested direction instead.
 - **The judge:** reads the ticket as the spec and the merged PR as the delivery, with the concerns
   tonight's audit raised inside that PR's files in front of it. A `needs-work` verdict does not
-  re-block the tickets the merge unblocked. `examples/issue-tracker-closing.md` is the section to
-  put in a repo's `docs/agents/issue-tracker.md` so the Matt Pocock skills follow the rule.
+  re-block the tickets the merge unblocked. The rule agents follow is "Closing work through PRs" in
+  the plugin's `plugin/docs/issue-tracker.md`.
 - **What happened:** every action leaves a comment on the issue it touched, and the run's log
   ends with the synthesis's account of the night. A sweep that stops fails its Actions run, so
   GitHub's failed-run notification is the alert; the next run resumes where it stopped.
