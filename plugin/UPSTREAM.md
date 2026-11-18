@@ -8,11 +8,11 @@ The skills in `skills/` are forked from Matt Pocock's skills (ADR 0001). The for
 
 Upstream is MIT licensed; its notice is in `UPSTREAM-LICENSE`.
 
-Every skill in upstream's plugin manifest is carried under the same name and folder, except `setup-matt-pocock-skills`: install (`/devkit:install`) replaces it, and the skills that sent the reader to it name install instead. Upstream's unlisted folders (in-progress, misc, deprecated) are not carried.
+Every skill in upstream's plugin manifest is carried under the same name and folder, except `setup-matt-pocock-skills`: install (`/devkit:install`) replaces it, and the skills that sent the reader to it name install instead. Upstream's unlisted folders (in-progress, misc, deprecated) are not carried. The skills under `skills/kit/` are the kit's own and have no upstream.
 
 Skills the kit edited, and why:
 
-- `ask-matt`: names `/devkit:install` in place of the setup skill.
+- `ask-matt`: names `/devkit:install` in place of the setup skill, and its precondition says what install does: one pull request bringing the project under the process module, with the tracker on GitHub and the kit's label scheme (upstream's choice of tracker and labels is gone).
 - `to-tickets`, `to-spec`: read the tracker rules and label scheme from `docs/` in the plugin; apply the kind `spec` and the status `ready-for-agent`; read the domain docs guidance.
 - `triage` (with `AGENT-BRIEF.md`): its roles are the label scheme's kinds and statuses, `enhancement` is `spec`; reads the tracker rules, label scheme and domain docs guidance from the plugin.
 - `implement-spec`: reads the tracker rules and its additions from the plugin; the draft PR addresses its tickets rather than closing them.
