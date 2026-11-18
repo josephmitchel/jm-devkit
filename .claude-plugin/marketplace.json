@@ -1,0 +1,14 @@
+{
+  "name": "jm-devkit",
+  "owner": {
+    "name": "Joseph Mitchell"
+  },
+  "description": "Joseph's personal development kit",
+  "plugins": [
+    {
+      "name": "devkit",
+      "source": "./plugin",
+      "description": "Skills, agent docs and house rules for developing a project the kit's way"
+    }
+  ]
+}

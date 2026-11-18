@@ -1,0 +1,9 @@
+{
+  "name": "devkit",
+  "description": "Skills, agent docs and house rules for developing a project the kit's way",
+  "author": {
+    "name": "Joseph Mitchell"
+  },
+  "repository": "https://github.com/josephmitchel/jm-devkit",
+  "license": "MIT"
+}
