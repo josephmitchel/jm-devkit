@@ -94,4 +94,4 @@ Off the main flow entirely.
 
 ## Precondition
 
-**`/devkit:install`**: run before your first engineering flow to configure the issue tracker, triage labels, and doc layout the other skills assume. Custom issue trackers also work.
+**`/devkit:install`**: run once in a project before its first engineering flow. It brings the project under the kit's process module in one pull request (its `devkit.json`, the code reviewer's workflow, the repository secrets and the `review-now` label) and removes the project's old copies of the tracker rules, label scheme and domain docs, which the plugin now supplies. The issue tracker is GitHub, and the label scheme is the kit's.
