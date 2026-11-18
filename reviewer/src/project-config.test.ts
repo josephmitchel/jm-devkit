@@ -7,11 +7,10 @@ import {
   DevkitConfigError,
   SCHEMA_PATH,
   parseDevkitConfig,
-  readProjectSetup,
   validate,
   type JsonSchema,
-  type ProjectRow,
-} from './project-config.js';
+} from '../../plugin/devkit-config.mjs';
+import { readProjectSetup, type ProjectRow } from './project-config.js';
 
 /** What a project registered by hand has in its database row. */
 const row: ProjectRow = {
