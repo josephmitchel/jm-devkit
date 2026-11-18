@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { basename, join, relative } from 'node:path';
@@ -65,21 +66,40 @@ test('every plugin doc a skill points at exists', () => {
   assert.deepEqual(missing, []);
 });
 
-// The kit is public and never names a project. Whole words only, so that ordinary
-// English that contains one ("services", "blockers") is not caught.
-const forbidden = ['spendright', 'outlier', 'vices', 'blocker', 'josephmitchel/spendright', 'josephmitchel/vices'];
-const forbiddenPattern = new RegExp(`\\b(${forbidden.map((word) => word.replace(/[/]/g, '\\/')).join('|')})\\b`, 'gi');
-const thisFile = relative(pluginRoot, fileURLToPath(import.meta.url));
+// The kit is public and never names a project. The forbidden words are held only as
+// SHA-256 digests of their lowercased form, so that the public kit does not carry the
+// names. A file's tokens are its lowercased whole words, plus every owner/name pair in
+// a slash-separated run (so a repository slug is caught inside a URL too).
+const forbiddenDigests = new Set([
+  'ab4c02eddf4b490a644ed18586192934f14e6cbc563290e4ef281af36baa6981',
+  '2aed12b734be9cf4a09a1f9f0dd96b7245af53861591373fcc414496094a9203',
+  'ed5fe17178325242856da927fdca416ae19698c863b41804fab2d61324a0540c',
+  '1a48940a9383be191a715f95a09c7c253b725555cf61f72272482836e8710eef',
+  'c09c0ce5757c079609bee8bd67078ceca4566ddf95373f515558a1c477577432',
+  '5ad00841d236fe237a59067d66d758099e548a3af191d24bd9b3d572abb7081b',
+]);
+
+function tokens(text) {
+  const lower = text.toLowerCase();
+  const found = new Set(lower.match(/[a-z0-9_]+/g) ?? []);
+  for (const run of lower.match(/[a-z0-9_.-]+(?:\/[a-z0-9_.-]+)+/g) ?? []) {
+    const parts = run.split('/').map((part) => part.replace(/(\.git)?\.*$/, ''));
+    for (let i = 0; i + 1 < parts.length; i++) found.add(`${parts[i]}/${parts[i + 1]}`);
+  }
+  return found;
+}
+
+const digest = (token) => createHash('sha256').update(token).digest('hex');
 
 test('no file under the plugin names a project', () => {
   assert.ok(files.includes('docs/issue-tracker.md'), 'the walk did not reach the docs');
   const found = [];
   for (const path of files) {
-    if (path === thisFile) continue;
-    for (const [i, line] of readFileSync(join(pluginRoot, path), 'utf8').split('\n').entries()) {
-      for (const [word] of line.matchAll(forbiddenPattern)) found.push(`${path}:${i + 1}: ${word}`);
+    const text = `${path}\n${readFileSync(join(pluginRoot, path), 'utf8')}`;
+    for (const token of tokens(text)) {
+      const hash = digest(token);
+      if (forbiddenDigests.has(hash)) found.push(`${path}: forbidden word with digest ${hash}`);
     }
-    for (const [word] of path.matchAll(forbiddenPattern)) found.push(`${path}: ${word} in the path`);
   }
   assert.deepEqual(found, []);
 });
