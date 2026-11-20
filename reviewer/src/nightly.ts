@@ -1,3 +1,4 @@
+import { reportRun } from './failure-report.js';
 import { listProjects, projectLine, type Project } from './projects.js';
 import { errorType, finishRun, runCommand, runLine, runLog, startRun, type Run, type RunResult } from './runs.js';
 
@@ -29,7 +30,7 @@ export function nightlyDecision(steps: Step[], outcomes: Outcome[]): { next: Ste
 
 /**
  * The whole nightly run: every handled project's sweep, one after another, each in a process of
- * its own. Every run is recorded, and the nightly run ends failed if any part of it did.
+ * its own. Every run is recorded and reported, and the nightly run ends failed if any part of it did.
  */
 export async function runNightly(): Promise<Outcome> {
   const nightly = await startRun({ kind: 'nightly' });
@@ -41,7 +42,7 @@ export async function runNightly(): Promise<Outcome> {
     work = nightlyWork(await listProjects());
   } catch (err) {
     say(`could not find the projects: ${err instanceof Error ? err.message : String(err)}`);
-    await finishRun(nightly, { state: 'failed', stage: 'finding the projects', errorType: errorType(err) });
+    await reportRun(await finishRun(nightly, { state: 'failed', stage: 'finding the projects', errorType: errorType(err) }), say);
     return 'failed';
   }
   for (const line of work.skipped) say(line);
@@ -52,9 +53,11 @@ export async function runNightly(): Promise<Outcome> {
     outcomes.push(await takeStep(nightly, decision.next, say));
     decision = nightlyDecision(work.steps, outcomes);
   }
-  await finishRun(nightly, { state: decision.done, stage: null, errorType: null });
+  const finished = await finishRun(nightly, { state: decision.done, stage: null, errorType: null });
   const failed = outcomes.filter((o) => o === 'failed').length;
   say(`nightly run ${nightly.id} ${decision.done}: ${failed} of ${outcomes.length} project run(s) failed`);
+  // After every project, so the kit's repository hears of a kind of run once for the whole night.
+  await reportRun(finished, say);
   return decision.done;
 }
 
@@ -70,6 +73,7 @@ async function takeStep(nightly: Run, step: Step, say: (line: string) => void): 
     }
     const finished = await finishRun(run, result);
     say(runLine(finished));
+    await reportRun(finished, say);
     return finished.state === 'succeeded' ? 'succeeded' : 'failed';
   } catch (err) {
     // The run could not be recorded at all (the database, the state directory): still only this step's failure.

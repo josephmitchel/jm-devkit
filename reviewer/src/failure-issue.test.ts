@@ -80,6 +80,11 @@ describe("what a failure issue in the kit's repository may contain", () => {
     }
   });
 
+  it('names a time limit as the type of error of a run its time limit stopped', () => {
+    const [open] = failureIssuePlan({ ...kitFailure, facts: { ...facts, errorType: 'time limit' } }, []);
+    expect(open.body).toContain('Type of error: `time limit`');
+  });
+
   it('tells the owner where the full output is, by the run id alone', () => {
     const [open] = failureIssuePlan(kitFailure, []);
     expect(open.body).toContain(`runs/${ID}.log`);

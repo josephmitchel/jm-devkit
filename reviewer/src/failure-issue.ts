@@ -45,7 +45,7 @@ export type IssueAction =
 const KIND_WORDS: Record<RunKind, string> = { nightly: 'nightly run', sweep: 'sweep' };
 
 // A type of error is shown by name only when it is on this list, is a project's fault (see
-// failure-side.ts) or is in one of the fixed forms runResult writes. A new error class of the code
+// failure-side.ts) or is in one of the fixed forms a run's result is recorded in. A new error class of the code
 // reviewer's is added here to be shown by name.
 const KNOWN_ERROR_TYPES = new Set([
   'Error',
@@ -63,7 +63,7 @@ const KNOWN_ERROR_TYPES = new Set([
   'DrizzleQueryError',
   'GitHubError',
 ]);
-const FIXED_ERROR_FORM = /^(?:exit \d{1,3}|killed by SIG[A-Z0-9]{2,8}|could not start)$/;
+const FIXED_ERROR_FORM = /^(?:exit \d{1,3}|killed by SIG[A-Z0-9]{2,8}|could not start|time limit)$/;
 const COMMIT = /^[0-9a-f]{40}$/;
 const TIME = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,3})?Z$/;
 const RUN_ID = /^run-\d{8}T\d{6}Z-[0-9a-f]{6}$/;
@@ -118,7 +118,7 @@ function factLines(facts: CheckedFacts): string {
 function whereTheOutputIs(facts: CheckedFacts): string {
   return (
     `The run's full output is on the machine, in \`runs/${facts.runId}.log\` under the code reviewer's ` +
-    'state directory; `code-reviewer status` lists the run with that path.'
+    'state directory. `code-reviewer status` shows the recent runs and where their output is.'
   );
 }
 
