@@ -395,9 +395,10 @@ alone for that pass and the others are still handled; the command then exits non
 ## The queue of reviews (on the machine)
 
 The per-PR review runs on the machine without Actions. A pass of the poller finds the reviews to
-run and puts them on record; `node bin/code-reviewer.mjs queue` takes one turn of the queue, which
-starts at most one of them. A review can run for five and a half hours, and a pass must stay
-short and keep running so that `landed` is never held up, so a pass only decides and queues.
+run and puts them on record; `node bin/code-reviewer.mjs queue` takes one turn of the queue, in
+which at most one of them does any work. A review can run for five and a half hours, and a pass
+must stay short and keep running so that `landed` is never held up, so a pass only decides and
+queues.
 
 **The events** are two more entries in the `EVENTS` table, both for the command
 `run <owner/repo> <pr#> --once`:
@@ -492,8 +493,9 @@ is safe to run again.
   `journalctl -u code-reviewer-poller.service`.
 - **The queue:** it has no timer. The poller's service starts it each time a pass ends, however
   the pass ended, so a review a pass has just found starts within that interval, and one that had
-  to wait is looked at again after the next pass. A turn runs at most one review and lasts as long
-  as it does; while it is going a second cannot start. The nightly unit is ordered after it, so a
+  to wait is looked at again after the next pass. A turn runs one review and lasts as long as it
+  does (one that is turned away from its project's slot takes a moment, and the turn goes on to
+  the next); while it is going a second cannot start. The nightly unit is ordered after it, so a
   nightly run that comes due during a review waits for that turn to end before its update step
   replaces the code the review is running from. The queue's unit is in turn not started while the
   nightly unit is active (`/run/code-reviewer-nightly` exists exactly that long). By hand:
