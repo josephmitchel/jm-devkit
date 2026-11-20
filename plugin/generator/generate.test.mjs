@@ -134,6 +134,11 @@ test('reviewer.databases is accepted and changes nothing in the workflow', () =>
   assert.deepEqual(generate(config), generate(withDatabase));
 });
 
+test('nightly.checks is accepted and changes nothing in the workflow', () => {
+  const config = { ...withDatabase, nightly: { checks: [{ name: 'canvas', command: 'npm run canvas:check' }] } };
+  assert.deepEqual(generate(config), generate(withDatabase));
+});
+
 test('generating twice gives identical output, whatever order devkit.json lists things in', () => {
   const reordered = JSON.parse(JSON.stringify(withDatabase));
   const postgres = reordered.reviewer.services.postgres;

@@ -81,8 +81,57 @@ export function dropStatement(name: string): string {
   return `DROP DATABASE IF EXISTS "${ownName(name)}" WITH (FORCE)`;
 }
 
-/** The run that databases belong to: a review or a sweep, by its id. A resumed run has the same owner. */
-export type RunOwner = `review:${number}` | `sweep:${number}`;
+// A Postgres address as it appears in a command's output, up to the space or quote that ends it.
+const POSTGRES_ADDRESS = /postgres(?:ql)?:\/\/[^\s"'`<>]+/g;
+// Punctuation of the sentence an address sits in, not of the address.
+const AFTER_ADDRESS = /[),.;:\]}]+$/;
+const OWN_NAME_IN_ADDRESS = /\/reviewer_test_[0-9a-f]{16}_[0-9]+(?:[?#]|$)/;
+
+/**
+ * `text` without the addresses handed to a project's commands, for text that leaves the machine:
+ * an address holds the password of the role that creates every project's test databases. Any
+ * Postgres address on the server at `serverUrl`, or naming a database this code made, is replaced
+ * whole, and the role's password is removed wherever else it stands, since a command can print
+ * the parts of an address apart. With no server set nothing was handed out, and nothing changes.
+ */
+export function withoutTestDatabaseAddresses(text: string, serverUrl: string | undefined): string {
+  let server: URL;
+  try {
+    server = serverAddress(serverUrl ?? '');
+  } catch {
+    return text;
+  }
+  const onServer = (address: string) => {
+    try {
+      return new URL(address).host === server.host;
+    } catch {
+      return false;
+    }
+  };
+  let safe = text.replace(POSTGRES_ADDRESS, (found) => {
+    const after = AFTER_ADDRESS.exec(found)?.[0] ?? '';
+    const address = found.slice(0, found.length - after.length);
+    return onServer(address) || OWN_NAME_IN_ADDRESS.test(address) ? `[test database address]${after}` : found;
+  });
+  for (const password of new Set([server.password, decoded(server.password)])) {
+    if (password !== '') safe = safe.replaceAll(password, '[redacted]');
+  }
+  return safe;
+}
+
+function decoded(part: string): string {
+  try {
+    return decodeURIComponent(part);
+  } catch {
+    return part;
+  }
+}
+
+/**
+ * The run that databases belong to: a review or a sweep, by its id, or a project's nightly checks,
+ * by the project. A resumed run has the same owner, and so has the next run of a project's checks.
+ */
+export type RunOwner = `review:${number}` | `sweep:${number}` | `checks:${string}`;
 
 /** A database recorded as created, and the run it was created for. */
 export interface DatabaseRecord {

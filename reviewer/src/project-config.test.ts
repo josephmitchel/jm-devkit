@@ -62,6 +62,12 @@ const valid = {
     redundancy: 2,
     extraContext: 'The example app has no UI.',
   },
+  nightly: {
+    checks: [
+      { name: 'canvas', command: 'npm run canvas:check' },
+      { name: 'links', command: 'npm run check:links' },
+    ],
+  },
 };
 
 describe('readProjectSetup with a devkit.json', () => {
@@ -82,6 +88,10 @@ describe('readProjectSetup with a devkit.json', () => {
       extraContext: 'The example app has no UI.',
       env: { TEST_DATABASE_URL: 'postgres://localhost:5432/example_test' },
       databases: ['APP_DATABASE_URL', 'AUDIT_DATABASE_URL'],
+      nightlyChecks: [
+        { name: 'canvas', command: 'npm run canvas:check' },
+        { name: 'links', command: 'npm run check:links' },
+      ],
     });
   });
 
@@ -97,7 +107,16 @@ describe('readProjectSetup with a devkit.json', () => {
       extraContext: null,
       env: {},
       databases: [],
+      nightlyChecks: [],
     });
+  });
+
+  it('takes a nightly section that lists no checks as naming none', () => {
+    const reviewer = { tests: [{ name: 'unit', command: 'npm test' }] };
+    writeConfig({ modules: ['process'], reviewer, nightly: {} });
+    expect(readProjectSetup(checkout, row).nightlyChecks).toEqual([]);
+    writeConfig({ modules: ['process'], reviewer, nightly: { checks: [] } });
+    expect(readProjectSetup(checkout, row).nightlyChecks).toEqual([]);
   });
 
   it('accepts a file with no sweep section, now that there are no sweep slots', () => {
@@ -119,8 +138,8 @@ describe('readProjectSetup with a devkit.json', () => {
 });
 
 describe('readProjectSetup without a devkit.json', () => {
-  it('answers from the database row, with no databases', () => {
-    expect(readProjectSetup(checkout, row)).toEqual({ source: 'database', ...row, env: {}, databases: [] });
+  it('answers from the database row, with no databases and no nightly checks', () => {
+    expect(readProjectSetup(checkout, row)).toEqual({ source: 'database', ...row, env: {}, databases: [], nightlyChecks: [] });
   });
 });
 
@@ -157,6 +176,28 @@ describe('readProjectSetup with a malformed devkit.json', () => {
     expect(message).toContain('reviewer.databases[1] must match');
     expect(message).toContain('reviewer.databases lists "APP_DB" more than once');
     expect(message).toContain('reviewer.databases[3] must be a string');
+  });
+
+  it('names a nightly check that is missing its command, has no name, or carries a field it does not know', () => {
+    writeConfig({
+      ...valid,
+      nightly: { checks: [{ name: 'canvas' }, { name: '', command: 'npm run check:links' }, { name: 'slow', command: 'make slow', hour: 3 }] },
+    });
+    const message = setupError();
+    expect(message).toContain('nightly.checks[0].command is required');
+    expect(message).toContain('nightly.checks[1].name must not be empty');
+    expect(message).toContain('nightly.checks[2].hour is not a known field');
+  });
+
+  it('names nightly checks that are not a list, a second check of the same name, and an unknown nightly field', () => {
+    writeConfig({ ...valid, nightly: { checks: 'npm run canvas:check', check: [] } });
+    const message = setupError();
+    expect(message).toContain('nightly.checks must be an array');
+    expect(message).toContain('nightly.check is not a known field');
+
+    const canvas = { name: 'canvas', command: 'npm run canvas:check' };
+    writeConfig({ ...valid, nightly: { checks: [canvas, canvas] } });
+    expect(setupError()).toContain('nightly.checks lists {"name":"canvas","command":"npm run canvas:check"} more than once');
   });
 
   it('names a missing section and modules without the process module', () => {

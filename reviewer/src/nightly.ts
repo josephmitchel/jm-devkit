@@ -18,13 +18,24 @@ import {
 /** One piece of a nightly run's work: a run of `kind` for one project. */
 export interface Step {
   project: string;
-  kind: 'sweep';
+  kind: 'sweep' | 'summary' | 'checks';
 }
 
-/** What a nightly run does, from the projects it found: its steps in order, and a line for each project it leaves alone. */
+// A project's steps, in order. The summary step posts what the sweep before it left, and posts
+// nothing when that sweep did not finish. The checks step is only for a project that names checks.
+const PROJECT_STEPS: Step['kind'][] = ['sweep', 'summary', 'checks'];
+
+/**
+ * What a nightly run does, from the projects it found: its steps in order, and a line for each
+ * project it leaves alone. A project that names no nightly checks has no checks step.
+ */
 export function nightlyWork(projects: Project[]): { steps: Step[]; skipped: string[] } {
   return {
-    steps: projects.filter((p) => p.state === 'handled').map((p) => ({ project: p.slug, kind: 'sweep' })),
+    steps: projects.flatMap((p) =>
+      p.state !== 'handled'
+        ? []
+        : PROJECT_STEPS.filter((kind) => kind !== 'checks' || p.nightlyChecks > 0).map((kind) => ({ project: p.slug, kind })),
+    ),
     skipped: projects.filter((p) => p.state !== 'handled').map(projectLine),
   };
 }

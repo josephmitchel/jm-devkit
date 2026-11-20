@@ -11,9 +11,11 @@ import { dispatchWorkflow, getDefaultBranch, getPr, listOpenPrNumbers } from './
 import { carryGate } from './stages/carry-gate.js';
 import { ACTIVE_WORK_STATES, resolveSlot } from './stages/intake.js';
 import { markGate, progressStep } from './stages/progress.js';
+import { postSummary } from './post-summary.js';
 import { postFailureNotice } from './stages/report.js';
 import { runMigrations } from './migrate.js';
 import { recordNightlyNotStarted, runNightly } from './nightly.js';
+import { runChecksOnDemand, runProjectChecks } from './nightly-checks.js';
 import { pollerStatus } from './poller.js';
 import { pollerStatusRows, runPass } from './poller-pass.js';
 import { listProjects, projectLine } from './projects.js';
@@ -34,11 +36,19 @@ Usage:
   code-reviewer sweep <owner/repo>              run (or resume) tonight's sweep: judge closed
                                                 issues, audit what landed on the default branch,
                                                 file concerns as issues (never fixes, never gates)
-  code-reviewer nightly                         the whole nightly run: sweep every project the
-                                                machine handles, in name order, one at a time;
-                                                a sweep that fails does not stop the next, and
-                                                one that runs past five and a half hours is
-                                                stopped and resumed the next night
+  code-reviewer summary <owner/repo>            post the project's latest sweep as a dated
+                                                discussion in the project, once; a night on which
+                                                nothing happened posts nothing
+  code-reviewer checks <owner/repo>             run the project's nightly checks (nightly.checks in
+                                                its devkit.json) now, in a fresh checkout of its
+                                                default branch; recorded and reported as the
+                                                nightly run's step is, and exits 1 when one fails
+  code-reviewer nightly                         the whole nightly run: for every project the
+                                                machine handles, in name order, one at a time, its
+                                                sweep, its summary and then its nightly checks if
+                                                it names any; a step that fails does not stop the
+                                                next, and a sweep that runs past five and a half
+                                                hours is stopped and resumed the next night
   code-reviewer nightly-not-started <stage> <error type>
                                                 record a nightly run that could not start; the
                                                 machine's update step (bin/update.mjs) calls it
@@ -74,7 +84,7 @@ Usage:
 
 // The commands CI runs unattended. The admin ones print tables and confirmations for a person at
 // a terminal, where a timestamp on every line is only noise.
-const STAMPED = new Set(['run', 'sweep', 'nightly', 'nightly-not-started', 'poll', 'landed', 'migrate', 'next', 'abandon', 'carry-gate']);
+const STAMPED = new Set(['run', 'sweep', 'summary', 'checks', 'nightly', 'nightly-not-started', 'poll', 'landed', 'migrate', 'next', 'abandon', 'carry-gate']);
 
 async function main() {
   const [cmd, ...rest] = process.argv.slice(2);
@@ -118,6 +128,13 @@ async function main() {
       }
       break;
     }
+    case 'summary': {
+      const [slug, ...extra] = rest;
+      if (!slug || extra.length > 0) return usageExit();
+      configureAppAuth(slug);
+      printRaw(`outcome: ${await postSummary(slug)}`);
+      break;
+    }
     case 'nightly': {
       if (rest.length > 0) return usageExit();
       stopCommandsOnSignal();
@@ -129,6 +146,27 @@ async function main() {
     case 'nightly-not-started': {
       const [stage, type, ...extra] = rest;
       if (!stage || !type || extra.length > 0 || !(await recordNightlyNotStarted(stage, type))) return usageExit();
+      break;
+    }
+    case 'checks': {
+      const [slug, ...extra] = rest;
+      if (!slug || extra.length > 0) return usageExit();
+      configureAppAuth(slug);
+      // Under a run id this is the work of a run already recorded: the nightly run's step, or the
+      // one this command records for itself when a person runs it.
+      if (process.env.REVIEWER_RUN_ID) {
+        const stopHeartbeat = startHeartbeat();
+        try {
+          await runProjectChecks(slug);
+        } finally {
+          stopHeartbeat();
+        }
+        break;
+      }
+      stopCommandsOnSignal();
+      const outcome = await runChecksOnDemand(slug);
+      printRaw(`outcome: ${outcome}`);
+      if (outcome !== 'succeeded' && outcome !== 'no checks') process.exitCode = 1;
       break;
     }
     case 'poll': {
@@ -465,6 +503,7 @@ async function showStatus(slug?: string): Promise<void> {
       console.log(
         `  sweep ${s.id} [${s.state}] ${s.branch} ${range}, ${s.createdAt.toISOString().slice(0, 10)}` +
           `${s.state === 'done' ? `, opened ${opened}, judged ${s.summary?.judged.length ?? 0}` : ''}` +
+          `${s.discussionUrl ? `, summary: ${s.discussionUrl}` : ''}` +
           `${s.error ? ` — error: ${s.error.slice(0, 120)}` : ''}`,
       );
     }

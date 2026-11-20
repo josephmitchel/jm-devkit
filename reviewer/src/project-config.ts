@@ -29,6 +29,11 @@ export interface ProjectSetup {
    * addresses join `env` once the databases exist (see test-databases.ts).
    */
   databases: string[];
+  /**
+   * The project's nightly checks (`nightly.checks`), in the order written. None from the database
+   * row. Only a run of the nightly checks runs them.
+   */
+  nightlyChecks: TestCommand[];
 }
 
 /** The part of a project's database row that `devkit.json` replaces. */
@@ -55,6 +60,7 @@ export function readProjectSetup(checkoutDir: string, row: ProjectRow): ProjectS
       extraContext: row.extraContext,
       env: {},
       databases: [],
+      nightlyChecks: [],
     };
   }
 
@@ -69,6 +75,7 @@ export function readProjectSetup(checkoutDir: string, row: ProjectRow): ProjectS
     extraContext: reviewer.extraContext ?? null,
     env: { ...reviewer.env },
     databases: [...(reviewer.databases ?? [])],
+    nightlyChecks: (config.nightly?.checks ?? []).map(({ name, command }) => ({ name, command })),
   };
 }
 

@@ -9,7 +9,7 @@ const at = (time: string) => new Date(`2026-11-20T${time}Z`);
 
 /** A handled project as a pass saw it at 12:00, with the pull requests GitHub listed. */
 const widgets = (pullRequests: PullRequestSeen[] | null, slug = 'acme/widgets'): ProjectSeen => ({
-  project: { slug, state: 'handled' },
+  project: { slug, state: 'handled', nightlyChecks: 0 },
   at: at('12:00:00'),
   pullRequests,
 });

@@ -10,7 +10,7 @@ const config = JSON.stringify({
 });
 
 describe("the nightly run's order of work", () => {
-  it('sweeps the handled projects in name order and says why it skips the others', () => {
+  it("sweeps the handled projects in name order, posting each one's summary after its sweep, and says why it skips the others", () => {
     const projects = classifyProjects([
       { slug: 'acme/widgets', config, sweepWorkflow: false },
       { slug: 'acme/gadgets', config, sweepWorkflow: true },
@@ -20,13 +20,67 @@ describe("the nightly run's order of work", () => {
     expect(nightlyWork(projects)).toEqual({
       steps: [
         { project: 'acme/anvils', kind: 'sweep' },
+        { project: 'acme/anvils', kind: 'summary' },
         { project: 'acme/widgets', kind: 'sweep' },
+        { project: 'acme/widgets', kind: 'summary' },
       ],
       skipped: [
         'Acme/bare skipped: its default branch has no devkit.json',
         'acme/gadgets still on Actions: its default branch has .github/workflows/nightly-sweep.yml',
       ],
     });
+  });
+});
+
+describe("a project's nightly checks in the order of work", () => {
+  const naming = (checks: unknown) =>
+    JSON.stringify({ modules: ['process'], reviewer: { tests: [{ name: 'unit', command: 'npm test' }] }, nightly: { checks } });
+  const canvas = { name: 'canvas', command: 'npm run canvas:check' };
+  const links = { name: 'links', command: 'npm run check:links' };
+
+  it('come after that project\'s sweep and its summary, as one step, and only for a project that names some', () => {
+    const projects = classifyProjects([
+      { slug: 'acme/zippers', config: naming([]), sweepWorkflow: false },
+      { slug: 'acme/widgets', config: naming([canvas, links]), sweepWorkflow: false },
+      { slug: 'acme/anvils', config, sweepWorkflow: false },
+      { slug: 'acme/gadgets', config: naming([canvas]), sweepWorkflow: true },
+    ]);
+    expect(nightlyWork(projects).steps).toEqual([
+      { project: 'acme/anvils', kind: 'sweep' },
+      { project: 'acme/anvils', kind: 'summary' },
+      { project: 'acme/widgets', kind: 'sweep' },
+      { project: 'acme/widgets', kind: 'summary' },
+      { project: 'acme/widgets', kind: 'checks' },
+      { project: 'acme/zippers', kind: 'sweep' },
+      { project: 'acme/zippers', kind: 'summary' },
+    ]);
+  });
+
+  const steps: Step[] = [
+    { project: 'acme/widgets', kind: 'sweep' },
+    { project: 'acme/widgets', kind: 'summary' },
+    { project: 'acme/widgets', kind: 'checks' },
+    { project: 'acme/zippers', kind: 'sweep' },
+  ];
+  const checks = { next: { project: 'acme/widgets', kind: 'checks' } };
+
+  it('run after a sweep that succeeded', () => {
+    expect(nightlyDecision(steps, ['succeeded', 'succeeded'])).toEqual(checks);
+  });
+
+  it('still run after a sweep that failed or was stopped by its time limit: they are the project\'s own, and the sweep says nothing about them', () => {
+    expect(nightlyDecision(steps, ['failed', 'succeeded'])).toEqual(checks);
+    expect(nightlyDecision(steps, ['interrupted', 'succeeded'])).toEqual(checks);
+    expect(nightlyDecision(steps, ['succeeded', 'failed'])).toEqual(checks);
+  });
+
+  it('do not stop the next project when they fail, and the night ends failed', () => {
+    expect(nightlyDecision(steps, ['succeeded', 'succeeded', 'failed'])).toEqual({ next: { project: 'acme/zippers', kind: 'sweep' } });
+    expect(nightlyDecision(steps, ['succeeded', 'succeeded', 'failed', 'succeeded'])).toEqual({ done: 'failed' });
+  });
+
+  it('are not started once the service is stopping', () => {
+    expect(nightlyDecision(steps, ['succeeded', 'succeeded'], true)).toEqual({ done: 'interrupted' });
   });
 });
 

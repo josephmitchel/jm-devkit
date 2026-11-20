@@ -37,10 +37,12 @@ export interface RunResult {
   errorType: string | null;
 }
 
-// The lines the sweep's and the review's drivers print as they enter or resume a stage.
-const STAGE_LINE = /=== (?:sweep )?state: (\w+) ===|resuming (?:sweep|review) \d+ for \S+ in state (\w+)/g;
+/** The stages of a run of a project's nightly checks: its setup command, then the checks themselves. */
+export const CHECKS_STAGES = ['setup', 'checking'] as const;
+// The lines the sweep's, the review's and the nightly checks' drivers print as they enter or resume a stage.
+const STAGE_LINE = /=== (?:sweep |checks )?state: (\w+) ===|resuming (?:sweep|review) \d+ for \S+ in state (\w+)/g;
 // Only these count as a stage, so a line in a project's output cannot name one of its choosing.
-const STAGES = new Set<string>([...schema.sweepState.enumValues, ...schema.reviewState.enumValues]);
+const STAGES = new Set<string>([...schema.sweepState.enumValues, ...schema.reviewState.enumValues, ...CHECKS_STAGES]);
 /**
  * Every stage a run can be recorded as having stopped in: the ones above, the two before any of
  * them, and the steps of bringing the code reviewer up to date before a nightly run.
@@ -84,7 +86,8 @@ export function runResult(runId: string, ended: Ended): RunResult {
   return { state: 'failed', stage, errorType };
 }
 
-// The commands that run agents. The others finish in seconds and have no limit of this kind.
+// The commands that run agents. The others have no limit of this kind: they finish in seconds,
+// or, for a project's nightly checks, each check has a limit of its own.
 const AGENT_JOBS = new Set(['sweep', 'run']);
 // What a run on GitHub Actions was given (`timeout-minutes: 330`).
 const AGENT_JOB_LIMIT_MS = 5.5 * 60 * 60 * 1000;

@@ -28,6 +28,7 @@ node bin/code-reviewer.mjs run owner/name 42
 node bin/code-reviewer.mjs status            # all reviews, concern counts, the recent nightly runs and the poller's last passes
 node bin/code-reviewer.mjs projects          # every project the App is installed on, and its state
 node bin/code-reviewer.mjs nightly           # the whole nightly run: every handled project's sweep in turn
+node bin/code-reviewer.mjs checks owner/name # one project's nightly checks, now
 node bin/code-reviewer.mjs poll              # one pass of the poller: landed for each newly merged pull request
 node bin/code-reviewer.mjs reset owner/name 42   # forget a review (keeps concerns/policies)
 ```
@@ -62,10 +63,13 @@ per-PR review, run on demand by labelling a PR `review-now`. Adding a project:
    setup and tests. On the machine the nightly run creates the row the first night it meets the
    project.
 
-The App needs these repository permissions: Contents, Issues, Pull requests, Commit statuses and
-Actions (all read and write), Metadata (read), and **Workflows (read and write)** — without the last
-one, GitHub rejects any fix that touches a file under `.github/workflows/`, and the push fails with
-nothing else in the system able to explain why.
+The App needs these repository permissions: Contents, Issues, Pull requests, Commit statuses,
+Actions and **Discussions** (all read and write), Metadata (read), and **Workflows (read and
+write)** — without the last one, GitHub rejects any fix that touches a file under
+`.github/workflows/`, and the push fails with nothing else in the system able to explain why.
+Discussions is what lets the code reviewer post each night's summary (see "The night's summary").
+Granting a permission added to the App is the owner's step, as are the two things each project
+needs for its summaries: Discussions turned on, and a discussion category named `Code reviewer`.
 
 Everything that accumulates is scoped per repo: the review slot (one active review per project,
 so projects never queue behind each other), concerns, and the policies built from your answers.
@@ -81,8 +85,10 @@ A project can say how it is set up and tested in a `devkit.json` at its root, in
 database row. The format is defined once, as a JSON Schema at `plugin/devkit.schema.json`, whose
 descriptions document each field; the kit's own `devkit.json` is an example. Its `reviewer`
 section holds `setup`, `tests` (`[{ "name", "command" }]`), `env`, `databases`, `harnessNotes`,
-`redundancy` and `extraContext`. `sweep.hour` and `reviewer.services` are retired: still accepted,
-for a project whose sweep still runs on GitHub Actions, and ignored by the code reviewer.
+`redundancy` and `extraContext`. Its `nightly` section holds `checks` (`[{ "name", "command" }]`),
+the project's nightly checks: see "Nightly checks" below. `sweep.hour` and `reviewer.services` are
+retired: still accepted, for a project whose sweep still runs on GitHub Actions, and ignored by the
+code reviewer.
 
 On every run, in the PR loop and in the sweep, the code reviewer reads the file from the checkout
 it has just made (so a PR that changes it is set up and tested as it says):
@@ -90,7 +96,7 @@ it has just made (so a PR that changes it is set up and tested as it says):
 - **With a `devkit.json`**, its `reviewer` section is the whole answer and the database row's setup,
   tests, harness notes, redundancy and extra context are not consulted; a field the file leaves out
   means none (redundancy 1). `harnessNotes` is a path to a doc in the project, which must exist.
-  `env` is applied to the project's setup and test commands only; the action's `repo-env` input is
+  `env` is applied to the project's setup, test and nightly check commands only; the action's `repo-env` input is
   applied over it and wins on a name both set, because the input is where a secret comes from.
   `databases` names the variables that each get an empty database: see below.
 - **Without one**, everything comes from the database row, exactly as before.
@@ -170,7 +176,8 @@ settle owner decisions → read answers → audit base...head → synthesis → 
   re-block the tickets the merge unblocked. The rule agents follow is "Closing work through PRs" in
   the plugin's `plugin/docs/issue-tracker.md`.
 - **What happened:** every action leaves a comment on the issue it touched, and the run's log
-  ends with the synthesis's account of the night. A sweep that stops fails its Actions run, so
+  ends with the synthesis's account of the night. On the machine that account is also posted as a
+  discussion in the project ("The night's summary"). A sweep that stops fails its Actions run, so
   GitHub's failed-run notification is the alert; the next run resumes where it stopped.
   `code-reviewer status` lists the recent sweeps.
 
@@ -187,24 +194,25 @@ versa; running both on the same repo at the same moment is not supported.
 
 `node bin/code-reviewer.mjs nightly` runs one night for every project the machine handles. It asks
 the App for the projects (the `projects` command's list), takes the handled ones in name order and
-runs each one's sweep, one at a time, each as a `sweep` command in a process of its own. A project
-that is not handled is left alone, with a line saying why. A sweep that fails is recorded and the
-run goes on to the next project; the command exits non-zero when any project failed, or when the
-projects could not be found. It needs the App's credentials and the database address in its
-environment, as `projects` and `sweep` do. A handled project needs nothing registered: the nightly
-run makes its row in the code reviewer's database the first night it meets it (ADR 0004).
+runs each one's sweep, posts its summary and then runs its nightly checks if it names any, one at a
+time, each as a `sweep`, `summary` or `checks` command in a process of its own. A project that is
+not handled is left alone, with a line saying why. A step that fails is recorded and the run goes
+on to the next; the command exits non-zero when any step failed, or when the projects could not be
+found. It needs the App's credentials and the database address in its environment, as `projects`
+and `sweep` do. A handled project needs nothing registered: the nightly run makes its row in the
+code reviewer's database the first night it meets it (ADR 0004).
 
 A sweep has five and a half hours, as a run on GitHub Actions had. One that runs longer is stopped,
-with the agents and commands it started, and the run goes on to the next project. Told to stop
-(SIGTERM, as when its service is stopped), the nightly run stops the sweep it is on and takes no
+with the agents and commands it started, and the run goes on to the next step. Told to stop
+(SIGTERM, as when its service is stopped), the nightly run stops the step it is on and takes no
 further step. Either way the run is recorded as `interrupted`, with what stopped it, and so is a
 run found still `running` when the next nightly run starts, whose process died before it could
 record anything. An interrupted sweep resumes from its own state the next time it is run.
 
 Every run is a row in the `runs` table with a run id (`run-<UTC start time>-<random>`, which names
-no project): the nightly run itself, and under it one row per project with how it ended and, when it
-failed, the stage it stopped in and the type of error. `code-reviewer status` lists the five most
-recent nightly runs with each project's result.
+no project): the nightly run itself, and under it one row for each project's sweep and one for its
+summary, with how it ended and, when it failed, the stage it stopped in and the type of error.
+`code-reviewer status` lists the five most recent nightly runs with each project's result.
 
 Everything a run's command wrote is kept in a file named by the run id, `runs/<run id>.log` under
 the code reviewer's state directory: `REVIEWER_STATE_DIR`, or `~/.local/state/code-reviewer` when
@@ -212,14 +220,72 @@ that is not set. It never leaves the machine, and a state directory inside the p
 (`REVIEWER_WORKSPACE_ROOT`) is refused, since that is where a project's own commands run. The same
 output goes to the command's own output as it comes, so the system journal has it too.
 
+### The night's summary
+
+After a project's sweep, `node bin/code-reviewer.mjs summary owner/name` posts the night as a
+discussion in that project: the synthesis's account that ends the sweep's log, then what the sweep
+did (what landed, what it filed and closed, the tickets it judged, the owner's decisions it
+settled), each issue by its number. Nothing is run again: the post is made from the sweep's row and
+its round's. The title is `Nightly summary, <date>`, the date the sweep finished on the machine's
+own calendar.
+
+- **A quiet night posts nothing.** A sweep with no diff, nothing judged and no decision settled is
+  skipped, as is a sweep that did not finish. The rule is `summaryPlan` in `src/night-summary.ts`.
+- **One discussion per sweep.** The discussion's address is recorded on the sweep's row
+  (`sweeps.discussion_url`, shown by `status`), so a nightly run started again the same night, or
+  the command run by hand, posts nothing more. Only a project's latest sweep is ever posted: a
+  night that could not be posted is not caught up once a later sweep has run, so after creating a
+  missing category run `summary` by hand to post that night.
+- **The category** is named by the setting `REVIEWER_DISCUSSION_CATEGORY`, `Code reviewer` when it
+  is not set, and matched whatever its capitals. GitHub's API creates discussions but not
+  categories (checked 2026-11-20: no such mutation in the GraphQL schema, and no discussions
+  endpoint in REST), so the owner creates it: in the project, turn on Discussions (Settings,
+  General, Features), then Discussions, the pencil beside Categories, New category, with the
+  format Open-ended discussion.
+- **A project with discussions off, or without the category,** fails the summary on the project's
+  side: a failure issue in the project says what to create. It is checked on every night, a quiet
+  one included, so the issue stays open until the category exists and closes at the first summary
+  run after that. The summary is a run of its own kind (`summary`), so the sweep's recorded result
+  is never changed by a summary that could not be posted.
+
+### Nightly checks
+
+A project can name checks that are too slow for every pull request in `nightly.checks`, a list of
+`{ "name", "command" }`. The nightly run runs them after that project's sweep and its summary, as
+a step and a run of their own (kind `checks`), whether or not the sweep succeeded. A project that
+names none has no such step: no checkout is made and no run is recorded.
+`node bin/code-reviewer.mjs checks owner/name` runs one project's checks by hand; it is recorded
+and reported the same way, and exits 1 when a check failed.
+
+- **Where they run.** In a checkout of their own, `checks/<owner>__<name>` under the checkouts'
+  root, at the default branch's head as it is when the checks start. That is the head the sweep
+  audited or a newer one, and it is made and set up the way the sweep's checkout is: the same
+  reset, then `reviewer.setup`. The sweep's own checkout is not reused because the checks can be
+  run by hand while a review or a sweep of the project is working in it.
+- **What they are given.** `reviewer.env`, and fresh databases for `reviewer.databases`: the
+  sweep's are dropped when the sweep ends, so the checks get their own, dropped when the checks
+  end. None of the code reviewer's credentials, as for every command of the project's. No agent
+  runs.
+- **A check that fails** (a non-zero exit, or one stopped for running longer than thirty minutes,
+  or than the setting `REVIEWER_CHECK_TIMEOUT_MS` when it is set) does not stop the checks after
+  it. The run fails if any check did, as a failure on the project's side, and ends with an account
+  of each failed check and the end of what it wrote, which is what the project's failure issue
+  quotes. Being a kind of run of their own, the checks never change the sweep's result, and their
+  failure issue is beside the sweep's: each is closed only by a success of its own kind. The run
+  as a whole has no time limit: the setup command and each check have their own.
+- **Output.** Everything a check writes goes to the run's output file and the journal, as a
+  sweep's output does.
+
 ### Failure issues
 
 A run that fails tells the owner through an issue, filed where the fault is. `reportRun`
 (`src/failure-report.ts`) is called with every finished run and decides the rest.
 
-- **The project's side:** its project config is invalid, or its setup command failed. The issue is
+- **The project's side:** its project config is invalid, its setup command failed, it has no
+  discussion category for the night's summary, or one of its nightly checks failed. The issue is
   opened in that project, with the end of the run's output. Which types of error are a project's
-  fault is one list in `src/failure-side.ts`.
+  fault is one list in `src/failure-side.ts`. The addresses of the run's test databases, and the
+  password they carry, are taken out of that output before it leaves the machine (`outputTail`).
 - **Everything else** is the code reviewer's side, a run its time limit stopped included. The issue
   is opened in the kit's repository: `REVIEWER_KIT_REPO`, which defaults to the kit's own. That
   repository may be public while a project is private, so the issue is built only from the kind of
@@ -379,6 +445,8 @@ intake → audit (scout + 10 auditors) → synthesis ──┬─ clean → gate
 - `src/sweep/*` — the nightly sweep: `loop.ts` driver, `judge.ts` (owner decisions: `wontfix`, hand closes, ticked minors), `tickets.ts` (`needs-judging` tickets, concerns included), `answers.ts`, `publish.ts`, `render.ts` (issue/digest/status text)
 - `src/projects.ts` — which projects there are and whether the machine handles each: asked of the App, never listed in the kit (ADR 0004)
 - `src/nightly.ts` — the nightly run: its order of work and what it does after a failure, as decisions; `src/runs.ts` — the record of runs on the machine (run ids, output files, how a run ended) and the one place a command is run, given its time limit and told to stop
+- `src/night-summary.ts` — whether a night's summary is posted, its title and text, and the discussion category it goes in, as decisions; `src/post-summary.ts` — the `summary` command, which posts it
+- `src/nightly-checks.ts` — a project's nightly checks: the order they run in and what happens after one fails, as a decision; the account a failed run ends with; the `checks` command
 - `src/poller.ts` — a pass of the poller as a decision: the events it acts on, what it runs and when it tries again; `src/poller-github.ts` — what a pass asks GitHub, conditionally, and the answers it keeps; `src/poller-pass.ts` — the pass itself: the record of events, the lock, and running each command
 - `src/failure-side.ts` — which side a failed run is on, from the type of its error; `src/failure-issue.ts` — what a failure issue says and when it is opened, commented on and closed; `src/failure-report.ts` — which places a finished run is reported to, and the reporting (`reportRun`)
 - `bin/update.mjs` — brings the code reviewer's own checkout up to date before a nightly run; `src/project-row.ts` — creates a project's row the first time it is met
