@@ -1,4 +1,5 @@
 import { listProjects, projectLine, type Project } from './projects.js';
+import { UPDATE_STAGES } from '../bin/update.mjs';
 import { ensureProjectRow } from './project-row.js';
 import {
   errorType,
@@ -79,6 +80,27 @@ export async function runNightly(): Promise<Outcome> {
       `${count('failed')} failed, ${count('interrupted')} interrupted, ${work.steps.length - outcomes.length} not started`,
   );
   return decision.done;
+}
+
+/**
+ * How a nightly run that never started is recorded: failed, in the step of bringing the code
+ * reviewer up to date that failed. Null when either word is not one of the fixed ones, so the
+ * record cannot be made to hold text of a caller's choosing.
+ */
+export function notStartedResult(stage: string, errorType: string): RunResult | null {
+  const known = (UPDATE_STAGES as readonly string[]).includes(stage);
+  if (!known || !/^(exit \d+|killed by SIG[A-Z0-9]+|could not start)$/.test(errorType)) return null;
+  return { state: 'failed', stage, errorType };
+}
+
+/** Record a nightly run that could not start. Returns false when given nothing it can record. */
+export async function recordNightlyNotStarted(stage: string, errorType: string): Promise<boolean> {
+  const result = notStartedResult(stage, errorType);
+  if (!result) return false;
+  const nightly = await startRun({ kind: 'nightly' });
+  runLog(nightly)(`nightly run ${nightly.id} not started: ${stage} failed (${errorType}). The system journal has the output.`);
+  await finishRun(nightly, result);
+  return true;
 }
 
 async function takeStep(nightly: Run, step: Step, say: (line: string) => void): Promise<Outcome> {

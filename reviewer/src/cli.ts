@@ -12,7 +12,7 @@ import { ACTIVE_WORK_STATES, resolveSlot } from './stages/intake.js';
 import { markGate, progressStep } from './stages/progress.js';
 import { postFailureNotice } from './stages/report.js';
 import { runMigrations } from './migrate.js';
-import { runNightly } from './nightly.js';
+import { recordNightlyNotStarted, runNightly } from './nightly.js';
 import { listProjects, projectLine } from './projects.js';
 import { runReview } from './review-loop.js';
 import { cloneUrl } from './project-row.js';
@@ -36,6 +36,9 @@ Usage:
                                                 a sweep that fails does not stop the next, and
                                                 one that runs past five and a half hours is
                                                 stopped and resumed the next night
+  code-reviewer nightly-not-started <stage> <error type>
+                                                record a nightly run that could not start; the
+                                                machine's update step (bin/update.mjs) calls it
   code-reviewer landed <owner/repo> <pr#>       a PR merged: label the tickets it addresses
                                                 needs-judging and lift their blocking edges
   code-reviewer labels <owner/repo>             bring the repo's labels in line with the ticket
@@ -60,7 +63,7 @@ Usage:
 
 // The commands CI runs unattended. The admin ones print tables and confirmations for a person at
 // a terminal, where a timestamp on every line is only noise.
-const STAMPED = new Set(['run', 'sweep', 'nightly', 'landed', 'migrate', 'next', 'abandon', 'carry-gate']);
+const STAMPED = new Set(['run', 'sweep', 'nightly', 'nightly-not-started', 'landed', 'migrate', 'next', 'abandon', 'carry-gate']);
 
 async function main() {
   const [cmd, ...rest] = process.argv.slice(2);
@@ -110,6 +113,11 @@ async function main() {
       const outcome = await runNightly();
       printRaw(`outcome: ${outcome}`);
       if (outcome !== 'succeeded') process.exitCode = 1;
+      break;
+    }
+    case 'nightly-not-started': {
+      const [stage, type, ...extra] = rest;
+      if (!stage || !type || extra.length > 0 || !(await recordNightlyNotStarted(stage, type))) return usageExit();
       break;
     }
     case 'landed': {

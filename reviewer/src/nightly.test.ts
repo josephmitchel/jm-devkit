@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { nightlyDecision, nightlyWork, type Step } from './nightly.js';
+import { nightlyDecision, nightlyWork, notStartedResult, type Step } from './nightly.js';
 import { classifyProjects } from './projects.js';
 
 const config = JSON.stringify({
@@ -74,5 +74,22 @@ describe('what a nightly run does next', () => {
 
   it('ends succeeded at once on a night with no handled project', () => {
     expect(nightlyDecision([], [])).toEqual({ done: 'succeeded' });
+  });
+});
+
+describe('a nightly run that could not start, because the code reviewer could not be brought up to date', () => {
+  it('is a failed run, in the step of the update that failed', () => {
+    expect(notStartedResult('installing dependencies', 'exit 3')).toEqual({
+      state: 'failed',
+      stage: 'installing dependencies',
+      errorType: 'exit 3',
+    });
+    expect(notStartedResult('moving the checkout', 'killed by SIGTERM')).toMatchObject({ errorType: 'killed by SIGTERM' });
+    expect(notStartedResult('applying migrations', 'could not start')).toMatchObject({ stage: 'applying migrations' });
+  });
+
+  it('is not recorded with a stage or a type of error that is not one of the fixed ones', () => {
+    expect(notStartedResult('auditing', 'exit 1')).toBeNull();
+    expect(notStartedResult('installing dependencies', 'npm error 404 for @acme/widgets')).toBeNull();
   });
 });
