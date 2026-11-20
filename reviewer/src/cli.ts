@@ -15,6 +15,7 @@ import { runMigrations } from './migrate.js';
 import { runNightly } from './nightly.js';
 import { listProjects, projectLine } from './projects.js';
 import { runReview } from './review-loop.js';
+import { cloneUrl } from './project-row.js';
 import { errorTypeLine, nightlyStatus, recentNightlyRuns, stopCommandsOnSignal } from './runs.js';
 import { runSweep } from './sweep/loop.js';
 import { runLanded } from './landed.js';
@@ -218,7 +219,7 @@ async function repoUpsert(mode: 'add' | 'set', slug: string, argv: string[]): Pr
     if (existing) throw new Error(`repo ${slug} already registered — use repo set`);
     await db.insert(schema.repos).values({
       slug,
-      cloneUrl: `https://github.com/${slug}.git`,
+      cloneUrl: cloneUrl(slug),
       ...patch,
     });
     console.log(`registered ${slug}`);

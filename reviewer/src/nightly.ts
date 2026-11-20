@@ -1,4 +1,5 @@
 import { listProjects, projectLine, type Project } from './projects.js';
+import { ensureProjectRow } from './project-row.js';
 import {
   errorType,
   finishRun,
@@ -82,6 +83,8 @@ export async function runNightly(): Promise<Outcome> {
 
 async function takeStep(nightly: Run, step: Step, say: (line: string) => void): Promise<Outcome> {
   try {
+    // A project registers itself (ADR 0004): the first night it is met, its row is made here.
+    await ensureProjectRow(step.project);
     const run = await startRun({ kind: step.kind, project: step.project, parentId: nightly.id });
     say(`${step.project} ${step.kind} started as ${run.id}`);
     let result: RunResult;
