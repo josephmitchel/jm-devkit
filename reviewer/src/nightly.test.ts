@@ -56,6 +56,22 @@ describe('what a nightly run does next', () => {
     expect(nightlyDecision(steps, ['succeeded', 'succeeded', 'failed'])).toEqual({ done: 'failed' });
   });
 
+  it("carries on after a sweep its time limit stopped, and ends failed: that project's night is not done", () => {
+    expect(nightlyDecision(steps, ['interrupted'])).toEqual({ next: { project: 'acme/widgets', kind: 'sweep' } });
+    expect(nightlyDecision(steps, ['interrupted', 'succeeded', 'succeeded'])).toEqual({ done: 'failed' });
+  });
+
+  it('takes no further step once the service is stopping, and ends interrupted', () => {
+    expect(nightlyDecision(steps, ['succeeded', 'interrupted'], true)).toEqual({ done: 'interrupted' });
+    expect(nightlyDecision(steps, ['succeeded'], true)).toEqual({ done: 'interrupted' });
+    expect(nightlyDecision(steps, [], true)).toEqual({ done: 'interrupted' });
+  });
+
+  it('ends as it would have when the stop came after the last step had finished', () => {
+    expect(nightlyDecision(steps, ['succeeded', 'succeeded', 'succeeded'], true)).toEqual({ done: 'succeeded' });
+    expect(nightlyDecision(steps, ['succeeded', 'failed', 'succeeded'], true)).toEqual({ done: 'failed' });
+  });
+
   it('ends succeeded at once on a night with no handled project', () => {
     expect(nightlyDecision([], [])).toEqual({ done: 'succeeded' });
   });

@@ -15,7 +15,7 @@ import { runMigrations } from './migrate.js';
 import { runNightly } from './nightly.js';
 import { listProjects, projectLine } from './projects.js';
 import { runReview } from './review-loop.js';
-import { errorTypeLine, nightlyStatus, recentNightlyRuns } from './runs.js';
+import { errorTypeLine, nightlyStatus, recentNightlyRuns, stopCommandsOnSignal } from './runs.js';
 import { runSweep } from './sweep/loop.js';
 import { runLanded } from './landed.js';
 import { dropTestDatabases } from './test-databases.js';
@@ -32,7 +32,9 @@ Usage:
                                                 file concerns as issues (never fixes, never gates)
   code-reviewer nightly                         the whole nightly run: sweep every project the
                                                 machine handles, in name order, one at a time;
-                                                a sweep that fails does not stop the next
+                                                a sweep that fails does not stop the next, and
+                                                one that runs past five and a half hours is
+                                                stopped and resumed the next night
   code-reviewer landed <owner/repo> <pr#>       a PR merged: label the tickets it addresses
                                                 needs-judging and lift their blocking edges
   code-reviewer labels <owner/repo>             bring the repo's labels in line with the ticket
@@ -103,9 +105,10 @@ async function main() {
     }
     case 'nightly': {
       if (rest.length > 0) return usageExit();
+      stopCommandsOnSignal();
       const outcome = await runNightly();
       printRaw(`outcome: ${outcome}`);
-      if (outcome === 'failed') process.exitCode = 1;
+      if (outcome !== 'succeeded') process.exitCode = 1;
       break;
     }
     case 'landed': {

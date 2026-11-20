@@ -1,9 +1,9 @@
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { asc, desc, eq, inArray } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray } from 'drizzle-orm';
 
 import { db, schema } from './db/client.js';
 import type { RunKind } from './db/schema.js';
@@ -17,13 +17,21 @@ export interface Ended {
   signal: string | null;
   /** Everything it wrote, stdout and stderr together. */
   output: string;
+  /** Set when the command was told to stop before it had finished, with what stopped it. */
+  stopped?: StopReason | null;
 }
 
+/** What stops a run that did not end of itself. `found running` is a run whose process died unrecorded. */
+export type StopReason = 'time limit' | 'service stopped' | 'found running';
+
 export interface RunResult {
-  state: 'succeeded' | 'failed';
-  /** The stage a failed run stopped in, by its fixed name; `starting` before it reached one of its own. */
+  state: 'succeeded' | 'failed' | 'interrupted';
+  /** The stage a run stopped in, by its fixed name; `starting` before it reached one of its own. */
   stage: string | null;
-  /** Never free text: an error's class name, `exit N`, `killed by SIG…` or `could not start`. */
+  /**
+   * Never free text: an error's class name, `exit N`, `killed by SIG…` or `could not start` on a
+   * failed run, and a {@link StopReason} on an interrupted one.
+   */
   errorType: string | null;
 }
 
@@ -52,6 +60,9 @@ export function runResult(runId: string, ended: Ended): RunResult {
   const stages = [...ended.output.matchAll(STAGE_LINE)]
     .map((m) => m[1] ?? m[2])
     .filter((s) => STAGES.has(s) && s !== 'failed');
+  const stage = stages.at(-1) ?? 'starting';
+  // Stopped, not broken: how the command died says nothing about the code, so it is not a failure.
+  if (ended.stopped) return { state: 'interrupted', stage, errorType: ended.stopped };
   const reported = ended.output
     .split('\n')
     .findLast((line) => line.startsWith(`${runId} error type: `))
@@ -63,7 +74,41 @@ export function runResult(runId: string, ended: Ended): RunResult {
       : ended.exitCode !== null
         ? `exit ${ended.exitCode}`
         : 'could not start');
-  return { state: 'failed', stage: stages.at(-1) ?? 'starting', errorType };
+  return { state: 'failed', stage, errorType };
+}
+
+// The commands that run agents. The others finish in seconds and have no limit of this kind.
+const AGENT_JOBS = new Set(['sweep', 'run']);
+// What a run on GitHub Actions was given (`timeout-minutes: 330`).
+const AGENT_JOB_LIMIT_MS = 5.5 * 60 * 60 * 1000;
+
+/** How long one of the code reviewer's commands may run before it is stopped, or null for no limit. */
+export function timeLimitMs(args: string[], env: NodeJS.ProcessEnv = process.env): number | null {
+  if (!AGENT_JOBS.has(args[0])) return null;
+  const set = Number(env.REVIEWER_AGENT_JOB_LIMIT_MS);
+  return Number.isInteger(set) && set > 0 ? set : AGENT_JOB_LIMIT_MS;
+}
+
+/**
+ * What an interrupted command needs before its work can be taken up again, as a command to run. A
+ * sweep needs nothing: it resumes from its own recorded state when it is next run. A review killed
+ * mid-stage would hold its project's review slot and restart from the wrong place, so it is
+ * recorded as stopped, the way a cancelled run on GitHub Actions is.
+ */
+export function afterInterruption(args: string[], reason: StopReason): string[] | null {
+  const [command, slug, pr] = args;
+  if (command !== 'run') return null;
+  return ['abandon', slug, pr, `the run on the machine was interrupted (${reason})`];
+}
+
+/**
+ * Of the runs still recorded as `running`, those a nightly run left behind: an earlier nightly run
+ * and its parts. Only a nightly run that is starting may call them dead, because the machine
+ * starts one nightly run at a time. A run that is no part of a nightly run (one the poller
+ * started) may be going on beside it and is not this rule's to judge.
+ */
+export function leftByNightlyRuns(rows: Run[]): Run[] {
+  return rows.filter((r) => r.state === 'running' && (r.kind === 'nightly' || r.parentId !== null));
 }
 
 /** `run-<UTC time it started>-<random>`. It names no project, so it can be printed anywhere. */
@@ -91,7 +136,10 @@ export function runOutputPath(runId: string, env: NodeJS.ProcessEnv = process.en
 /** A run's line in a log and in `status`: what it was, how it ended, and its id. */
 export function runLine(run: Run, outputPath: (runId: string) => string = runOutputPath): string {
   const what = run.project === null ? run.id : `${run.project} ${run.kind}`;
-  const how = run.state === 'failed' && run.stage !== null ? `failed in ${run.stage}: ${run.errorType}` : run.state;
+  const how =
+    run.errorType === null
+      ? run.state
+      : `${run.state}${run.stage === null ? '' : ` in ${run.stage}`}: ${run.errorType}`;
   return (
     `${what} [${how}]` +
     (run.project === null ? '' : ` ${run.id}`) +
@@ -152,21 +200,112 @@ export function runLog(run: Run): (line: string) => void {
 }
 
 /**
+ * Record as interrupted what an earlier nightly run left as `running`: its process was killed, or
+ * the machine went down, before it could record how it ended. For a nightly run that is starting,
+ * before it records itself. The sweeps it left resume when tonight's run reaches their projects.
+ */
+export async function interruptRunsLeftRunning(): Promise<Run[]> {
+  const left = leftByNightlyRuns(await db.select().from(schema.runs).where(eq(schema.runs.state, 'running')));
+  if (left.length === 0) return [];
+  const reason: StopReason = 'found running';
+  return db
+    .update(schema.runs)
+    .set({ state: 'interrupted', errorType: reason, finishedAt: new Date() })
+    .where(and(inArray(schema.runs.id, left.map((r) => r.id)), eq(schema.runs.state, 'running')))
+    .returning();
+}
+
+// How long a command told to stop has before it is killed outright.
+const KILL_AFTER_MS = 30_000;
+// How long a command's output may stay open once the command itself has exited: something it
+// started and left behind can hold the pipe, and must not hold the run.
+const OUTPUT_CLOSES_WITHIN_MS = 10_000;
+// A command run to tidy up after an interrupted one. Short, so a stopping service still gets to it.
+const CLEANUP_LIMIT_MS = 60_000;
+
+// One entry per command of ours that is going: tells it to stop.
+const going = new Set<() => void>();
+let stopRequested = false;
+
+/** Whether this process has been told to stop (see {@link stopCommandsOnSignal}). */
+export function stopping(): boolean {
+  return stopRequested;
+}
+
+/**
+ * Have a stop signal to this process stop the commands it is running, and let it record how they
+ * ended, where the default would end it at once with its runs left as `running`. For a command
+ * that runs others through {@link runCommand}; it then asks {@link stopping} before starting more.
+ */
+export function stopCommandsOnSignal(): void {
+  for (const signal of ['SIGTERM', 'SIGINT'] as const) {
+    process.on(signal, () => {
+      stopRequested = true;
+      for (const stop of going) stop();
+    });
+  }
+}
+
+// A command leads a process group of its own, so its agents and any project command it started
+// are signalled with it.
+function signalGroup(child: ChildProcess, signal: NodeJS.Signals): void {
+  if (child.pid === undefined) return;
+  try {
+    process.kill(-child.pid, signal);
+  } catch {
+    child.kill(signal);
+  }
+}
+
+/**
  * Run one of the code reviewer's own commands for a run that has been started, in a process of
  * its own: App auth is one project per process, and a command that dies takes only itself. What it
  * writes goes to the log as it comes and to the run's output file.
+ *
+ * This is the one place a command is given its time limit and told to stop. A command stopped by
+ * its limit, or because this process was told to stop, ends the run `interrupted`, and whatever
+ * its kind of work needs before it can be taken up again is done here ({@link afterInterruption}).
  */
 export async function runCommand(run: Run, args: string[]): Promise<RunResult> {
+  const result = runResult(run.id, await runChild(run, args, timeLimitMs(args), true));
+  const cleanup = result.state === 'interrupted' ? afterInterruption(args, result.errorType as StopReason) : null;
+  if (cleanup) {
+    // Not stopped with the rest: it is what a stopping service still has to get done.
+    const cleaned = await runChild(run, cleanup, CLEANUP_LIMIT_MS, false);
+    if (cleaned.exitCode !== 0) console.warn(`${run.id}: could not record the interrupted work as stopped (${cleanup[0]})`);
+  }
+  return result;
+}
+
+async function runChild(run: Run, args: string[], limitMs: number | null, stoppable: boolean): Promise<Ended> {
   const file = fs.createWriteStream(runOutputPath(run.id), { flags: 'a' });
   file.on('error', (err) => console.warn(`could not keep the output of ${run.id} (${err.message})`));
   const ended = await new Promise<Ended>((resolve) => {
     let output = '';
+    let stopped: StopReason | null = null;
+    const timers: NodeJS.Timeout[] = [];
     const child = spawn(process.execPath, ['--import', 'tsx/esm', path.join(reviewerRoot, 'src/cli.ts'), ...args], {
       cwd: reviewerRoot,
       // The install repo is for git's credential helper, which git starts with no arguments.
       env: { ...process.env, REVIEWER_RUN_ID: run.id, ...(run.project ? { REVIEWER_APP_INSTALL_REPO: run.project } : {}) },
       stdio: ['ignore', 'pipe', 'pipe'],
+      detached: true,
     });
+    const stop = (reason: StopReason) => {
+      if (stopped !== null) return;
+      stopped = reason;
+      signalGroup(child, 'SIGTERM');
+      timers.push(setTimeout(() => signalGroup(child, 'SIGKILL'), KILL_AFTER_MS));
+    };
+    const stopWithService = () => stop('service stopped');
+    if (stoppable) going.add(stopWithService);
+    if (limitMs !== null) timers.push(setTimeout(() => stop('time limit'), limitMs));
+
+    const finish = (exitCode: number | null, signal: string | null) => {
+      going.delete(stopWithService);
+      for (const timer of timers) clearTimeout(timer);
+      resolve({ exitCode, signal, output, stopped });
+    };
     for (const [from, to] of [[child.stdout, process.stdout], [child.stderr, process.stderr]] as const) {
       from.setEncoding('utf8');
       from.on('data', (chunk: string) => {
@@ -177,15 +316,29 @@ export async function runCommand(run: Run, args: string[]): Promise<RunResult> {
     }
     child.on('error', (err) => {
       file.write(`${err.message}\n`);
-      resolve({ exitCode: null, signal: null, output });
+      finish(null, null);
     });
-    child.on('close', (exitCode, signal) => resolve({ exitCode, signal, output }));
+    child.on('exit', (exitCode, signal) => {
+      timers.push(
+        setTimeout(() => {
+          child.stdout.destroy();
+          child.stderr.destroy();
+          finish(exitCode, signal);
+        }, OUTPUT_CLOSES_WITHIN_MS),
+      );
+    });
+    child.on('close', finish);
   });
   await new Promise((done) => {
     file.on('close', done);
     file.end();
   });
-  return runResult(run.id, ended);
+  // A service being stopped signals every process in it at once, so the command can be seen to
+  // die a moment before this process hears why. Give the signal that moment to arrive.
+  if (stoppable && !ended.stopped && ended.signal !== null && !stopRequested) {
+    await new Promise((heard) => setTimeout(heard, 500));
+  }
+  return { ...ended, stopped: ended.stopped ?? (stoppable && stopRequested && ended.exitCode !== 0 ? 'service stopped' : null) };
 }
 
 /** The most recent nightly runs, newest first, each followed by its parts in the order they ran. */
