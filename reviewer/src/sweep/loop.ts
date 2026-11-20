@@ -1,6 +1,7 @@
 import { desc, eq } from 'drizzle-orm';
 import { db, schema } from '../db/client.js';
 import type { SweepSummary } from '../db/schema.js';
+import { SetupCommandError } from '../failure-side.js';
 import { compareCommitCount, getBranchHead, getDefaultBranch } from '../github.js';
 import { markStage } from '../heartbeat.js';
 import { changedFilePaths, prepareWorkspace, runRepoCommand } from '../workspace.js';
@@ -271,7 +272,7 @@ async function prepareSweepWorkspace(ctx: SweepCtx): Promise<void> {
   if (project.setupCommand) {
     console.log(`running setup: ${project.setupCommand}`);
     const setup = await runRepoCommand(ctx.workspaceDir, project.setupCommand, project.env);
-    if (!setup.passed) throw new Error(`setup command failed:\n${setup.trimmedOutput}`);
+    if (!setup.passed) throw new SetupCommandError(setup.trimmedOutput);
   }
 }
 
