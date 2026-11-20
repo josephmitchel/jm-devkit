@@ -1,4 +1,5 @@
 import {
+  type AnyPgColumn,
   bigint,
   boolean,
   integer,
@@ -309,4 +310,29 @@ export const githubArtifacts = pgTable('github_artifacts', {
   roundNo: integer('round_no'),
   payload: jsonb('payload'),
   postedAt: timestamp('posted_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export type RunKind = 'nightly' | 'sweep';
+export type RunState = 'running' | 'succeeded' | 'failed';
+
+/**
+ * A run of one of the code reviewer's commands on the machine: a nightly run, or one project's
+ * part in it. `kind` and `state` are text, so a new kind of run needs no migration.
+ */
+export const runs = pgTable('runs', {
+  // `run-<UTC start time>-<random>` (newRunId). The run's output is the file runOutputPath names.
+  id: text('id').primaryKey(),
+  kind: text('kind').$type<RunKind>().notNull(),
+  // owner/name, not a repos row: a project's first run is recorded before it has one. Null for a
+  // run that is not one project's, such as the nightly run itself.
+  project: text('project'),
+  // The run this one is part of: the nightly run, for a project's sweep.
+  parentId: text('parent_id').references((): AnyPgColumn => runs.id),
+  state: text('state').$type<RunState>().notNull().default('running'),
+  // Both set only on a run that failed of itself. A nightly run that failed only because a
+  // project's run did has neither.
+  stage: text('stage'),
+  errorType: text('error_type'),
+  startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),
+  finishedAt: timestamp('finished_at', { withTimezone: true }),
 });

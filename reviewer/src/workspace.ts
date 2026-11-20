@@ -23,8 +23,8 @@ export const reviewerRoot = projectRoot;
  * reviewer's own node_modules and git config, where one of its scripts could rewrite the live
  * credential helper, and where its test suite resolves modules by walking up into ours.
  */
-function workspaceRoot(): string {
-  const configured = process.env.REVIEWER_WORKSPACE_ROOT?.trim();
+export function workspaceRoot(env: NodeJS.ProcessEnv = process.env): string {
+  const configured = env.REVIEWER_WORKSPACE_ROOT?.trim();
   return configured ? configured : path.join(projectRoot, 'workspaces');
 }
 
