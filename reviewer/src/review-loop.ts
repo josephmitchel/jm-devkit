@@ -15,6 +15,7 @@ import { runJudging } from './stages/judge.js';
 import { runGating } from './stages/gate.js';
 import { markGate, progressStep, startProgress } from './stages/progress.js';
 import { MAX_ROUNDS, requireRound, type Ctx } from './stages/context.js';
+import { droppingTestDatabases } from './test-databases.js';
 
 type State = (typeof schema.reviewState.enumValues)[number];
 
@@ -73,8 +74,14 @@ export async function runReview(
   prNumber: number,
   options: RunReviewOptions = {},
 ): Promise<ReviewOutcome> {
-  const oneShot = options.oneShot ?? false;
   const ctx = await loadCtx(repoSlug, prNumber);
+  // However this run ends, with a verdict, a wait or an error, the databases it made for the
+  // project's tests go with it. The next run makes its own.
+  return droppingTestDatabases(`review:${ctx.review.id}`, () => advanceReview(ctx, options.oneShot ?? false));
+}
+
+async function advanceReview(ctx: Ctx, oneShot: boolean): Promise<ReviewOutcome> {
+  const prNumber = ctx.review.prNumber;
   markStage(ctx.review.state);
 
   // Claim the repo's review slot before this review leaves `pending`: a review that has
@@ -251,7 +258,7 @@ async function runIntakeWorkspaceOnly(ctx: Ctx): Promise<void> {
     ctx.review.prBranch,
     ctx.round.headSha,
   );
-  readProject(ctx);
+  await readProject(ctx);
   await runSetup(ctx);
 }
 

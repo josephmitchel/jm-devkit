@@ -94,7 +94,7 @@ test('hour: every other installed repository and the Worker list are taken; the 
       'taken 8 owner/second (the Worker list)',
       'taken 9 owner/kit (devkit.json)',
       'skipped owner/first: no devkit.json',
-      'skipped owner/broken: devkit.json is malformed: sweep is required; reviewer is required; modules must have at least 1 item; modules must include "process"',
+      'skipped owner/broken: devkit.json is malformed: reviewer is required; modules must have at least 1 item; modules must include "process"',
       'skipped owner/bare: no devkit.json',
       '',
     ].join('\n'),
@@ -106,6 +106,14 @@ test('hour: every other installed repository and the Worker list are taken; the 
 test('hour: the current hour is kept when it is free, and moved when another repository has it', async () => {
   assert.match((await run(['hour', 'owner/project', '--current', '3'], fleet().fetch)).out, /^hour 3\n/);
   assert.match((await run(['hour', 'owner/project', '--current', '9'], fleet().fetch)).out, /^hour 10\n/);
+});
+
+test('hour: a repository whose devkit.json has no sweep section takes no hour', async () => {
+  const moved = JSON.stringify({ modules: ['process'], reviewer: { tests: [{ name: 't', command: 'true' }] } });
+  const result = await run(['hour', 'owner/project'], fleet({ 'GET /repos/owner/kit/contents/devkit.json': [200, moved] }).fetch);
+  assert.equal(result.code, 0);
+  assert.match(result.out, /^hour 9\n/);
+  assert.doesNotMatch(result.out, /owner\/kit/);
 });
 
 test("hour: a repository in the Worker list keeps that hour, and the list is not needed once it is gone", async () => {

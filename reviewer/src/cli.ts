@@ -16,6 +16,7 @@ import { listProjects, projectLine } from './projects.js';
 import { runReview } from './review-loop.js';
 import { runSweep } from './sweep/loop.js';
 import { runLanded } from './landed.js';
+import { dropTestDatabases } from './test-databases.js';
 import { syncLabels } from './sweep/labels.js';
 
 const USAGE = `code-reviewer — standalone multi-agent PR review service
@@ -433,6 +434,8 @@ async function resetReview(slug: string, prNumber: number): Promise<void> {
     .where(and(eq(schema.reviews.repoId, repo.id), eq(schema.reviews.prNumber, prNumber)));
   if (!review) throw new Error(`no review for ${slug}#${prNumber}`);
 
+  // A killed run's databases are recorded under this review's id, which is about to be forgotten.
+  await dropTestDatabases(`review:${review.id}`);
   const rounds = await db.select().from(schema.rounds).where(eq(schema.rounds.reviewId, review.id));
   const roundIds = rounds.map((r) => r.id);
   await db.transaction(async (tx) => {

@@ -120,8 +120,18 @@ test('an unknown field is refused, naming it', () => {
 });
 
 test('a missing field is refused, naming it', () => {
-  const { sweep, ...config } = minimal;
-  assert.deepEqual(generateError(config), ['sweep is required']);
+  const { reviewer, ...config } = minimal;
+  assert.deepEqual(generateError(config), ['reviewer is required']);
+});
+
+test('a config with no sweep section generates the same workflow as one with an hour', () => {
+  const { sweep, ...noSweep } = withDatabase;
+  assert.deepEqual(generate(noSweep), generate(withDatabase));
+});
+
+test('reviewer.databases is accepted and changes nothing in the workflow', () => {
+  const config = { ...withDatabase, reviewer: { ...withDatabase.reviewer, databases: ['TEST_DATABASE_URL'] } };
+  assert.deepEqual(generate(config), generate(withDatabase));
 });
 
 test('generating twice gives identical output, whatever order devkit.json lists things in', () => {
@@ -178,12 +188,12 @@ test('--check exits 1 naming each file that drifted or is missing, and writes no
 });
 
 test('the CLI exits 2 with the field errors on an invalid devkit.json, writing nothing', () => {
-  const { sweep, ...noSweep } = minimal;
-  const dir = project({ ...noSweep, extra: true });
+  const { reviewer, ...noReviewer } = minimal;
+  const dir = project({ ...noReviewer, extra: true });
   for (const args of [[dir], [dir, '--check']]) {
     const run = cli(...args);
     assert.equal(run.code, 2);
-    assert.match(run.stderr, /sweep is required/);
+    assert.match(run.stderr, /reviewer is required/);
     assert.match(run.stderr, /extra is not a known field/);
   }
   assert.ok(!fs.existsSync(path.join(dir, '.github')));

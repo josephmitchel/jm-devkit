@@ -24,6 +24,11 @@ export interface ProjectSetup {
    * project gets its environment from the action's `repo-env` input alone.
    */
   env: Record<string, string>;
+  /**
+   * The variables that each need an empty database for the run. None from the database row. Their
+   * addresses join `env` once the databases exist (see test-databases.ts).
+   */
+  databases: string[];
 }
 
 /** The part of a project's database row that `devkit.json` replaces. */
@@ -49,6 +54,7 @@ export function readProjectSetup(checkoutDir: string, row: ProjectRow): ProjectS
       harnessNotes: row.harnessNotes,
       extraContext: row.extraContext,
       env: {},
+      databases: [],
     };
   }
 
@@ -62,6 +68,7 @@ export function readProjectSetup(checkoutDir: string, row: ProjectRow): ProjectS
     harnessNotes: reviewer.harnessNotes === undefined ? null : readHarnessNotes(checkoutDir, reviewer.harnessNotes),
     extraContext: reviewer.extraContext ?? null,
     env: { ...reviewer.env },
+    databases: [...(reviewer.databases ?? [])],
   };
 }
 

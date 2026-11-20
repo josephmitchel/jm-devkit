@@ -133,7 +133,9 @@ export async function takenHours({ fetch: fetchFn, credentials, repo, now }) {
       continue;
     }
     try {
-      taken.push({ hour: parseDevkitConfig(text).sweep.hour, slug, from: CONFIG_FILE });
+      const config = parseDevkitConfig(text);
+      // A project swept by the owner's machine has no sweep section, and so no hour.
+      if (config.sweep) taken.push({ hour: config.sweep.hour, slug, from: CONFIG_FILE });
     } catch (e) {
       if (!(e instanceof DevkitConfigError)) throw e;
       skipped.push({ slug, why: e.message });
