@@ -323,12 +323,13 @@ export const testDatabases = pgTable('test_databases', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
-export type RunKind = 'nightly' | 'sweep';
+export type RunKind = 'nightly' | 'sweep' | 'summary';
 export type RunState = 'running' | 'succeeded' | 'failed';
 
 /**
  * A run of one of the code reviewer's commands on the machine: a nightly run, or one project's
- * part in it. `kind` and `state` are text, so a new kind of run needs no migration.
+ * part in it (its sweep, then the posting of the night's summary). `kind` and `state` are text, so
+ * a new kind of run needs no migration.
  */
 export const runs = pgTable('runs', {
   // `run-<UTC start time>-<random>` (newRunId). The run's output is the file runOutputPath names.
