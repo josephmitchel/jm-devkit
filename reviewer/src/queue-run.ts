@@ -6,8 +6,18 @@ import { locksHeld, MACHINE_LOCK, NIGHTLY_LOCK, tryLock } from './machine.js';
 import { takeEvent } from './poller-pass.js';
 import { commandFor } from './poller.js';
 import { ensureProjectRow } from './project-row.js';
-import { afterReviewRun, leftByQueue, queueDecision, type Job, type Machine, type QueueDecision, type QueuedEvent, type RunningJob } from './queue.js';
-import { errorType, finishRun, interruptRunsLeftRunning, runCommand, runLine, startRun, tidyAfterInterruption, type RunResult } from './runs.js';
+import {
+  afterReviewRun,
+  leftByQueue,
+  queueDecision,
+  type EventVerdict,
+  type Job,
+  type Machine,
+  type QueueDecision,
+  type QueuedEvent,
+  type RunningJob,
+} from './queue.js';
+import { errorType, finishRun, interruptRunsLeftRunning, runCommand, runLine, startRun, stopping, tidyAfterInterruption, type RunResult } from './runs.js';
 import { OFF_THE_SLOT } from './stages/intake.js';
 
 /**
@@ -21,7 +31,11 @@ export type TurnOutcome = 'nothing started' | 'succeeded' | 'failed' | 'interrup
 
 const why = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
-/** Take one turn: at most one review is started, and the turn lasts as long as it does. */
+/**
+ * Take one turn: at most one review does any work, and the turn lasts as long as it does. A
+ * review that is turned away from its project's slot did none and took a moment, so the turn goes
+ * on to the next job, and a project with reviews waiting for its slot does not hold up another's.
+ */
 export async function runQueueTurn(say: (line: string) => void = console.log): Promise<TurnOutcome> {
   const held = await locksHeld();
   const nightlyGoing = held.has(NIGHTLY_LOCK);
@@ -32,15 +46,24 @@ export async function runQueueTurn(say: (line: string) => void = console.log): P
     const seen: Machine = { agentJobRunning: nightlyGoing ? held.has(MACHINE_LOCK) : machine === null, nightlyGoing };
     // With the machine held no agent job has a process, so a review still `running` has died.
     if (machine) await recordDeadRuns(say);
-    const decision = queueDecision(await queuedEvents(), await slotsHeld(), seen, new Date());
-    if (decision.waiting.length > 0) {
-      say(`${decision.waiting.length} job(s) left queued: ${decision.waiting.map(({ job, why: reason }) => `${job.project} ${job.event} (${reason})`).join('; ')}`);
+    const turnedAway = new Set<string>();
+    for (;;) {
+      const decision = queueDecision(await queuedEvents(), await slotsHeld(), seen, new Date());
+      const next = decision.start;
+      // A job turned away twice in one turn would be turned away for ever: leave it for the next.
+      if (!next || !machine || stopping() || turnedAway.has(`${next.project} ${next.event}`)) {
+        const waiting = [...(next ? [{ job: next, why: 'left for the next turn' }] : []), ...decision.waiting];
+        say(
+          waiting.length === 0
+            ? 'nothing is queued'
+            : `${waiting.length} job(s) left queued: ${waiting.map(({ job, why: reason }) => `${job.project} ${job.event} (${reason})`).join('; ')}`,
+        );
+        return 'nothing started';
+      }
+      const ran = await runJob(next, say);
+      if (ran.verdict !== 'waits for the slot') return ran.outcome;
+      turnedAway.add(`${next.project} ${next.event}`);
     }
-    if (!decision.start || !machine) {
-      if (decision.waiting.length === 0) say('nothing is queued');
-      return 'nothing started';
-    }
-    return await runJob(decision.start, say);
   } finally {
     await machine?.release();
   }
@@ -111,10 +134,10 @@ const VERDICT_WORDS = {
  * the command exited 0: {@link afterReviewRun} says, from how the run ended and where it left the
  * review. Every event the job covers is handled with it.
  */
-async function runJob(job: Job, say: (line: string) => void): Promise<TurnOutcome> {
+async function runJob(job: Job, say: (line: string) => void): Promise<{ outcome: TurnOutcome; verdict: EventVerdict | null }> {
   if (!(await takeEvent(job))) {
     say(`${job.project} ${job.event}: already taken by another turn`);
-    return 'nothing started';
+    return { outcome: 'nothing started', verdict: null };
   }
   const events = and(eq(schema.pollerEvents.project, job.project), inArray(schema.pollerEvents.event, [job.event, ...job.covers]));
   try {
@@ -140,11 +163,11 @@ async function runJob(job: Job, say: (line: string) => void): Promise<TurnOutcom
     say(`${runLine(finished)}; ${job.event} ${VERDICT_WORDS[verdict]}`);
     // A review turned away did no work: it is no success to close a failure issue on.
     if (verdict !== 'waits for the slot') await reportRun(finished, say);
-    return finished.state === 'running' ? 'failed' : finished.state;
+    return { outcome: finished.state === 'running' ? 'failed' : finished.state, verdict };
   } catch (err) {
     // The run could not be recorded at all (the database, the state directory).
     say(`${job.project} ${job.event} could not be run: ${why(err)}`);
-    return 'failed';
+    return { outcome: 'failed', verdict: null };
   }
 }
 
