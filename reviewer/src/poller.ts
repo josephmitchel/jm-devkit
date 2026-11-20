@@ -5,7 +5,8 @@ import { runLine, runOutputPath, type Run } from './runs.js';
 
 /**
  * The poller's pass as a decision: from what a pass saw on GitHub and what the database says was
- * already handled, to the commands to run. Nothing here asks GitHub or the database anything.
+ * already handled, to the commands to run and the reviews to queue. Nothing here asks GitHub or
+ * the database anything.
  */
 
 /** A pull request as a pass saw it in a project's listing. */
@@ -63,7 +64,7 @@ export interface ProjectSeen {
 export interface EventRecord {
   /** The event's key, `<name>:<subject>`, such as `merged:12`. The same event always has the same key. */
   event: string;
-  /** When its command succeeded, or null while it has not. */
+  /** When it was handled, or null while it has not been. */
   handledAt: Date | null;
   /** How many times its command has been started. */
   attempts: number;
@@ -179,7 +180,8 @@ const EVENTS: Record<string, EventRule> = {
       const own = new Set(waiting.ownComments);
       const newest = pr.comments
         .filter((c) => c.at > waiting.since && c.at > known.startedAt && countsAsReply(c, own))
-        .reduce<CommentSeen | null>((last, c) => (last === null || c.at > last.at ? c : last), null);
+        // Of two written in the same second, the one listed later: GitHub lists them as written.
+        .reduce<CommentSeen | null>((last, c) => (last === null || c.at >= last.at ? c : last), null);
       return newest === null ? null : `${pr.number}/${newest.id}`;
     },
     command: (project, subject) => review(project, subject.split('/')[0]),
@@ -224,7 +226,8 @@ function due(event: EventRecord, now: Date): boolean {
  * What a pass does. For each project the machine handles: nothing on its first pass, which only
  * marks where the project starts from; after that, the command for every event the rules find
  * that is not on record, and again for every event on record whose command has not succeeded and
- * whose wait is over. `known` has an entry for each project that has had its first pass.
+ * whose wait is over. An agent job's event is found the same way and never run here: it is
+ * returned as queued. `known` has an entry for each project that has had its first pass.
  */
 export function passDecision(
   seen: { projects: ProjectSeen[] },

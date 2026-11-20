@@ -258,6 +258,11 @@ describe("a comment on the pull request of a review that waits on the owner", ()
     expect(found([owner(902, '11:58:30'), owner(900, '11:58:00'), owner(901, '11:58:10')]).projects[0].found).toEqual(['replied:12/902']);
   });
 
+  it('takes the later of two comments written in the same second, so the second is not lost when a pass saw only the first', () => {
+    // GitHub's times are whole seconds, and it lists comments in the order they were written.
+    expect(found([owner(900, '11:58:00'), owner(901, '11:58:00')]).projects[0].found).toEqual(['replied:12/901']);
+  });
+
   it('does not continue it again for a comment already acted on, and does for a later one', () => {
     const acted: EventRecord = { event: 'replied:12/900', handledAt: at('11:58:40'), attempts: 1, attemptedAt: at('11:58:05'), running: false };
     const again = (comments: PullRequestSeen['comments']) =>
