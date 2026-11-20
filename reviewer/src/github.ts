@@ -303,6 +303,27 @@ export async function listOpenIssuesByLabel(repoSlug: string, label: string): Pr
     .sort((a, b) => a.number - b.number);
 }
 
+/**
+ * Every open issue with who opened it, oldest first: what the failure issue is looked for among.
+ * The list endpoint, not search, because search lags behind an issue opened a moment ago.
+ */
+export async function listOpenIssuesWithAuthors(
+  repoSlug: string,
+): Promise<Array<{ number: number; body: string; authorType: string; authorAssociation: string }>> {
+  const rows = await ghJson<
+    Array<{ number: number; body: string | null; user: { type?: string } | null; author_association?: string; pull_request?: unknown }>
+  >(['api', `repos/${repoSlug}/issues?state=open&per_page=100`, '--paginate']);
+  return rows
+    .filter((r) => r.pull_request === undefined || r.pull_request === null)
+    .map((r) => ({
+      number: r.number,
+      body: r.body ?? '',
+      authorType: r.user?.type ?? 'User',
+      authorAssociation: r.author_association ?? 'NONE',
+    }))
+    .sort((a, b) => a.number - b.number);
+}
+
 export async function getIssue(repoSlug: string, number: number): Promise<IssueInfo> {
   return toIssueInfo(await ghJson<RawIssue>(['api', `repos/${repoSlug}/issues/${number}`]));
 }

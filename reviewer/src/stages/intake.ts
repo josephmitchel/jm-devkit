@@ -1,5 +1,6 @@
 import { and, eq, notInArray } from 'drizzle-orm';
 import { db, schema } from '../db/client.js';
+import { SetupCommandError } from '../failure-side.js';
 import { getPr } from '../github.js';
 import { prepareWorkspace, runRepoCommand } from '../workspace.js';
 import { MAX_ROUNDS, requireProject, requireWorkspace, type Ctx } from './context.js';
@@ -166,7 +167,7 @@ export async function runSetup(ctx: Ctx): Promise<void> {
   if (!project.setupCommand) return;
   console.log(`running setup: ${project.setupCommand}`);
   const setup = await runRepoCommand(requireWorkspace(ctx), project.setupCommand, project.env);
-  if (!setup.passed) throw new Error(`setup command failed:\n${setup.trimmedOutput}`);
+  if (!setup.passed) throw new SetupCommandError(setup.trimmedOutput);
 }
 
 /**

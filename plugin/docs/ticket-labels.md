@@ -38,6 +38,9 @@ Yellow waits on the owner, green and orange on an agent, blue on the nightly jud
 - A closed ticket has no status, except `wontfix`, which stays as the record of the dismissal.
 - The "Code reviewer: minor findings" digest is not a ticket: no PR addresses it. It carries
   `concern` and no status.
+- A failure issue, which the code reviewer opens when one of its runs fails ("The code reviewer's
+  sweep failed"), is not a ticket either: no PR addresses it. It carries no labels, and the code
+  reviewer closes it when the next run of that kind succeeds.
 
 ## Level and quality: concerns only
 

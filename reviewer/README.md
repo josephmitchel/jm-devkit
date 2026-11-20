@@ -211,6 +211,35 @@ that is not set. It never leaves the machine, and a state directory inside the p
 (`REVIEWER_WORKSPACE_ROOT`) is refused, since that is where a project's own commands run. The same
 output goes to the command's own output as it comes, so the system journal has it too.
 
+### Failure issues
+
+A run that fails tells the owner through an issue, filed where the fault is. `reportRun`
+(`src/failure-report.ts`) is called with every finished run and decides the rest.
+
+- **The project's side:** its project config is invalid, or its setup command failed. The issue is
+  opened in that project, with the end of the run's output. Which types of error are a project's
+  fault is one list in `src/failure-side.ts`.
+- **Everything else** is the code reviewer's side, a run its time limit stopped included. The issue
+  is opened in the kit's repository: `REVIEWER_KIT_REPO`, which defaults to the kit's own. That
+  repository may be public while a project is private, so the issue is built only from the kind of
+  run, the stage it stopped in, the type of error, the kit commit, the time and the run id. Each
+  is checked against a fixed set of words or a fixed pattern and left out when it does not fit; no
+  project is named and no output is quoted. The run id finds the full output on the machine.
+
+There is one open failure issue per place and kind of run, found again by the first line of its
+body. A further failure is a comment on it, so two projects that fail the same way on one night
+make one issue and one comment in the kit's repository. The code reviewer closes it at the next
+success of the same kind. For the runs that are part of a nightly run the kit's repository is told
+once, when the night is over: its issue for sweeps is closed when a sweep succeeded that night and
+none failed on the code reviewer's side, so one project's success does not close an issue another
+project's failure has just commented on. A run that the service stopping interrupted is neither a
+failure nor a success.
+
+A failure issue is not a ticket: it carries no labels. The App acts on one repository per process,
+so each report is handed to a `failure-issue` command aimed at its repository, and the one aimed at
+the kit's repository is given nothing but those six facts. A report that cannot be made is a line
+in the run's log and changes nothing about the run.
+
 ## The service and its timer (on the machine)
 
 `vm/dev-vm-setup.sh` installs the code reviewer on the machine as a service of the unprivileged
@@ -285,6 +314,7 @@ intake → audit (scout + 10 auditors) → synthesis ──┬─ clean → gate
 - `src/sweep/*` — the nightly sweep: `loop.ts` driver, `judge.ts` (owner decisions: `wontfix`, hand closes, ticked minors), `tickets.ts` (`needs-judging` tickets, concerns included), `answers.ts`, `publish.ts`, `render.ts` (issue/digest/status text)
 - `src/projects.ts` — which projects there are and whether the machine handles each: asked of the App, never listed in the kit (ADR 0004)
 - `src/nightly.ts` — the nightly run: its order of work and what it does after a failure, as decisions; `src/runs.ts` — the record of runs on the machine (run ids, output files, how a run ended) and the one place a command is run, given its time limit and told to stop
+- `src/failure-side.ts` — which side a failed run is on, from the type of its error; `src/failure-issue.ts` — what a failure issue says and when it is opened, commented on and closed; `src/failure-report.ts` — which places a finished run is reported to, and the reporting (`reportRun`)
 - `bin/update.mjs` — brings the code reviewer's own checkout up to date before a nightly run; `src/project-row.ts` — creates a project's row the first time it is met
 - `../vm/` — the machine setup and the systemd units it installs
 - `src/agents/run-agent.ts` — Agent SDK wrapper (structured output, session recording, resume)

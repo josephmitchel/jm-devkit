@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import { parseArgs } from 'node:util';
 import { and, desc, eq, inArray, notInArray } from 'drizzle-orm';
 import { db, pool, schema } from './db/client.js';
+import { fileReport, parseReport } from './failure-report.js';
 import { configureAppAuth } from './gh-auth.js';
 import { gitCredential } from './git-credential.js';
 import { startHeartbeat } from './heartbeat.js';
@@ -39,6 +40,9 @@ Usage:
   code-reviewer nightly-not-started <stage> <error type>
                                                 record a nightly run that could not start; the
                                                 machine's update step (bin/update.mjs) calls it
+  code-reviewer failure-issue <owner/repo>      open, comment on or close that repository's failure
+                                                issue, from the report of a finished run on its
+                                                input (the nightly run starts this; not for hand use)
   code-reviewer landed <owner/repo> <pr#>       a PR merged: label the tickets it addresses
                                                 needs-judging and lift their blocking edges
   code-reviewer labels <owner/repo>             bring the repo's labels in line with the ticket
@@ -118,6 +122,14 @@ async function main() {
     case 'nightly-not-started': {
       const [stage, type, ...extra] = rest;
       if (!stage || !type || extra.length > 0 || !(await recordNightlyNotStarted(stage, type))) return usageExit();
+      break;
+    }
+    case 'failure-issue': {
+      const [slug, ...extra] = rest;
+      if (!slug || extra.length > 0) return usageExit();
+      const report = parseReport(fs.readFileSync(0, 'utf8'));
+      configureAppAuth(slug);
+      for (const line of await fileReport(slug, report)) console.log(line);
       break;
     }
     case 'landed': {

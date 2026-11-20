@@ -1,3 +1,4 @@
+import { reportRun } from './failure-report.js';
 import { listProjects, projectLine, type Project } from './projects.js';
 import { UPDATE_STAGES } from '../bin/update.mjs';
 import { ensureProjectRow } from './project-row.js';
@@ -45,8 +46,8 @@ export function nightlyDecision(steps: Step[], outcomes: Outcome[], stopping = f
 
 /**
  * The whole nightly run: every handled project's sweep, one after another, each in a process of
- * its own. Every run is recorded, and the nightly run ends failed if any part of it did. Told to
- * stop, it stops the sweep it is on, takes no further step and ends interrupted.
+ * its own. Every run is recorded and reported, and the nightly run ends failed if any part of it did.
+ * Told to stop, it stops the sweep it is on, takes no further step and ends interrupted.
  */
 export async function runNightly(): Promise<Outcome> {
   // Before this run records itself, or it would be among them.
@@ -61,7 +62,7 @@ export async function runNightly(): Promise<Outcome> {
     work = nightlyWork(await listProjects());
   } catch (err) {
     say(`could not find the projects: ${err instanceof Error ? err.message : String(err)}`);
-    await finishRun(nightly, { state: 'failed', stage: 'finding the projects', errorType: errorType(err) });
+    await reportRun(await finishRun(nightly, { state: 'failed', stage: 'finding the projects', errorType: errorType(err) }), say);
     return 'failed';
   }
   for (const line of work.skipped) say(line);
@@ -73,12 +74,14 @@ export async function runNightly(): Promise<Outcome> {
     decision = nightlyDecision(work.steps, outcomes, stopping());
   }
   const stopped = decision.done === 'interrupted';
-  await finishRun(nightly, { state: decision.done, stage: null, errorType: stopped ? 'service stopped' : null });
+  const finished = await finishRun(nightly, { state: decision.done, stage: null, errorType: stopped ? 'service stopped' : null });
   const count = (outcome: Outcome) => outcomes.filter((o) => o === outcome).length;
   say(
     `nightly run ${nightly.id} ${decision.done}: of ${work.steps.length} project run(s), ` +
       `${count('failed')} failed, ${count('interrupted')} interrupted, ${work.steps.length - outcomes.length} not started`,
   );
+  // After every project, so the kit's repository hears of a kind of run once for the whole night.
+  await reportRun(finished, say);
   return decision.done;
 }
 
@@ -117,6 +120,7 @@ async function takeStep(nightly: Run, step: Step, say: (line: string) => void): 
     }
     const finished = await finishRun(run, result);
     say(runLine(finished));
+    await reportRun(finished, say);
     return finished.state === 'running' ? 'failed' : finished.state;
   } catch (err) {
     // The run could not be recorded at all (the database, the state directory): still only this step's failure.

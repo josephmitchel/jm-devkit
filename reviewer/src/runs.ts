@@ -39,6 +39,8 @@ export interface RunResult {
 const STAGE_LINE = /=== (?:sweep )?state: (\w+) ===|resuming (?:sweep|review) \d+ for \S+ in state (\w+)/g;
 // Only these count as a stage, so a line in a project's output cannot name one of its choosing.
 const STAGES = new Set<string>([...schema.sweepState.enumValues, ...schema.reviewState.enumValues]);
+/** Every stage a run can be recorded as having stopped in: the ones above, and the two before any of them. */
+export const RUN_STAGES: ReadonlySet<string> = new Set([...STAGES, 'starting', 'finding the projects']);
 
 /** An error's class name, and nothing a message or a project could put there. */
 export function errorType(err: unknown): string {
