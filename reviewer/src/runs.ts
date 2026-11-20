@@ -21,7 +21,7 @@ export interface Ended {
 
 export interface RunResult {
   state: 'succeeded' | 'failed';
-  /** The stage a failed run stopped in; `starting` before it reached one of its own. */
+  /** The stage a failed run stopped in, by its fixed name; `starting` before it reached one of its own. */
   stage: string | null;
   /** Never free text: an error's class name, `exit N`, `killed by SIG…` or `could not start`. */
   errorType: string | null;
@@ -29,23 +29,33 @@ export interface RunResult {
 
 // The lines the sweep's and the review's drivers print as they enter or resume a stage.
 const STAGE_LINE = /=== (?:sweep )?state: (\w+) ===|resuming (?:sweep|review) \d+ for \S+ in state (\w+)/g;
-const ERROR_TYPE_LINE = /^error type: (\S+)$/gm;
+// Only these count as a stage, so a line in a project's output cannot name one of its choosing.
+const STAGES = new Set<string>([...schema.sweepState.enumValues, ...schema.reviewState.enumValues]);
 
 /** An error's class name, and nothing a message or a project could put there. */
 export function errorType(err: unknown): string {
   return err instanceof Error && /^[A-Za-z]\w*$/.test(err.name) ? err.name : 'Error';
 }
 
-/** The last line of a command that threw while run under a run id; runResult reads it back. */
-export function errorTypeLine(err: unknown): string {
-  return `error type: ${errorType(err)}`;
+/**
+ * The last line of a command that threw while run under a run id; runResult reads it back. It
+ * carries the run id because a project's own commands are never given it, so a line in their
+ * output cannot pass for this one.
+ */
+export function errorTypeLine(runId: string, err: unknown): string {
+  return `${runId} error type: ${errorType(err)}`;
 }
 
 /** How a run ended, from what was seen of its command. */
-export function runResult(ended: Ended): RunResult {
+export function runResult(runId: string, ended: Ended): RunResult {
   if (ended.exitCode === 0) return { state: 'succeeded', stage: null, errorType: null };
-  const stages = [...ended.output.matchAll(STAGE_LINE)].map((m) => m[1] ?? m[2]).filter((s) => s !== 'failed');
-  const reported = [...ended.output.matchAll(ERROR_TYPE_LINE)].at(-1)?.[1];
+  const stages = [...ended.output.matchAll(STAGE_LINE)]
+    .map((m) => m[1] ?? m[2])
+    .filter((s) => STAGES.has(s) && s !== 'failed');
+  const reported = ended.output
+    .split('\n')
+    .findLast((line) => line.startsWith(`${runId} error type: `))
+    ?.slice(`${runId} error type: `.length);
   const errorType =
     reported ??
     (ended.signal !== null
@@ -175,7 +185,7 @@ export async function runCommand(run: Run, args: string[]): Promise<RunResult> {
     file.on('close', done);
     file.end();
   });
-  return runResult(ended);
+  return runResult(run.id, ended);
 }
 
 /** The most recent nightly runs, newest first, each followed by its parts in the order they ran. */

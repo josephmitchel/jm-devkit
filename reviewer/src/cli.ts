@@ -487,7 +487,8 @@ main()
   .catch((err) => {
     console.error(err instanceof Error ? err.message : err);
     // A command started as a recorded run tells the run that started it what kind of error ended it.
-    if (process.env.REVIEWER_RUN_ID) process.stderr.write(`${errorTypeLine(err)}\n`);
+    const runId = process.env.REVIEWER_RUN_ID;
+    if (runId) process.stderr.write(`${errorTypeLine(runId, err)}\n`);
     process.exitCode = 1;
   })
   .finally(() => pool.end());

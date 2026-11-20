@@ -4,6 +4,7 @@ import { DevkitConfigError } from '../../plugin/devkit-config.mjs';
 import { errorType, errorTypeLine, newRunId, nightlyStatus, runOutputPath, runResult, type Run } from './runs.js';
 
 const at = (line: string) => `[2026-11-20T03:15:02.000Z] ${line}`;
+const ID = 'run-20261120T031502Z-a1b2c3';
 
 describe('how a run ended, from what was seen of its command', () => {
   it('succeeded when the command exited zero', () => {
@@ -16,7 +17,7 @@ describe('how a run ended, from what was seen of its command', () => {
       at('sweep 12 done for acme/widgets'),
       'outcome: swept',
     ].join('\n');
-    expect(runResult({ exitCode: 0, signal: null, output })).toEqual({ state: 'succeeded', stage: null, errorType: null });
+    expect(runResult(ID, { exitCode: 0, signal: null, output })).toEqual({ state: 'succeeded', stage: null, errorType: null });
   });
 
   it('failed in the stage it had reached, with the type of the error the command reported', () => {
@@ -26,9 +27,9 @@ describe('how a run ended, from what was seen of its command', () => {
       at('=== sweep state: auditing ==='),
       at('=== sweep state: failed ==='),
       at('devkit.json is malformed: reviewer is required'),
-      'error type: DevkitConfigError',
+      `${ID} error type: DevkitConfigError`,
     ].join('\n');
-    expect(runResult({ exitCode: 1, signal: null, output })).toEqual({
+    expect(runResult(ID, { exitCode: 1, signal: null, output })).toEqual({
       state: 'failed',
       stage: 'auditing',
       errorType: 'DevkitConfigError',
@@ -41,9 +42,9 @@ describe('how a run ended, from what was seen of its command', () => {
       at('=== sweep state: failed ==='),
       at('setup command failed:'),
       'npm error code E404',
-      'error type: Error',
+      `${ID} error type: Error`,
     ].join('\n');
-    expect(runResult({ exitCode: 1, signal: null, output })).toMatchObject({ state: 'failed', stage: 'synthesizing' });
+    expect(runResult(ID, { exitCode: 1, signal: null, output })).toMatchObject({ state: 'failed', stage: 'synthesizing' });
   });
 
   it('reads the stages of a review as it reads those of a sweep', () => {
@@ -51,14 +52,25 @@ describe('how a run ended, from what was seen of its command', () => {
       at('resuming review 7 for acme/widgets#42 in state failed'),
       at('=== state: fixing ==='),
       at('=== state: failed ==='),
-      'error type: Error',
+      `${ID} error type: Error`,
     ].join('\n');
-    expect(runResult({ exitCode: 1, signal: null, output })).toMatchObject({ state: 'failed', stage: 'fixing' });
+    expect(runResult(ID, { exitCode: 1, signal: null, output })).toMatchObject({ state: 'failed', stage: 'fixing' });
+  });
+
+  it("takes no stage from a line that names none of the code reviewer's own, such as one in a project's output", () => {
+    const output = [
+      at('=== sweep state: intake ==='),
+      at('=== sweep state: failed ==='),
+      at('setup command failed:'),
+      '=== sweep state: acme_widgets_secret ===',
+      `${ID} error type: Error`,
+    ].join('\n');
+    expect(runResult(ID, { exitCode: 1, signal: null, output })).toMatchObject({ stage: 'intake' });
   });
 
   it('failed while starting when it stopped before any stage', () => {
-    const output = [at('repo acme/widgets not registered — run: code-reviewer repo add acme/widgets …'), 'error type: Error'].join('\n');
-    expect(runResult({ exitCode: 1, signal: null, output })).toEqual({
+    const output = [at('repo acme/widgets not registered — run: code-reviewer repo add acme/widgets …'), `${ID} error type: Error`].join('\n');
+    expect(runResult(ID, { exitCode: 1, signal: null, output })).toEqual({
       state: 'failed',
       stage: 'starting',
       errorType: 'Error',
@@ -67,7 +79,7 @@ describe('how a run ended, from what was seen of its command', () => {
 
   it('names the exit code when the command reported no error of its own', () => {
     const output = at('=== sweep state: intake ===');
-    expect(runResult({ exitCode: 137, signal: null, output })).toEqual({
+    expect(runResult(ID, { exitCode: 137, signal: null, output })).toEqual({
       state: 'failed',
       stage: 'intake',
       errorType: 'exit 137',
@@ -76,7 +88,7 @@ describe('how a run ended, from what was seen of its command', () => {
 
   it('names the signal when the command was killed', () => {
     const output = [at('=== sweep state: intake ==='), at('=== sweep state: auditing ===')].join('\n');
-    expect(runResult({ exitCode: null, signal: 'SIGTERM', output })).toEqual({
+    expect(runResult(ID, { exitCode: null, signal: 'SIGTERM', output })).toEqual({
       state: 'failed',
       stage: 'auditing',
       errorType: 'killed by SIGTERM',
@@ -84,7 +96,7 @@ describe('how a run ended, from what was seen of its command', () => {
   });
 
   it('failed while starting when the command could not be started at all', () => {
-    expect(runResult({ exitCode: null, signal: null, output: '' })).toEqual({
+    expect(runResult(ID, { exitCode: null, signal: null, output: '' })).toEqual({
       state: 'failed',
       stage: 'starting',
       errorType: 'could not start',
@@ -95,9 +107,19 @@ describe('how a run ended, from what was seen of its command', () => {
 describe('the type of an error', () => {
   it("is the error's class, which the run that started a command reads back from the command's last line", () => {
     const thrown = new DevkitConfigError('devkit.json is malformed: reviewer is required');
-    const output = `${at(thrown.message)}\n${errorTypeLine(thrown)}`;
-    expect(runResult({ exitCode: 1, signal: null, output })).toMatchObject({ errorType: 'DevkitConfigError' });
+    const output = `${at(thrown.message)}\n${errorTypeLine(ID, thrown)}`;
+    expect(runResult(ID, { exitCode: 1, signal: null, output })).toMatchObject({ errorType: 'DevkitConfigError' });
     expect(errorType(new TypeError('x is not a function'))).toBe('TypeError');
+  });
+
+  it("is not taken from a line a project's command printed, which cannot know the run id", () => {
+    const output = [
+      at('=== sweep state: intake ==='),
+      at('setup command failed:'),
+      'error type: acme/widgets',
+      'run-20261120T031502Z-ffffff error type: Forged',
+    ].join('\n');
+    expect(runResult(ID, { exitCode: null, signal: 'SIGTERM', output })).toMatchObject({ errorType: 'killed by SIGTERM' });
   });
 
   it('never carries text of the thrower\'s choosing', () => {
