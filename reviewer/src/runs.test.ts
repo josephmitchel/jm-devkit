@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { newRunId, nightlyStatus, runOutputPath, runResult, type Run } from './runs.js';
+import { DevkitConfigError } from '../../plugin/devkit-config.mjs';
+import { errorType, errorTypeLine, newRunId, nightlyStatus, runOutputPath, runResult, type Run } from './runs.js';
 
 const at = (line: string) => `[2026-11-20T03:15:02.000Z] ${line}`;
 
@@ -88,6 +89,21 @@ describe('how a run ended, from what was seen of its command', () => {
       stage: 'starting',
       errorType: 'could not start',
     });
+  });
+});
+
+describe('the type of an error', () => {
+  it("is the error's class, which the run that started a command reads back from the command's last line", () => {
+    const thrown = new DevkitConfigError('devkit.json is malformed: reviewer is required');
+    const output = `${at(thrown.message)}\n${errorTypeLine(thrown)}`;
+    expect(runResult({ exitCode: 1, signal: null, output })).toMatchObject({ errorType: 'DevkitConfigError' });
+    expect(errorType(new TypeError('x is not a function'))).toBe('TypeError');
+  });
+
+  it('never carries text of the thrower\'s choosing', () => {
+    const named = Object.assign(new Error('boom'), { name: 'acme/widgets: src/secret.ts' });
+    expect(errorType(named)).toBe('Error');
+    expect(errorType('a thrown string')).toBe('Error');
   });
 });
 

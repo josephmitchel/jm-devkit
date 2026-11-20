@@ -25,8 +25,9 @@ node bin/code-reviewer.mjs repo add owner/name \
 # run (or resume) the review loop for a PR
 node bin/code-reviewer.mjs run owner/name 42
 
-node bin/code-reviewer.mjs status            # all reviews and concern counts
+node bin/code-reviewer.mjs status            # all reviews, concern counts and the recent nightly runs
 node bin/code-reviewer.mjs projects          # every project the App is installed on, and its state
+node bin/code-reviewer.mjs nightly           # the whole nightly run: every handled project's sweep in turn
 node bin/code-reviewer.mjs reset owner/name 42   # forget a review (keeps concerns/policies)
 ```
 
@@ -150,6 +151,27 @@ each repo's workflow on the minute as the reviewer's App: `worker/README.md`. Th
 the database, the concerns and the policies, so an answer given on a PR binds the sweep and vice
 versa; running both on the same repo at the same moment is not supported.
 
+## The nightly run (on the machine)
+
+`node bin/code-reviewer.mjs nightly` runs one night for every project the machine handles. It asks
+the App for the projects (the `projects` command's list), takes the handled ones in name order and
+runs each one's sweep, one at a time, each as a `sweep` command in a process of its own. A project
+that is not handled is left alone, with a line saying why. A sweep that fails is recorded and the
+run goes on to the next project; the command exits non-zero when any project failed, or when the
+projects could not be found. It needs the App's credentials and the database address in its
+environment, as `projects` and `sweep` do.
+
+Every run is a row in the `runs` table with a run id (`run-<UTC start time>-<random>`, which names
+no project): the nightly run itself, and under it one row per project with how it ended and, when it
+failed, the stage it stopped in and the type of error. `code-reviewer status` lists the five most
+recent nightly runs with each project's result.
+
+Everything a run's command wrote is kept in a file named by the run id, `runs/<run id>.log` under
+the code reviewer's state directory: `REVIEWER_STATE_DIR`, or `~/.local/state/code-reviewer` when
+that is not set. It never leaves the machine, and a state directory inside the projects' checkouts
+(`REVIEWER_WORKSPACE_ROOT`) is refused, since that is where a project's own commands run. The same
+output goes to the command's own output as it comes, so the system journal has it too.
+
 ## The PR loop
 
 ```
@@ -170,7 +192,8 @@ intake → audit (scout + 10 auditors) → synthesis ──┬─ clean → gate
 - `src/review-loop.ts` — PR state machine driver; `src/stages/*` — one module per stage (audit and synthesis are shared)
 - `src/sweep/*` — the nightly sweep: `loop.ts` driver, `judge.ts` (owner decisions: `wontfix`, hand closes, ticked minors), `tickets.ts` (`needs-judging` tickets, concerns included), `answers.ts`, `publish.ts`, `render.ts` (issue/digest/status text)
 - `src/projects.ts` — which projects there are and whether the machine handles each: asked of the App, never listed in the kit (ADR 0004)
+- `src/nightly.ts` — the nightly run: its order of work and what it does after a failure, as decisions; `src/runs.ts` — the record of runs on the machine (run ids, output files, how a run ended)
 - `src/agents/run-agent.ts` — Agent SDK wrapper (structured output, session recording, resume)
 - `worker/` — the Cloudflare Worker that starts each repo's sweep on time, as the App (`worker/README.md`)
 - `prompts/` — auditor definitions (ISO 25010 verbatim) and pipeline role prompts; `prompts/sweep/` — the sweep's framing of scout, auditor, synthesis and the ticket judge
-- `src/db/schema.ts` — repos, reviews, sweeps, rounds, concerns, findings, questions, policies, agent_sessions, github_artifacts
+- `src/db/schema.ts` — repos, reviews, sweeps, rounds, concerns, findings, questions, policies, agent_sessions, github_artifacts, runs

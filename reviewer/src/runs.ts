@@ -29,8 +29,17 @@ export interface RunResult {
 
 // The lines the sweep's and the review's drivers print as they enter or resume a stage.
 const STAGE_LINE = /=== (?:sweep )?state: (\w+) ===|resuming (?:sweep|review) \d+ for \S+ in state (\w+)/g;
-// Printed by the CLI when a command run under a run id throws.
 const ERROR_TYPE_LINE = /^error type: (\S+)$/gm;
+
+/** An error's class name, and nothing a message or a project could put there. */
+export function errorType(err: unknown): string {
+  return err instanceof Error && /^[A-Za-z]\w*$/.test(err.name) ? err.name : 'Error';
+}
+
+/** The last line of a command that threw while run under a run id; runResult reads it back. */
+export function errorTypeLine(err: unknown): string {
+  return `error type: ${errorType(err)}`;
+}
 
 /** How a run ended, from what was seen of its command. */
 export function runResult(ended: Ended): RunResult {
@@ -93,11 +102,18 @@ export function nightlyStatus(rows: Run[], outputPath: (runId: string) => string
   ];
 }
 
-/** Record that a run has started. `parentId` is the run it is part of, such as the nightly run. */
+/**
+ * Record that a run has started. `parentId` is the run it is part of, such as the nightly run.
+ * Its output file is made first, so a state directory that cannot be used leaves no row behind.
+ */
 export async function startRun(run: { kind: RunKind; project?: string; parentId?: string }): Promise<Run> {
+  const id = newRunId();
+  const file = runOutputPath(id);
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  fs.closeSync(fs.openSync(file, 'a', 0o600));
   const [row] = await db
     .insert(schema.runs)
-    .values({ id: newRunId(), kind: run.kind, project: run.project ?? null, parentId: run.parentId ?? null })
+    .values({ id, kind: run.kind, project: run.project ?? null, parentId: run.parentId ?? null })
     .returning();
   return row;
 }
@@ -114,18 +130,15 @@ export async function finishRun(run: Run, result: RunResult): Promise<Run> {
 
 /** Writes a line of a run's own to the log and to the run's output file. */
 export function runLog(run: Run): (line: string) => void {
-  const file = openOutput(run);
+  const file = runOutputPath(run.id);
   return (line) => {
     console.log(line);
-    fs.appendFileSync(file, `${line}\n`);
+    try {
+      fs.appendFileSync(file, `[${new Date().toISOString()}] ${line}\n`);
+    } catch {
+      // The log has the line; a full disk must not end the run.
+    }
   };
-}
-
-function openOutput(run: Run): string {
-  const file = runOutputPath(run.id);
-  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-  fs.closeSync(fs.openSync(file, 'a', 0o600));
-  return file;
 }
 
 /**
@@ -134,7 +147,8 @@ function openOutput(run: Run): string {
  * writes goes to the log as it comes and to the run's output file.
  */
 export async function runCommand(run: Run, args: string[]): Promise<RunResult> {
-  const file = fs.createWriteStream(openOutput(run), { flags: 'a' });
+  const file = fs.createWriteStream(runOutputPath(run.id), { flags: 'a' });
+  file.on('error', (err) => console.warn(`could not keep the output of ${run.id} (${err.message})`));
   const ended = await new Promise<Ended>((resolve) => {
     let output = '';
     const child = spawn(process.execPath, ['--import', 'tsx/esm', path.join(reviewerRoot, 'src/cli.ts'), ...args], {
@@ -157,7 +171,10 @@ export async function runCommand(run: Run, args: string[]): Promise<RunResult> {
     });
     child.on('close', (exitCode, signal) => resolve({ exitCode, signal, output }));
   });
-  await new Promise((done) => file.end(done));
+  await new Promise((done) => {
+    file.on('close', done);
+    file.end();
+  });
   return runResult(ended);
 }
 

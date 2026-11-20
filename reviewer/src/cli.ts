@@ -12,8 +12,10 @@ import { ACTIVE_WORK_STATES, resolveSlot } from './stages/intake.js';
 import { markGate, progressStep } from './stages/progress.js';
 import { postFailureNotice } from './stages/report.js';
 import { runMigrations } from './migrate.js';
+import { runNightly } from './nightly.js';
 import { listProjects, projectLine } from './projects.js';
 import { runReview } from './review-loop.js';
+import { errorTypeLine, nightlyStatus, recentNightlyRuns } from './runs.js';
 import { runSweep } from './sweep/loop.js';
 import { runLanded } from './landed.js';
 import { syncLabels } from './sweep/labels.js';
@@ -27,6 +29,9 @@ Usage:
   code-reviewer sweep <owner/repo>              run (or resume) tonight's sweep: judge closed
                                                 issues, audit what landed on the default branch,
                                                 file concerns as issues (never fixes, never gates)
+  code-reviewer nightly                         the whole nightly run: sweep every project the
+                                                machine handles, in name order, one at a time;
+                                                a sweep that fails does not stop the next
   code-reviewer landed <owner/repo> <pr#>       a PR merged: label the tickets it addresses
                                                 needs-judging and lift their blocking edges
   code-reviewer labels <owner/repo>             bring the repo's labels in line with the ticket
@@ -44,13 +49,14 @@ Usage:
       --harness-notes-file <path>               per-repo notes for the testing auditor
       --redundancy <n>                          auditors per characteristic (default 1)
   code-reviewer repo set <owner/repo> [opts]    update repo config (same options)
-  code-reviewer status [owner/repo]             show reviews and their states
+  code-reviewer status [owner/repo]             show reviews and their states, and the recent
+                                                nightly runs with each project's result
   code-reviewer reset <owner/repo> <pr#>        delete a review's state (concerns/policies kept)
 `;
 
 // The commands CI runs unattended. The admin ones print tables and confirmations for a person at
 // a terminal, where a timestamp on every line is only noise.
-const STAMPED = new Set(['run', 'sweep', 'landed', 'migrate', 'next', 'abandon', 'carry-gate']);
+const STAMPED = new Set(['run', 'sweep', 'nightly', 'landed', 'migrate', 'next', 'abandon', 'carry-gate']);
 
 async function main() {
   const [cmd, ...rest] = process.argv.slice(2);
@@ -92,6 +98,13 @@ async function main() {
       } finally {
         stopHeartbeat();
       }
+      break;
+    }
+    case 'nightly': {
+      if (rest.length > 0) return usageExit();
+      const outcome = await runNightly();
+      printRaw(`outcome: ${outcome}`);
+      if (outcome === 'failed') process.exitCode = 1;
       break;
     }
     case 'landed': {
@@ -422,6 +435,9 @@ async function showStatus(slug?: string): Promise<void> {
     const withIssue = open.filter((c) => c.status === 'open' && c.issueNumber !== null).length;
     console.log(`  concerns: ${openCount} open (${withIssue} as issues), ${open.length - openCount} resolved`);
   }
+  const runs = await recentNightlyRuns(5);
+  const shown = slug ? runs.filter((r) => r.project === null || r.project === slug) : runs;
+  console.log(`\n${nightlyStatus(shown).join('\n')}`);
 }
 
 async function resetReview(slug: string, prNumber: number): Promise<void> {
@@ -467,6 +483,8 @@ async function resetReview(slug: string, prNumber: number): Promise<void> {
 main()
   .catch((err) => {
     console.error(err instanceof Error ? err.message : err);
+    // A command started as a recorded run tells the run that started it what kind of error ended it.
+    if (process.env.REVIEWER_RUN_ID) process.stderr.write(`${errorTypeLine(err)}\n`);
     process.exitCode = 1;
   })
   .finally(() => pool.end());
