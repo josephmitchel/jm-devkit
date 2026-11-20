@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -331,6 +331,86 @@ export async function runRepoCommand(
   } finally {
     activity.done();
   }
+}
+
+/** How a repo command run for its output ended. Both null: it never started. */
+export interface StreamedCommand {
+  exitCode: number | null;
+  signal: string | null;
+  /** Set when it was stopped for running too long: how long it had been given. */
+  timedOutAfterMs: number | null;
+  /** The end of what it wrote, stdout and stderr together. */
+  tail: string;
+}
+
+// How much of a streamed command's output is kept in memory once it has been written out.
+const STREAM_TAIL_CHARS = 16_000;
+// How long a command stopped for running too long has before it is killed outright.
+const STREAM_KILL_AFTER_MS = 5000;
+// How long its output may stay open once it has exited: a process it left behind can hold the pipe.
+const STREAM_CLOSES_WITHIN_MS = 5000;
+
+/**
+ * Run a repo command for everything it writes: each piece goes to `write` as it comes, where
+ * {@link runRepoCommand} keeps only a trimmed failure. The command gets the same environment
+ * (see repoCommandEnv) and the same time to run.
+ */
+export function streamRepoCommand(
+  dir: string,
+  command: string,
+  projectEnv: Record<string, string>,
+  write: (chunk: string) => void,
+  timeoutMs = COMMAND_TIMEOUT_MS,
+): Promise<StreamedCommand> {
+  const activity = track(`command "${command.length > 60 ? `${command.slice(0, 57)}...` : command}"`);
+  return new Promise((resolve) => {
+    let tail = '';
+    let timedOut = false;
+    let settled = false;
+    const timers: NodeJS.Timeout[] = [];
+    const child = spawn('sh', ['-c', command], {
+      cwd: dir,
+      env: repoCommandEnv(process.env, projectEnv),
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    const finish = (exitCode: number | null, signal: string | null) => {
+      if (settled) return;
+      settled = true;
+      for (const timer of timers) clearTimeout(timer);
+      activity.done();
+      resolve({ exitCode, signal, timedOutAfterMs: timedOut ? timeoutMs : null, tail });
+    };
+    timers.push(
+      setTimeout(() => {
+        timedOut = true;
+        child.kill('SIGTERM');
+        timers.push(setTimeout(() => child.kill('SIGKILL'), STREAM_KILL_AFTER_MS));
+      }, timeoutMs),
+    );
+    for (const from of [child.stdout, child.stderr]) {
+      from.setEncoding('utf8');
+      from.on('data', (chunk: string) => {
+        activity.output();
+        tail = (tail + chunk).slice(-STREAM_TAIL_CHARS);
+        write(chunk);
+      });
+    }
+    child.on('error', (err) => {
+      tail = `${tail}${err.message}\n`;
+      write(`${err.message}\n`);
+      finish(null, null);
+    });
+    child.on('exit', (exitCode, signal) => {
+      timers.push(
+        setTimeout(() => {
+          child.stdout.destroy();
+          child.stderr.destroy();
+          finish(exitCode, signal);
+        }, STREAM_CLOSES_WITHIN_MS),
+      );
+    });
+    child.on('close', finish);
+  });
 }
 
 /** Keep the failure-relevant tail; full logs don't belong in the database or prompts. */
