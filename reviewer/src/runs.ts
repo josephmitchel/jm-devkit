@@ -299,6 +299,8 @@ async function runChild(run: Run, args: string[], limitMs: number | null, stoppa
     };
     const stopWithService = () => stop('service stopped');
     if (stoppable) going.add(stopWithService);
+    // The stop may have come between the decision to run this and its start.
+    if (stoppable && stopRequested) stopWithService();
     if (limitMs !== null) timers.push(setTimeout(() => stop('time limit'), limitMs));
 
     const finish = (exitCode: number | null, signal: string | null) => {

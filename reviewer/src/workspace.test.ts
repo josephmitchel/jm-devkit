@@ -69,6 +69,29 @@ describe('repoCommandEnv', () => {
  * child both closes that and makes the feature work: the names a repo most wants to set for its
  * own suites are exactly the ones on the strip list.
  */
+describe("repoCommandEnv on the machine, where the service's environment holds the credentials file", () => {
+  // The names the machine setup says the file holds, read from the setup itself.
+  const setup = fs.readFileSync(path.join(import.meta.dirname, '../../vm/dev-vm-setup.sh'), 'utf8');
+  const names = /^CREDENTIAL_NAMES=\(([A-Z_ ]+)\)$/m.exec(setup)![1].split(' ');
+
+  it("gives a project's commands none of the credentials, nor where the code reviewer keeps its state", () => {
+    expect(names).toContain('REVIEWER_TEST_DATABASES_URL');
+    const service = {
+      PATH: '/usr/bin',
+      HOME: '/home/reviewer',
+      REVIEWER_WORKSPACE_ROOT: fs.mkdtempSync(path.join(os.tmpdir(), 'reviewer-machine-')),
+      REVIEWER_STATE_DIR: '/var/lib/code-reviewer/state',
+      ...Object.fromEntries(names.map((name) => [name, 'secret'])),
+    };
+    const env = repoCommandEnv(service);
+    for (const name of [...names, 'REVIEWER_STATE_DIR', 'REVIEWER_WORKSPACE_ROOT']) {
+      expect(env, `${name} must not reach a project's commands`).not.toHaveProperty(name);
+    }
+    expect(Object.values(env)).not.toContain('secret');
+    expect(env.HOME).toBe(path.join(service.REVIEWER_WORKSPACE_ROOT, 'repo-home'));
+  });
+});
+
 describe('repoCommandEnv with a repo-env carrier', () => {
   const withCarrier = (carrier: string) =>
     repoCommandEnv({
