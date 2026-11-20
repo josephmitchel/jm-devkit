@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { nightlyDecision, nightlyWork, type Step } from './nightly.js';
+import { nightlyDecision, nightlyWork, notStartedResult, type Step } from './nightly.js';
 import { classifyProjects } from './projects.js';
 
 const config = JSON.stringify({
@@ -58,7 +58,40 @@ describe('what a nightly run does next', () => {
     expect(nightlyDecision(steps, ['succeeded', 'succeeded', 'failed'])).toEqual({ done: 'failed' });
   });
 
+  it("carries on after a sweep its time limit stopped, and ends failed: that project's night is not done", () => {
+    expect(nightlyDecision(steps, ['interrupted'])).toEqual({ next: { project: 'acme/widgets', kind: 'sweep' } });
+    expect(nightlyDecision(steps, ['interrupted', 'succeeded', 'succeeded'])).toEqual({ done: 'failed' });
+  });
+
+  it('takes no further step once the service is stopping, and ends interrupted', () => {
+    expect(nightlyDecision(steps, ['succeeded', 'interrupted'], true)).toEqual({ done: 'interrupted' });
+    expect(nightlyDecision(steps, ['succeeded'], true)).toEqual({ done: 'interrupted' });
+    expect(nightlyDecision(steps, [], true)).toEqual({ done: 'interrupted' });
+  });
+
+  it('ends as it would have when the stop came after the last step had finished', () => {
+    expect(nightlyDecision(steps, ['succeeded', 'succeeded', 'succeeded'], true)).toEqual({ done: 'succeeded' });
+    expect(nightlyDecision(steps, ['succeeded', 'failed', 'succeeded'], true)).toEqual({ done: 'failed' });
+  });
+
   it('ends succeeded at once on a night with no handled project', () => {
     expect(nightlyDecision([], [])).toEqual({ done: 'succeeded' });
+  });
+});
+
+describe('a nightly run that could not start, because the code reviewer could not be brought up to date', () => {
+  it('is a failed run, in the step of the update that failed', () => {
+    expect(notStartedResult('installing dependencies', 'exit 3')).toEqual({
+      state: 'failed',
+      stage: 'installing dependencies',
+      errorType: 'exit 3',
+    });
+    expect(notStartedResult('moving the checkout', 'killed by SIGTERM')).toMatchObject({ errorType: 'killed by SIGTERM' });
+    expect(notStartedResult('applying migrations', 'could not start')).toMatchObject({ stage: 'applying migrations' });
+  });
+
+  it('is not recorded with a stage or a type of error that is not one of the fixed ones', () => {
+    expect(notStartedResult('auditing', 'exit 1')).toBeNull();
+    expect(notStartedResult('installing dependencies', 'npm error 404 for @acme/widgets')).toBeNull();
   });
 });
