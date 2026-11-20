@@ -103,7 +103,8 @@ export function updateCheckout({
     if (!(err instanceof StepFailed)) throw err;
     log(`${stage} failed (${err.message}): the nightly run is not started`);
     try {
-      run([...record, stage, err.message], { cwd: reviewerDir, env, timeoutMs: MINUTE });
+      // Long enough for the record to be reported too, which waits on GitHub.
+      run([...record, stage, err.message], { cwd: reviewerDir, env, timeoutMs: 6 * MINUTE });
     } catch {
       log('the failure could not be recorded as a run: the system journal has it');
     }

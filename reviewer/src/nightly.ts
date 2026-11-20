@@ -1,7 +1,7 @@
-import { reportRun } from './failure-report.js';
-import { listProjects, projectLine, type Project } from './projects.js';
 import { UPDATE_STAGES } from '../bin/update.mjs';
+import { reportRun } from './failure-report.js';
 import { ensureProjectRow } from './project-row.js';
+import { listProjects, projectLine, type Project } from './projects.js';
 import {
   errorType,
   finishRun,
@@ -96,13 +96,14 @@ export function notStartedResult(stage: string, errorType: string): RunResult | 
   return { state: 'failed', stage, errorType };
 }
 
-/** Record a nightly run that could not start. Returns false when given nothing it can record. */
+/** Record and report a nightly run that could not start. Returns false when given nothing it can record. */
 export async function recordNightlyNotStarted(stage: string, errorType: string): Promise<boolean> {
   const result = notStartedResult(stage, errorType);
   if (!result) return false;
   const nightly = await startRun({ kind: 'nightly' });
-  runLog(nightly)(`nightly run ${nightly.id} not started: ${stage} failed (${errorType}). The system journal has the output.`);
-  await finishRun(nightly, result);
+  const say = runLog(nightly);
+  say(`nightly run ${nightly.id} not started: ${stage} failed (${errorType}). The system journal has the output.`);
+  await reportRun(await finishRun(nightly, result), say);
   return true;
 }
 

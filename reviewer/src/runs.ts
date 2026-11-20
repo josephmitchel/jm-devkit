@@ -5,6 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { and, asc, desc, eq, inArray } from 'drizzle-orm';
 
+import { UPDATE_STAGES } from '../bin/update.mjs';
+
 import { db, schema } from './db/client.js';
 import type { RunKind } from './db/schema.js';
 import { reviewerRoot, workspaceRoot } from './workspace.js';
@@ -39,8 +41,11 @@ export interface RunResult {
 const STAGE_LINE = /=== (?:sweep )?state: (\w+) ===|resuming (?:sweep|review) \d+ for \S+ in state (\w+)/g;
 // Only these count as a stage, so a line in a project's output cannot name one of its choosing.
 const STAGES = new Set<string>([...schema.sweepState.enumValues, ...schema.reviewState.enumValues]);
-/** Every stage a run can be recorded as having stopped in: the ones above, and the two before any of them. */
-export const RUN_STAGES: ReadonlySet<string> = new Set([...STAGES, 'starting', 'finding the projects']);
+/**
+ * Every stage a run can be recorded as having stopped in: the ones above, the two before any of
+ * them, and the steps of bringing the code reviewer up to date before a nightly run.
+ */
+export const RUN_STAGES: ReadonlySet<string> = new Set([...STAGES, 'starting', 'finding the projects', ...UPDATE_STAGES]);
 
 /** An error's class name, and nothing a message or a project could put there. */
 export function errorType(err: unknown): string {
