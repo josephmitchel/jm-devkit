@@ -236,9 +236,12 @@ export async function pullRequestsSeen(
 }
 
 function listed(body: string): PullRequestSeen[] {
-  return (JSON.parse(body) as Array<{ number: number; updated_at: string; merged_at: string | null }>).map((pr) => ({
+  type Listed = { number: number; updated_at: string; merged_at: string | null; state: string; head: { sha: string } };
+  return (JSON.parse(body) as Listed[]).map((pr) => ({
     number: pr.number,
     updatedAt: new Date(pr.updated_at),
     mergedAt: pr.merged_at === null ? null : new Date(pr.merged_at),
+    open: pr.state === 'open',
+    headSha: pr.head.sha,
   }));
 }
