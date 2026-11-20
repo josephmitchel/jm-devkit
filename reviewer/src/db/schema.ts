@@ -177,6 +177,8 @@ export const reviews = pgTable(
     state: reviewState('state').notNull().default('pending'),
     currentRoundId: integer('current_round_id'),
     error: text('error'),
+    // How many times in a row the machine's time limit has stopped this review (queue.ts afterReviewRun).
+    timeLimitStops: integer('time_limit_stops').notNull().default(0),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },

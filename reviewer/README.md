@@ -451,14 +451,18 @@ for answers, and when it was turned away because another review holds its projec
 the review is in afterwards:
 
 - passed, or waiting for answers: handled. The owner's reply is an event of its own.
-- stopped in one of its stages, or at its time limit: handled. The review has said so on the pull
-  request, and it is not started again until the owner comments there.
+- stopped in one of its stages: handled. The review has said so on the pull request, and it is not
+  started again until the owner comments there.
 - turned away from its project's slot: not handled, and not a failure. It starts when no other
   review of the project holds the slot, which is how a finished review starts the next one queued
   behind it. It is also tried after the same doubling wait as a failure, because a holder whose
   pull request has closed never finishes and only a review claiming the slot retires it.
-- failed before the review did anything, or interrupted by the service stopping or by a restart:
-  tried again, after a minute, then two, four and so on up to six hours.
+- failed before the review did anything, or interrupted by its time limit, by the service stopping
+  or by a restart: tried again, after a minute, then two, four and so on up to six hours, which
+  resumes the review from the stage it was in.
+- stopped by its time limit for the third time in a row: handled, like a stop in a stage, so a
+  review that keeps running out its limit is resumed twice and then waits for the owner's comment.
+  The count is `reviews.time_limit_stops`; it starts again from none whenever the event is handled.
 
 This replaces the workflow dispatch hand-off (`REVIEWER_DISPATCH_WORKFLOW`), which a project still
 on Actions keeps.

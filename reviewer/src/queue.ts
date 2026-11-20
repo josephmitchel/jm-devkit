@@ -130,23 +130,39 @@ export function queueDecision(
 /** What becomes of the event a review's run was started for. */
 export type EventVerdict = 'handled' | 'waits for the slot' | 'try again';
 
+// How many times in a row a review stopped by its time limit is resumed before it is left stopped.
+const RESUMED_AT_MOST = 2;
+
 /**
- * What a review's run leaves of the event that asked for it, from how the run ended and the state
- * the review is in afterwards (null when it has no review). Exit 0 does not mean the review
- * finished; an event is handled once its review needs nothing more from it:
+ * What a review's run leaves of the event that asked for it, from how the run ended, the state the
+ * review is in afterwards (null when it has no review) and how many times in a row its time limit
+ * had already stopped it. Exit 0 does not mean the review finished; an event is handled once its
+ * review needs nothing more from it:
  *
  * - the review passed, or waits for answers (the owner's reply is an event of its own);
- * - the review stopped in one of its stages, or at its time limit: it has said so on the pull
- *   request, and the owner's comment there retries it, so it is not started again unasked.
+ * - the review stopped in one of its stages: it has said so on the pull request, and the owner's
+ *   comment there retries it, so it is not started again unasked;
+ * - its time limit stopped it for the third time running: the same, so a review that keeps running
+ *   out its limit cannot spend the subscription all night.
  *
  * A review turned away from its project's slot still waits for it. A run that failed before the
- * review did anything, or that the service stopping or a restart interrupted, is tried again.
+ * review did anything, or that its time limit, the service stopping or a restart interrupted, is
+ * tried again, which resumes the review from the stage it was in.
  */
-export function afterReviewRun(result: Pick<RunResult, 'state' | 'stage' | 'errorType'>, review: string | null): EventVerdict {
+export function afterReviewRun(result: Pick<RunResult, 'state' | 'stage' | 'errorType'>, review: string | null, timeLimitStops = 0): EventVerdict {
   if (result.state === 'succeeded') return review === 'pending' || review === 'failed' ? 'waits for the slot' : 'handled';
-  if (result.state === 'interrupted') return result.errorType === 'time limit' ? 'handled' : 'try again';
+  if (result.state === 'interrupted') return result.errorType === 'time limit' && timeLimitStops >= RESUMED_AT_MOST ? 'handled' : 'try again';
   // Before a review's first stage nothing is recorded on it and nothing is said on its pull request.
   return result.stage === 'starting' || result.stage === 'pending' ? 'try again' : 'handled';
+}
+
+/**
+ * How many times in a row a review's time limit has stopped it, after a run of it: one more for a
+ * stop that is resumed, none once its event is handled, and unchanged by any other run.
+ */
+export function timeLimitStopsAfter(result: Pick<RunResult, 'state' | 'stage' | 'errorType'>, verdict: EventVerdict, before: number): number {
+  if (verdict === 'handled') return 0;
+  return result.state === 'interrupted' && result.errorType === 'time limit' ? before + 1 : before;
 }
 
 /**

@@ -2,7 +2,16 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-import { afterReviewRun, leftByQueue, machineFor, queueDecision, queueStatus, type Machine, type QueuedEvent } from './queue.js';
+import {
+  afterReviewRun,
+  leftByQueue,
+  machineFor,
+  queueDecision,
+  queueStatus,
+  timeLimitStopsAfter,
+  type Machine,
+  type QueuedEvent,
+} from './queue.js';
 import type { Run } from './runs.js';
 
 const at = (time: string) => new Date(`2026-11-20T${time}Z`);
@@ -214,8 +223,34 @@ describe("what a review's run leaves of the event that asked for it", () => {
     expect(afterReviewRun({ state: 'interrupted', stage: null, errorType: 'found running' }, 'failed')).toBe('try again');
   });
 
-  it('is handled when its time limit stopped it: a review that ran five and a half hours is not started again unasked', () => {
-    expect(afterReviewRun({ state: 'interrupted', stage: 'fixing', errorType: 'time limit' }, 'failed')).toBe('handled');
+  const atItsLimit = { state: 'interrupted', stage: 'fixing', errorType: 'time limit' } as const;
+
+  it('is tried again when its time limit stopped it, so the next run resumes the review from the stage it was in', () => {
+    expect(afterReviewRun(atItsLimit, 'failed', 0)).toBe('try again');
+    expect(afterReviewRun(atItsLimit, 'failed', 1)).toBe('try again');
+  });
+
+  it('is handled at the third stop in a row by the time limit: the review stays stopped until the owner comments', () => {
+    expect(afterReviewRun(atItsLimit, 'failed', 2)).toBe('handled');
+  });
+
+  describe('the count of time-limit stops the review carries afterwards', () => {
+    it('is one more for a stop that is resumed', () => {
+      expect(timeLimitStopsAfter(atItsLimit, 'try again', 0)).toBe(1);
+      expect(timeLimitStopsAfter(atItsLimit, 'try again', 1)).toBe(2);
+    });
+
+    it("starts from none once the event is handled, so the owner's retry of an abandoned review is resumed twice again", () => {
+      expect(timeLimitStopsAfter(atItsLimit, 'handled', 2)).toBe(0);
+      expect(timeLimitStopsAfter(succeeded, 'handled', 2)).toBe(0);
+      expect(timeLimitStopsAfter({ state: 'failed', stage: 'auditing', errorType: 'Error' }, 'handled', 1)).toBe(0);
+    });
+
+    it('is kept by a run that says nothing about the limit: turned away, stopped with the service, failed before it began', () => {
+      expect(timeLimitStopsAfter(succeeded, 'waits for the slot', 1)).toBe(1);
+      expect(timeLimitStopsAfter({ state: 'interrupted', stage: 'auditing', errorType: 'service stopped' }, 'try again', 2)).toBe(2);
+      expect(timeLimitStopsAfter({ state: 'failed', stage: 'starting', errorType: 'Error' }, 'try again', 1)).toBe(1);
+    });
   });
 });
 

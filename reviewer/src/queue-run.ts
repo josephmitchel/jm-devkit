@@ -10,6 +10,7 @@ import {
   afterReviewRun,
   leftByQueue,
   queueDecision,
+  timeLimitStopsAfter,
   type EventVerdict,
   type Job,
   type Machine,
@@ -98,14 +99,14 @@ async function slotsHeld(): Promise<Map<string, number[]>> {
   return slots;
 }
 
-/** The state of a pull request's review, or null when it has none. */
-async function reviewState(project: string, pr: number): Promise<string | null> {
+/** A pull request's review as the verdict wants it, or null when it has none. */
+async function reviewOnRecord(project: string, pr: number): Promise<{ id: number; state: string; timeLimitStops: number } | null> {
   const [row] = await db
-    .select({ state: schema.reviews.state })
+    .select({ id: schema.reviews.id, state: schema.reviews.state, timeLimitStops: schema.reviews.timeLimitStops })
     .from(schema.reviews)
     .innerJoin(schema.repos, eq(schema.repos.id, schema.reviews.repoId))
     .where(and(eq(schema.repos.slug, project), eq(schema.reviews.prNumber, pr)));
-  return row?.state ?? null;
+  return row ?? null;
 }
 
 /**
@@ -155,7 +156,11 @@ async function runJob(job: Job, say: (line: string) => void): Promise<{ outcome:
     } catch (err) {
       result = { state: 'failed', stage: 'starting', errorType: errorType(err) };
     }
-    const verdict = afterReviewRun(result, await reviewState(job.project, Number(job.args[2])));
+    const review = await reviewOnRecord(job.project, Number(job.args[2]));
+    const stops = review?.timeLimitStops ?? 0;
+    const verdict = afterReviewRun(result, review?.state ?? null, stops);
+    const stopsNow = timeLimitStopsAfter(result, verdict, stops);
+    if (review && stopsNow !== stops) await db.update(schema.reviews).set({ timeLimitStops: stopsNow }).where(eq(schema.reviews.id, review.id));
     // Before the run is recorded as over, as a pass does: an event must not be left looking
     // unhandled after the run that handled it.
     if (verdict === 'handled') await db.update(schema.pollerEvents).set({ handledAt: new Date() }).where(events);
