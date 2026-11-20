@@ -394,9 +394,9 @@ export const pollerProjects = pgTable('poller_projects', {
 });
 
 /**
- * The last answer GitHub gave to a question the poller repeats every pass, with the ETag that
- * lets it ask again for nothing: which installations, which repositories, what a default branch
- * holds. Also each installation's token for the hour it lasts, sealed (see poller-github.ts).
+ * The last answer GitHub gave to a question the poller repeats every pass, with the ETag sent
+ * back to ask "anything since?": which installations, which repositories, what a default branch
+ * holds. No credential is kept here: a pass mints its tokens and holds them in memory.
  */
 export const githubAnswers = pgTable('github_answers', {
   question: text('question').primaryKey(),

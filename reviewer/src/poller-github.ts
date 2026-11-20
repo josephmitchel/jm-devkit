@@ -1,5 +1,3 @@
-import crypto from 'node:crypto';
-
 import { CONFIG_FILE } from '../../plugin/devkit-config.mjs';
 import { SWEEP_WORKFLOW } from '../../plugin/generator/generate.mjs';
 import { GitHubError, appJwt, defaultBranchFile } from '../../plugin/install/app.mjs';
@@ -10,11 +8,12 @@ import type { Observed } from './projects.js';
  * What a pass of the poller asks GitHub. A pass runs every few minutes and nearly always finds
  * nothing, so every question it repeats is asked conditionally: the ETag of the last answer is
  * sent back, and an answer of "unchanged" (304) costs none of the App's rate limit. The last
- * answers and their ETags are kept between passes, in the database.
+ * answers and their ETags are kept between passes, in the database. No credential is: a pass
+ * mints its installation tokens and holds them in memory until it ends.
  *
- * GitHub ties an ETag to the credential the question was asked with, so an installation's token
- * is kept for the hour it lasts as well. A pass that minted its own would never be told
- * "unchanged".
+ * GitHub ties an ETag to who asked. If that is the installation, a pass is told "unchanged" with
+ * its new token. If it is the token, the lists are answered in full every pass, and that is
+ * accepted: an answer in full is read like any other, and the cost is a request per list.
  */
 
 const API = 'https://api.github.com';
@@ -124,7 +123,7 @@ async function rememberedPages<T>(
 /** A project the App is installed on, as this pass saw its default branch. */
 export interface ProjectRead {
   slug: string;
-  /** A token for the project's installation, good for the rest of this pass. */
+  /** A token for the project's installation, minted by this pass and held in memory only. */
   token: string;
   observed: Observed;
   /** Whether the default branch was read this pass, and not told "unchanged". */
@@ -145,20 +144,13 @@ export async function projectsSeen(asking: Asking): Promise<{ projects: ProjectR
   const projects: ProjectRead[] = [];
   const unread: Array<{ slug: string; why: string }> = [];
   for (const id of installations) {
-    const repositories = (auth: string) =>
-      rememberedPages(asking, `installation/${id}/repositories`, { path: '/installation/repositories', auth }, (body) =>
-        (JSON.parse(body) as { repositories: Array<{ full_name: string }> }).repositories.map((r) => r.full_name),
-      );
-    let token = await tokenFor(asking, id, jwt);
-    let slugs: string[];
-    try {
-      slugs = await repositories(token);
-    } catch (err) {
-      // GitHub can end a token before its hour is up. This is the first question asked with it.
-      if (!(err instanceof GitHubError && err.status === 401)) throw err;
-      token = await tokenFor(asking, id, jwt, { anew: true });
-      slugs = await repositories(token);
-    }
+    const token = await mintToken(asking, id, jwt);
+    const slugs = await rememberedPages(
+      asking,
+      `installation/${id}/repositories`,
+      { path: '/installation/repositories', auth: token },
+      (body) => (JSON.parse(body) as { repositories: Array<{ full_name: string }> }).repositories.map((r) => r.full_name),
+    );
     for (const slug of slugs) {
       try {
         projects.push({ slug, token, ...(await defaultBranch(asking, slug, token)) });
@@ -175,78 +167,39 @@ const NO_FILES: Observed = { config: null, sweepWorkflow: false };
 
 /**
  * What a project's default branch holds. The question repeated each pass is only "which commit is
- * its head", whose ETag is the commit itself, whatever credential asks.
+ * its head", whose ETag is the commit itself, whatever credential asks. The two files are read
+ * again only when that commit is not the one they were last read at, however GitHub answered.
  */
 async function defaultBranch(asking: Asking, slug: string, token: string): Promise<{ observed: Observed; fresh: boolean }> {
-  const head: Request = { path: `/repos/${slug}/commits/HEAD`, auth: token, accept: 'application/vnd.github.sha' };
-  let got;
+  const question = `repos/${slug}/default-branch`;
+  const kept = (await asking.memory.recall(question)) as { etag: string | null; answer: { head: string; observed: Observed } } | null;
+  let head;
   try {
-    got = await remembered(asking, `repos/${slug}/default-branch`, head, async (): Promise<Observed> => {
-      const read = (path: string) => {
-        asking.tally.asked++;
-        return defaultBranchFile({ fetch: asking.fetch, slug, token, path });
-      };
-      const config = await read(CONFIG_FILE);
-      return { config, sweepWorkflow: (await read(SWEEP_WORKFLOW)) !== null };
-    });
+    head = await ask(asking, { path: `/repos/${slug}/commits/HEAD`, auth: token, accept: 'application/vnd.github.sha', etag: kept?.etag });
   } catch (err) {
     // A repository with no commits yet.
     if (!(err instanceof GitHubError && err.status === 409)) throw err;
-    got = null;
+    return { observed: NO_FILES, fresh: true };
   }
-  return got ? { observed: got.answer, fresh: got.fresh } : { observed: NO_FILES, fresh: true };
+  if (head.status === 'missing') return { observed: NO_FILES, fresh: true };
+  if (kept && (head.status === 'unchanged' || head.body.trim() === kept.answer.head)) return { observed: kept.answer.observed, fresh: false };
+  if (head.status === 'unchanged') throw new GitHubError(`GitHub GET /repos/${slug}/commits/HEAD: 304 to a question asked without an ETag`, 304);
+  const read = (path: string) => {
+    asking.tally.asked++;
+    return defaultBranchFile({ fetch: asking.fetch, slug, token, path });
+  };
+  const config = await read(CONFIG_FILE);
+  const observed: Observed = { config, sweepWorkflow: (await read(SWEEP_WORKFLOW)) !== null };
+  await asking.memory.keep(question, { etag: head.etag, answer: { head: head.body.trim(), observed } });
+  return { observed, fresh: true };
 }
 
-// A kept token is used only while it has this long left: a pass takes seconds.
-const TOKEN_MARGIN_MS = 5 * 60 * 1000;
-
-/** A token for an installation: the kept one while it lasts, or a new one, which is then kept. */
-async function tokenFor(asking: Asking, installation: number, jwt: string, { anew = false } = {}): Promise<string> {
-  const question = `installation/${installation}/token`;
-  const kept = anew ? null : openToken((await asking.memory.recall(question))?.answer, asking.credentials.privateKey);
-  if (kept && kept.expiresAt - asking.now().getTime() > TOKEN_MARGIN_MS) return kept.token;
+/** A new token for an installation. It is this pass's alone and is never written anywhere. */
+async function mintToken(asking: Asking, installation: number, jwt: string): Promise<string> {
   const path = `/app/installations/${installation}/access_tokens`;
   const answer = await ask(asking, { path, auth: jwt, method: 'POST' });
   if (answer.status !== 'changed') throw new GitHubError(`GitHub POST ${path}: no token`, 404);
-  const minted = JSON.parse(answer.body) as { token: string; expires_at: string };
-  const token = { token: minted.token, expiresAt: Date.parse(minted.expires_at) };
-  await asking.memory.keep(question, { etag: null, answer: sealToken(token, asking.credentials.privateKey) });
-  return token.token;
-}
-
-interface KeptToken {
-  token: string;
-  expiresAt: number;
-}
-
-// The key a kept token is sealed with comes from the App's private key, which only the service's
-// environment holds. So the database never holds a credential that can be used on its own: whoever
-// can open a kept token could already mint one.
-function sealingKey(privateKey: string): Buffer {
-  return crypto.createHash('sha256').update(`code-reviewer kept installation token\n${privateKey}`).digest();
-}
-
-/** A token as it is kept: sealed (AES-256-GCM), so it cannot be read without the App's private key. */
-export function sealToken(token: KeptToken, privateKey: string): { sealed: string } {
-  const iv = crypto.randomBytes(12);
-  const cipher = crypto.createCipheriv('aes-256-gcm', sealingKey(privateKey), iv);
-  const text = Buffer.concat([cipher.update(JSON.stringify(token), 'utf8'), cipher.final()]);
-  return { sealed: Buffer.concat([iv, cipher.getAuthTag(), text]).toString('base64') };
-}
-
-/** The token a kept answer holds, or null when it holds none this key opens. */
-export function openToken(kept: unknown, privateKey: string): KeptToken | null {
-  const sealed = (kept as { sealed?: unknown } | null | undefined)?.sealed;
-  if (typeof sealed !== 'string') return null;
-  try {
-    const bytes = Buffer.from(sealed, 'base64');
-    const decipher = crypto.createDecipheriv('aes-256-gcm', sealingKey(privateKey), bytes.subarray(0, 12));
-    decipher.setAuthTag(bytes.subarray(12, 28));
-    const token = JSON.parse(Buffer.concat([decipher.update(bytes.subarray(28)), decipher.final()]).toString('utf8')) as KeptToken;
-    return typeof token.token === 'string' && typeof token.expiresAt === 'number' ? token : null;
-  } catch {
-    return null;
-  }
+  return (JSON.parse(answer.body) as { token: string }).token;
 }
 
 /** Where a pass's reading of a project's pull requests starts from. */

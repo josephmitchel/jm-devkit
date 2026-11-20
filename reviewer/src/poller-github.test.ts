@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 
-import { openToken, projectsSeen, pullRequestsSeen, type Asking, type Remembered } from './poller-github.js';
+import { projectsSeen, pullRequestsSeen, type Asking, type Remembered } from './poller-github.js';
 
 const { privateKey } = crypto.generateKeyPairSync('rsa', {
   modulusLength: 2048,
@@ -18,12 +18,18 @@ interface World {
   heads: Record<string, string>;
   files: Record<string, Record<string, string>>;
   pulls: Record<string, Array<{ number: number; updated_at: string; merged_at: string | null }>>;
+  /**
+   * What GitHub ties an ETag to. `installation`: whoever asks for that installation is told
+   * "unchanged". `token`: only the very credential that got the answer is, and a pass mints its
+   * own, so no pass is. Which of the two GitHub does has not been seen with the real App.
+   */
+  etags: 'installation' | 'token';
 }
 
 /**
  * A stand-in for GitHub as the App sees it. It answers a repeated question with 304 only when the
- * ETag it gave is sent back, and it ties that ETag to the credential the question was asked with,
- * as GitHub does: the answer to a new token is never 304. Every request is recorded.
+ * ETag it gave is sent back, and it ties that ETag to who asked (see `World.etags`). Every request
+ * is recorded.
  */
 function github(world: World) {
   const requests: Array<{ method: string; path: string; status: number }> = [];
@@ -67,7 +73,8 @@ function github(world: World) {
     const headers = new Headers(init.headers);
     const auth = (headers.get('authorization') ?? '').replace('Bearer ', '');
     const [found, body, fixedEtag] = route(method, path, auth);
-    const etag = fixedEtag ?? `W/"${hash(body + auth)}"`;
+    const asker = world.etags === 'token' ? auth : `installation ${tokens.get(auth)?.installation ?? 'none: the App itself'}`;
+    const etag = fixedEtag ?? `W/"${hash(body + asker)}"`;
     const status = found === 200 && headers.get('if-none-match') === etag ? 304 : found;
     requests.push({ method, path, status });
     const sent = { date: world.date.toUTCString(), ...(found === 200 ? { etag } : {}) };
@@ -95,7 +102,8 @@ function setUp(world: World) {
   return { asking, made, kept, tokens };
 }
 
-const world = (): World => ({
+const world = (etags: World['etags'] = 'installation'): World => ({
+  etags,
   date: new Date('2026-11-20T12:00:00Z'),
   installations: { 11: ['acme/widgets', 'acme/gadgets'], 12: ['Zenith/anvils'] },
   heads: { 'acme/widgets': 'a'.repeat(40), 'acme/gadgets': 'b'.repeat(40), 'Zenith/anvils': 'c'.repeat(40) },
@@ -136,24 +144,90 @@ describe('finding the projects on every pass', () => {
     ]);
   });
 
-  it('is told "unchanged" throughout on the next pass, and asks for no new token', async () => {
-    const w = world();
+  it('is told "unchanged" throughout on the next pass, when GitHub ties an ETag to the installation', async () => {
+    const w = world('installation');
     const { asking, made } = setUp(w);
     const first = await projectsSeen(asking);
     made();
     later(w, 3);
     const second = await projectsSeen(asking);
     expect(made()).toEqual([
-      // The App's own credential is new every pass, so this one answer is given in full.
-      'GET /app/installations 200',
+      'GET /app/installations 304',
+      'POST /app/installations/11/access_tokens 201',
       'GET /installation/repositories 304',
       'GET /repos/acme/widgets/commits/HEAD 304',
       'GET /repos/acme/gadgets/commits/HEAD 304',
+      'POST /app/installations/12/access_tokens 201',
       'GET /installation/repositories 304',
       'GET /repos/Zenith/anvils/commits/HEAD 304',
     ]);
-    expect(second.projects.map((p) => ({ ...p, fresh: true }))).toEqual(first.projects);
+    expect(second.projects.map(({ slug, observed }) => ({ slug, observed }))).toEqual(first.projects.map(({ slug, observed }) => ({ slug, observed })));
     expect(second.projects.map((p) => p.fresh)).toEqual([false, false, false]);
+  });
+
+  it('finds the same projects when GitHub ties an ETag to the token, and the lists are answered in full', async () => {
+    const w = world('token');
+    const { asking, made } = setUp(w);
+    const first = await projectsSeen(asking);
+    made();
+    later(w, 3);
+    const second = await projectsSeen(asking);
+    expect(made()).toEqual([
+      'GET /app/installations 200',
+      'POST /app/installations/11/access_tokens 201',
+      'GET /installation/repositories 200',
+      // A default branch's ETag is its commit, whoever asks, so its files are still not read again.
+      'GET /repos/acme/widgets/commits/HEAD 304',
+      'GET /repos/acme/gadgets/commits/HEAD 304',
+      'POST /app/installations/12/access_tokens 201',
+      'GET /installation/repositories 200',
+      'GET /repos/Zenith/anvils/commits/HEAD 304',
+    ]);
+    expect(second.projects.map(({ slug, observed }) => ({ slug, observed }))).toEqual(first.projects.map(({ slug, observed }) => ({ slug, observed })));
+  });
+
+  it("does not read a project's files again when its head is answered in full and is the same commit", async () => {
+    const w = world('token');
+    const { asking, made } = setUp(w);
+    await projectsSeen(asking);
+    made();
+    later(w, 3);
+    // As if GitHub took no notice of the ETag sent with this question either.
+    const github = asking.fetch;
+    asking.fetch = (async (input: string | URL | Request, init: RequestInit = {}) => {
+      const headers = new Headers(init.headers);
+      if (String(input).includes('/commits/HEAD')) headers.delete('if-none-match');
+      return github(input, { ...init, headers });
+    }) as typeof fetch;
+    const { projects } = await projectsSeen(asking);
+    expect(made().filter((r) => r.includes('/repos/'))).toEqual([
+      'GET /repos/acme/widgets/commits/HEAD 200',
+      'GET /repos/acme/gadgets/commits/HEAD 200',
+      'GET /repos/Zenith/anvils/commits/HEAD 200',
+    ]);
+    expect(projects.map((p) => p.fresh)).toEqual([false, false, false]);
+    expect(projects[1].observed).toEqual({ config: CONFIG, sweepWorkflow: true });
+  });
+
+  it('asks for its tokens on every pass and keeps none of them', async () => {
+    const w = world();
+    const { asking, kept, tokens } = setUp(w);
+    await projectsSeen(asking);
+    later(w, 3);
+    const { projects } = await projectsSeen(asking);
+    expect([...tokens.keys()]).toEqual(['ghs_11_1', 'ghs_12_2', 'ghs_11_3', 'ghs_12_4']);
+    expect(projects.map((p) => p.token)).toEqual(['ghs_11_3', 'ghs_11_3', 'ghs_12_4']);
+    const everythingKept = JSON.stringify([...kept.entries()]);
+    for (const token of tokens.keys()) expect(everythingKept).not.toContain(token);
+    expect(everythingKept).not.toContain('ghs_');
+    expect([...kept.keys()].sort()).toEqual([
+      'app/installations?page=1',
+      'installation/11/repositories?page=1',
+      'installation/12/repositories?page=1',
+      'repos/Zenith/anvils/default-branch',
+      'repos/acme/gadgets/default-branch',
+      'repos/acme/widgets/default-branch',
+    ]);
   });
 
   it('reads a project again when its default branch has moved, and only that project', async () => {
@@ -167,8 +241,7 @@ describe('finding the projects on every pass', () => {
     delete w.files['acme/gadgets'][WORKFLOW];
     const { projects } = await projectsSeen(asking);
     expect(projects.find((p) => p.slug === 'acme/gadgets')).toMatchObject({ observed: { config: CONFIG, sweepWorkflow: false }, fresh: true });
-    expect(made().filter((r) => !r.endsWith(' 304'))).toEqual([
-      'GET /app/installations 200',
+    expect(made().filter((r) => r.startsWith('GET') && !r.endsWith(' 304'))).toEqual([
       'GET /repos/acme/gadgets/commits/HEAD 200',
       'GET /repos/acme/gadgets/contents/devkit.json 200',
       `GET /repos/acme/gadgets/contents/${WORKFLOW} 404`,
@@ -185,58 +258,6 @@ describe('finding the projects on every pass', () => {
     w.files['Zenith/hammers'] = { 'devkit.json': CONFIG };
     const { projects } = await projectsSeen(asking);
     expect(projects.map((p) => p.slug)).toEqual(['acme/widgets', 'acme/gadgets', 'Zenith/anvils', 'Zenith/hammers']);
-  });
-
-  it('asks for a new token once the kept one is near the end of its hour', async () => {
-    const w = world();
-    const { asking, made } = setUp(w);
-    await projectsSeen(asking);
-    made();
-    later(w, 54);
-    expect((await projectsSeen(asking)).projects).toHaveLength(3);
-    expect(made().filter((r) => r.startsWith('POST'))).toEqual([]);
-    later(w, 3);
-    expect((await projectsSeen(asking)).projects).toHaveLength(3);
-    expect(made().filter((r) => r.startsWith('POST'))).toEqual([
-      'POST /app/installations/11/access_tokens 201',
-      'POST /app/installations/12/access_tokens 201',
-    ]);
-  });
-
-  it('keeps a token only sealed: what is kept cannot be read without the private key', async () => {
-    const { asking, kept, tokens } = setUp(world());
-    await projectsSeen(asking);
-    const everythingKept = JSON.stringify([...kept.entries()]);
-    expect(tokens.size).toBe(2);
-    for (const token of tokens.keys()) expect(everythingKept).not.toContain(token);
-    const other = crypto.generateKeyPairSync('rsa', { modulusLength: 2048, privateKeyEncoding: { type: 'pkcs8', format: 'pem' }, publicKeyEncoding: { type: 'spki', format: 'pem' } });
-    expect(openToken(kept.get('installation/11/token')!.answer, other.privateKey)).toBeNull();
-    expect(openToken(kept.get('installation/11/token')!.answer, privateKey)?.token).toBe('ghs_11_1');
-  });
-
-  it('asks for a new token when the kept one cannot be opened, as after the private key was replaced', async () => {
-    const { asking, made, kept } = setUp(world());
-    await projectsSeen(asking);
-    made();
-    kept.set('installation/11/token', { etag: null, answer: { sealed: 'bm90IGEgdG9rZW4=' } });
-    await projectsSeen(asking);
-    expect(made().filter((r) => r.startsWith('POST'))).toEqual(['POST /app/installations/11/access_tokens 201']);
-  });
-
-  it('asks for a new token when GitHub no longer takes the kept one, as after the App was installed afresh', async () => {
-    const w = world();
-    const { asking, made, tokens } = setUp(w);
-    await projectsSeen(asking);
-    made();
-    tokens.delete('ghs_11_1');
-    later(w, 3);
-    expect((await projectsSeen(asking)).projects).toHaveLength(3);
-    expect(made().slice(0, 4)).toEqual([
-      'GET /app/installations 200',
-      'GET /installation/repositories 401',
-      'POST /app/installations/11/access_tokens 201',
-      'GET /installation/repositories 200',
-    ]);
   });
 
   it('returns apart a project whose default branch could not be read, and still reads the others', async () => {
@@ -258,7 +279,7 @@ describe('finding the projects on every pass', () => {
     asking.tally = { asked: 0, unchanged: 0 };
     later(w, 3);
     await projectsSeen(asking);
-    expect(asking.tally).toEqual({ asked: 6, unchanged: 5 });
+    expect(asking.tally).toEqual({ asked: 8, unchanged: 6 });
   });
 });
 
@@ -270,8 +291,8 @@ describe("reading a project's pull requests", () => {
   });
   const at = (time: string) => new Date(`2026-11-20T${time}Z`);
 
-  async function reading(pulls: World['pulls'][string]) {
-    const w = { ...world(), pulls: { 'acme/widgets': pulls } };
+  async function reading(pulls: World['pulls'][string], etags: World['etags'] = 'installation') {
+    const w = { ...world(etags), pulls: { 'acme/widgets': pulls } };
     const set = setUp(w);
     const token = (await projectsSeen(set.asking)).projects[0].token;
     set.made();
@@ -299,6 +320,30 @@ describe("reading a project's pull requests", () => {
     expect(changed.pullRequests).toEqual([{ number: 12, updatedAt: at('12:01:00'), mergedAt: at('12:01:00') }]);
     expect(changed.etag).not.toBe(first.etag);
     expect(made().map((r) => r.split(' ')[2])).toEqual(['200', '304', '200']);
+  });
+
+  it('is told "unchanged" by the next pass\'s new token, when GitHub ties an ETag to the installation', async () => {
+    const { asking, token, made, w } = await reading([pr(12, '11:59:00', '11:58:00')]);
+    const first = await pullRequestsSeen(asking, 'acme/widgets', token, { etag: null, seenTo: null });
+    later(w, 3);
+    const next = (await projectsSeen(asking)).projects[0].token;
+    expect(next).not.toBe(token);
+    made();
+    expect((await pullRequestsSeen(asking, 'acme/widgets', next, { etag: first.etag, seenTo: at('11:59:00') })).pullRequests).toBeNull();
+    expect(made()).toEqual(['GET /repos/acme/widgets/pulls?state=all&sort=updated&direction=desc 304']);
+  });
+
+  it('is given the listing in full when GitHub ties an ETag to the token, and reads it like any other', async () => {
+    const { asking, token, made, w } = await reading([pr(12, '11:59:00', '11:58:00')], 'token');
+    const first = await pullRequestsSeen(asking, 'acme/widgets', token, { etag: null, seenTo: null });
+    later(w, 3);
+    const next = (await projectsSeen(asking)).projects[0].token;
+    made();
+    const again = await pullRequestsSeen(asking, 'acme/widgets', next, { etag: first.etag, seenTo: at('11:59:00') });
+    expect(made()).toEqual(['GET /repos/acme/widgets/pulls?state=all&sort=updated&direction=desc 200']);
+    // The same pull requests as before: what was already handled is the decision's to leave alone.
+    expect(again.pullRequests).toEqual(first.pullRequests);
+    expect(again.etag).not.toBe(first.etag);
   });
 
   it('reads further back only as far as the last pass got', async () => {

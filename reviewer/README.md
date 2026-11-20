@@ -342,20 +342,26 @@ project and the event's key, so a second record of the same event cannot be made
 time at its first pass and how far the last pass's reading got. A pull request that merged before
 the first pass is never acted on, however often a later pass sees it.
 
-**A pass that finds nothing costs almost none of the App's rate limit** (`src/poller-github.ts`).
-Every question a pass repeats is sent with the ETag of its last answer, and GitHub's answer of
-"unchanged" is not counted against the limit. The answers and ETags are kept in `github_answers`.
+**A pass asks conditionally** (`src/poller-github.ts`). Every question a pass repeats is sent
+with the ETag of its last answer, and an answer of "unchanged" (304) is not counted against the
+App's rate limit. The answers and ETags are kept in `github_answers`. No credential is kept: a
+pass mints its installation tokens and holds them in memory until it ends.
 
 - The questions are: the App's installations, each installation's repositories, the head of each
   project's default branch, and each handled project's pull requests (one listing, most recently
   changed first). A project's `devkit.json` and sweep workflow are read again only when the head
-  of its default branch has moved.
-- GitHub ties an ETag to the credential that asked, so an installation's token is kept for the
-  hour it lasts, in `github_answers`, sealed with a key made from the App's private key. Whoever
-  can open it could already mint one. The App's own credential is new on every pass, so the list
-  of installations is the one answer given in full: one counted request per pass.
+  of its default branch is a different commit.
+- A pass makes `1 + 2 x installations + projects + handled projects` requests when nothing has
+  happened, the installations' tokens among them.
+- **Whether those are free depends on what GitHub ties an ETag to, which has not been observed
+  with the real App.** If an ETag is good for the installation, a pass with its new token is told
+  "unchanged" throughout and an idle pass costs nothing but its tokens. If it is good only for
+  the token that got it, the lists are answered in full on every pass, and that is accepted: an
+  answer in full is read like any other, and for a handful of projects it comes to a few hundred
+  of the installation's 5,000 requests an hour. The head of a default branch is told "unchanged"
+  either way, since its ETag is the commit.
 - Each pass ends with a line saying how many times GitHub was asked and how many of the answers
-  were "unchanged".
+  were "unchanged", so the journal shows which of the two holds.
 
 Each `landed` is a run of its own kind in the `runs` table, with its output file, and is reported
 through `reportRun` like any other: a failure opens or comments on the failure issue for `landed`
