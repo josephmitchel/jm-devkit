@@ -347,9 +347,10 @@ project and the event's key, so a second record of the same event cannot be made
 - Passes do not overlap. The timer does not start a pass while one is going, and a pass holds a
   Postgres advisory lock, so one started by hand beside it does nothing.
 - A pass killed outright leaves its `landed` run recorded as `running`. The next pass records it
-  as `interrupted` and the event is tried again. This is the one way a `landed` can run twice for
-  one merge: the first may have finished its work on GitHub in the moment before it was killed.
-  `landed` sets the same labels and lifts the same blocks a second time, and comments again.
+  as `interrupted` and the event is tried again. So a `landed` can run twice for one merge, and
+  so can one that failed partway. A second run changes nothing the first already did: a ticket
+  that carries that pull request's landed comment (`landingRecorded` in `src/landed.ts`) is left as
+  it is, with no second comment, and a ticket the first run did not finish is finished.
 
 **A project's first pass starts from that moment.** `poller_projects` holds, per project, GitHub's
 time at its first pass and how far the last pass's reading got. A pull request that merged before
