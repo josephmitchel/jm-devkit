@@ -5,7 +5,7 @@ import { reportRun } from './failure-report.js';
 import { appCredentials } from './gh-auth.js';
 import { LOCK_CLASS } from './migrate.js';
 import { projectsSeen, pullRequestsSeen, type Asking, type Memory } from './poller-github.js';
-import { leftByPasses, passDecision, type Command, type EventRecord, type EventRow, type ProjectKnown, type ProjectSeen } from './poller.js';
+import { gatesOfPassedReviews, leftByPasses, passDecision, type Command, type EventRecord, type EventRow, type ProjectKnown, type ProjectSeen } from './poller.js';
 import { ensureProjectRow } from './project-row.js';
 import { classifyProjects, projectLine } from './projects.js';
 import { errorType, finishRun, interruptRunsLeftRunning, runCommand, runLine, startRun, stopping, type RunResult } from './runs.js';
@@ -68,7 +68,7 @@ const inDatabase: Memory = {
 const why = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
 async function pass(say: (line: string) => void): Promise<PassOutcome> {
-  // Under the lock no other pass is going, so a landed run still `running` has no process.
+  // Under the lock no other pass is going, so a run of a pass still `running` has no process.
   for (const run of await interruptRunsLeftRunning(leftByPasses)) say(`an earlier pass never recorded how this ended: ${runLine(run)}`);
 
   const credentials = appCredentials();
@@ -107,7 +107,9 @@ async function pass(say: (line: string) => void): Promise<PassOutcome> {
       if (position) {
         // Every event on record when the listing is read; otherwise only those still to be handled.
         const events = await eventsOnRecord(project.slug, listing.pullRequests === null);
-        known.set(project.slug, { startedAt: position.startedAt, seenTo: position.seenTo, events });
+        // Asked of a pull request in the listing only, so not read when there is none.
+        const passedGates = listing.pullRequests === null ? new Map<number, string[]>() : await passedGatesOnRecord(project.slug);
+        known.set(project.slug, { startedAt: position.startedAt, seenTo: position.seenTo, events, passedGates });
       }
       etags.set(project.slug, listing.etag);
       seen.push({ project, at: listing.at, pullRequests: listing.pullRequests });
@@ -200,6 +202,19 @@ async function eventsOnRecord(project: string, waitingOnly: boolean): Promise<Ev
   }));
 }
 
+/** The commits the gate of each of a project's passed reviews is on, by pull request. */
+async function passedGatesOnRecord(project: string): Promise<Map<number, string[]>> {
+  const statuses = schema.githubArtifacts;
+  const rows = await db
+    .select({ prNumber: schema.reviews.prNumber, sha: statuses.sha, payload: statuses.payload })
+    .from(schema.reviews)
+    .innerJoin(schema.repos, eq(schema.repos.id, schema.reviews.repoId))
+    .leftJoin(statuses, and(eq(statuses.reviewId, schema.reviews.id), eq(statuses.kind, 'commit_status')))
+    .where(and(eq(schema.repos.slug, project), eq(schema.reviews.state, 'passed')))
+    .orderBy(asc(schema.reviews.prNumber), asc(statuses.id));
+  return gatesOfPassedReviews(rows);
+}
+
 /**
  * Run one event's command as a recorded run of its own, and record the event as handled only if
  * the command succeeded. A failed or interrupted command leaves the event on record with one
@@ -212,7 +227,7 @@ async function handle(command: Command, say: (line: string) => void): Promise<'s
     return 'taken';
   }
   try {
-    // A project registers itself (ADR 0004): `landed` needs its row, and this may be its first run.
+    // A project registers itself (ADR 0004): a command needs its row, and this may be its first run.
     await ensureProjectRow(command.project);
     const run = await startRun({ kind: command.kind, project: command.project });
     await db.update(schema.pollerEvents).set({ runId: run.id }).where(key);

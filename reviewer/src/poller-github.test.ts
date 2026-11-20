@@ -17,7 +17,7 @@ interface World {
   installations: Record<number, string[]>;
   heads: Record<string, string>;
   files: Record<string, Record<string, string>>;
-  pulls: Record<string, Array<{ number: number; updated_at: string; merged_at: string | null }>>;
+  pulls: Record<string, Array<{ number: number; updated_at: string; merged_at: string | null; state: 'open' | 'closed'; head: { sha: string } }>>;
   /**
    * What GitHub ties an ETag to. `installation`: whoever asks for that installation is told
    * "unchanged". `token`: only the very credential that got the answer is, and a pass mints its
@@ -284,10 +284,14 @@ describe('finding the projects on every pass', () => {
 });
 
 describe("reading a project's pull requests", () => {
-  const pr = (number: number, updated: string, merged: string | null = null) => ({
+  const HEAD = 'c3'.repeat(20);
+  const pr = (number: number, updated: string, merged: string | null = null, head = HEAD) => ({
     number,
     updated_at: `2026-11-20T${updated}Z`,
     merged_at: merged && `2026-11-20T${merged}Z`,
+    // A pull request closed without merging reads the same to the poller as a merged one: not open.
+    state: merged ? ('closed' as const) : ('open' as const),
+    head: { sha: head },
   });
   const at = (time: string) => new Date(`2026-11-20T${time}Z`);
 
@@ -299,14 +303,15 @@ describe("reading a project's pull requests", () => {
     return { ...set, w, token };
   }
 
-  it('lists them, newest change first, with when each merged and GitHub\'s time', async () => {
-    const { asking, token } = await reading([pr(11, '08:00:00', '08:00:00'), pr(12, '11:59:00', '11:58:00'), pr(13, '11:30:00')]);
+  it('lists them, newest change first, with when each merged, whether it is open, its head and GitHub\'s time', async () => {
+    const MOVED = 'b2'.repeat(20);
+    const { asking, token } = await reading([pr(11, '08:00:00', '08:00:00'), pr(12, '11:59:00', '11:58:00'), pr(13, '11:30:00', null, MOVED)]);
     const seen = await pullRequestsSeen(asking, 'acme/widgets', token, { etag: null, seenTo: null });
     expect(seen.at).toEqual(at('12:00:00'));
     expect(seen.pullRequests).toEqual([
-      { number: 12, updatedAt: at('11:59:00'), mergedAt: at('11:58:00') },
-      { number: 13, updatedAt: at('11:30:00'), mergedAt: null },
-      { number: 11, updatedAt: at('08:00:00'), mergedAt: at('08:00:00') },
+      { number: 12, updatedAt: at('11:59:00'), mergedAt: at('11:58:00'), open: false, headSha: HEAD },
+      { number: 13, updatedAt: at('11:30:00'), mergedAt: null, open: true, headSha: MOVED },
+      { number: 11, updatedAt: at('08:00:00'), mergedAt: at('08:00:00'), open: false, headSha: HEAD },
     ]);
   });
 
@@ -317,7 +322,7 @@ describe("reading a project's pull requests", () => {
     expect(again).toEqual({ at: at('12:00:00'), etag: first.etag, pullRequests: null });
     w.pulls['acme/widgets'][0] = pr(12, '12:01:00', '12:01:00');
     const changed = await pullRequestsSeen(asking, 'acme/widgets', token, { etag: first.etag, seenTo: at('11:59:00') });
-    expect(changed.pullRequests).toEqual([{ number: 12, updatedAt: at('12:01:00'), mergedAt: at('12:01:00') }]);
+    expect(changed.pullRequests).toEqual([{ number: 12, updatedAt: at('12:01:00'), mergedAt: at('12:01:00'), open: false, headSha: HEAD }]);
     expect(changed.etag).not.toBe(first.etag);
     expect(made().map((r) => r.split(' ')[2])).toEqual(['200', '304', '200']);
   });

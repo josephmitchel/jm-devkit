@@ -54,8 +54,9 @@ Usage:
                                                 machine's update step (bin/update.mjs) calls it
   code-reviewer poll                            one pass of the poller: for every project the
                                                 machine handles, run landed for each pull request
-                                                merged since the last pass (a timer runs this
-                                                every few minutes)
+                                                merged since the last pass and carry-gate for each
+                                                new head of one whose review passed (a timer runs
+                                                this every few minutes)
   code-reviewer failure-issue <owner/repo>      open, comment on or close that repository's failure
                                                 issue, from the report of a finished run on its
                                                 input (the nightly run starts this; not for hand use)

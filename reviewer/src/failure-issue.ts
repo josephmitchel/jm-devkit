@@ -48,6 +48,7 @@ const KIND_WORDS: Record<RunKind, string> = {
   summary: 'nightly summary',
   checks: 'run of the nightly checks',
   landed: 'landed run',
+  'carry-gate': 'carry-gate run',
 };
 
 // A type of error is shown by name only when it is on this list, is a project's fault (see
