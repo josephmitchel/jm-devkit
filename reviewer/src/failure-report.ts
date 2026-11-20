@@ -8,6 +8,7 @@ import { failureIssuePlan, type Report, type RunFacts } from './failure-issue.js
 import { failureSide } from './failure-side.js';
 import { createIssue, listOpenIssuesWithAuthors, postComment, updateIssue } from './github.js';
 import { runLog, runOutputPath, type Run } from './runs.js';
+import { TEST_DATABASES_SETTING, withoutTestDatabaseAddresses } from './test-databases.js';
 import { reviewerRoot } from './workspace.js';
 
 /**
@@ -45,9 +46,14 @@ export function kitRepo(env: NodeJS.ProcessEnv = process.env): string {
 const TAIL_LINES = 40;
 const TAIL_CHARS = 4000;
 
-/** The last lines of a run's output, short enough for an issue. */
-export function outputTail(output: string): string {
-  const tail = output.trimEnd().split('\n').slice(-TAIL_LINES).join('\n').slice(-TAIL_CHARS);
+/**
+ * The last lines of a run's output, short enough for an issue. This is the one place a run's
+ * output is made ready to leave the machine, so it is where the addresses of the run's test
+ * databases are taken out, before the cut: a cut through an address would leave part of it.
+ */
+export function outputTail(output: string, testDatabaseServer: string | undefined = process.env[TEST_DATABASES_SETTING]): string {
+  const safe = withoutTestDatabaseAddresses(output, testDatabaseServer);
+  const tail = safe.trimEnd().split('\n').slice(-TAIL_LINES).join('\n').slice(-TAIL_CHARS);
   return tail.trim() === '' ? '(the run wrote no output)' : tail;
 }
 

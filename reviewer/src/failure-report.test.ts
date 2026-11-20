@@ -174,6 +174,30 @@ describe("the end of a run's output", () => {
   it('says so when the run wrote nothing', () => {
     expect(outputTail('')).toBe('(the run wrote no output)');
   });
+
+  it("never holds a test database's address, which carries a password, even one the cut would have split", () => {
+    const server = 'postgres://tests:s3cret-pw@db.example:5433/postgres';
+    const address = 'postgres://tests:s3cret-pw@db.example:5433/reviewer_test_0123456789abcdef_0';
+    expect(outputTail(`connecting to ${address}\nconnection refused\n`, server)).toBe(
+      'connecting to [test database address]\nconnection refused',
+    );
+    // Cut to length first, this would start two characters into the password.
+    const kept = address.length - 'postgres://tests:s3'.length;
+    const tail = outputTail(`${address} ${'y'.repeat(4000 - kept - 1)}\n`, server);
+    expect(tail).not.toMatch(/cret-pw|db\.example/);
+    expect(tail.endsWith('yyy')).toBe(true);
+  });
+
+  it('takes the server for test databases from the machine\'s setting', () => {
+    const saved = process.env.REVIEWER_TEST_DATABASES_URL;
+    process.env.REVIEWER_TEST_DATABASES_URL = 'postgres://tests:s3cret-pw@db.example:5433/postgres';
+    try {
+      expect(outputTail('PGPASSWORD=s3cret-pw psql\n')).toBe('PGPASSWORD=[redacted] psql');
+    } finally {
+      if (saved === undefined) delete process.env.REVIEWER_TEST_DATABASES_URL;
+      else process.env.REVIEWER_TEST_DATABASES_URL = saved;
+    }
+  });
 });
 
 describe("the kit's own repository", () => {

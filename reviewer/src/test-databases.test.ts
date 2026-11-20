@@ -9,6 +9,7 @@ import {
   planDatabases,
   provideTestDatabases,
   withAddresses,
+  withoutTestDatabaseAddresses,
 } from './test-databases.js';
 import { repoCommandEnv, runRepoCommand } from './workspace.js';
 
@@ -154,6 +155,48 @@ describe('withAddresses', () => {
     const command = 'test "$APP_DATABASE_URL" = "postgres://tests:s3cret@db.example:5433/reviewer_test_0123456789abcdef_0?sslmode=require"';
     expect((await runRepoCommand('/tmp', command, withAddresses(project, planned).env, 10_000)).passed).toBe(true);
     expect(process.env.APP_DATABASE_URL).toBe(before);
+  });
+});
+
+/**
+ * A project's command can print the address it was handed, and the end of a failed run's output
+ * is posted to the project's failure issue. The address holds the password of the role that
+ * creates every project's test databases.
+ */
+describe("keeping a test database's address out of what is posted to GitHub", () => {
+  const [app] = planDatabases(['APP_DATABASE_URL'], SERVER, RUN);
+
+  it('replaces the address wherever the output holds it', () => {
+    const output = `connecting to ${app.address}\nError: connect ECONNREFUSED (url="${app.address}"), giving up`;
+    expect(withoutTestDatabaseAddresses(output, SERVER)).toBe(
+      'connecting to [test database address]\nError: connect ECONNREFUSED (url="[test database address]"), giving up',
+    );
+  });
+
+  it('replaces the address of any other database on that server, which carries the same password', () => {
+    const output = 'tried postgresql://tests:s3cret@db.example:5433/app_test?schema=public then postgres://tests@db.example:5433/postgres';
+    expect(withoutTestDatabaseAddresses(output, SERVER)).toBe('tried [test database address] then [test database address]');
+  });
+
+  it('replaces the address of a database the code reviewer made, however the server is spelled', () => {
+    const output = 'DATABASE_URL=postgres://tests@127.0.0.1/reviewer_test_0123456789abcdef_1';
+    expect(withoutTestDatabaseAddresses(output, SERVER)).toBe('DATABASE_URL=[test database address]');
+  });
+
+  it("removes the role's password where it stands alone, as the setting spells it and as a driver decodes it", () => {
+    const server = 'postgres://tests:p%40ss%2Fw0rd@db.example:5433/postgres';
+    const output = 'PGPASSWORD=p@ss/w0rd psql -h db.example\npassword "p%40ss%2Fw0rd" was refused';
+    expect(withoutTestDatabaseAddresses(output, server)).toBe('PGPASSWORD=[redacted] psql -h db.example\npassword "[redacted]" was refused');
+  });
+
+  it("leaves another server's address alone, such as one the project's own config gives", () => {
+    const output = 'connecting to postgres://postgres:postgres@localhost:5432/app_test';
+    expect(withoutTestDatabaseAddresses(output, SERVER)).toBe(output);
+  });
+
+  it('changes nothing on a machine with no server for test databases, where none was handed out', () => {
+    const output = `connecting to ${app.address}`;
+    for (const none of [undefined, '', '  ', 'not an address']) expect(withoutTestDatabaseAddresses(output, none)).toBe(output);
   });
 });
 
