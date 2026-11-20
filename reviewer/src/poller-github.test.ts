@@ -223,6 +223,22 @@ describe('finding the projects on every pass', () => {
     expect(made().filter((r) => r.startsWith('POST'))).toEqual(['POST /app/installations/11/access_tokens 201']);
   });
 
+  it('asks for a new token when GitHub no longer takes the kept one, as after the App was installed afresh', async () => {
+    const w = world();
+    const { asking, made, tokens } = setUp(w);
+    await projectsSeen(asking);
+    made();
+    tokens.delete('ghs_11_1');
+    later(w, 3);
+    expect((await projectsSeen(asking)).projects).toHaveLength(3);
+    expect(made().slice(0, 4)).toEqual([
+      'GET /app/installations 200',
+      'GET /installation/repositories 401',
+      'POST /app/installations/11/access_tokens 201',
+      'GET /installation/repositories 200',
+    ]);
+  });
+
   it('returns apart a project whose default branch could not be read, and still reads the others', async () => {
     const w = world();
     const { asking } = setUp(w);

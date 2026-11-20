@@ -16,12 +16,15 @@ export interface PullRequestSeen {
   mergedAt: Date | null;
 }
 
-/** What a pass saw of one handled project. */
+/** What a pass saw of one project. Its pull requests are asked for only when the machine handles it. */
 export interface ProjectSeen {
   project: Project;
   /** GitHub's clock when it was asked. */
   at: Date;
-  /** The pull requests changed since the last pass. */
+  /**
+   * Its pull requests, as far back as the last pass got to. Null when GitHub answered that
+   * nothing about any of them has changed since that pass.
+   */
   pullRequests: PullRequestSeen[] | null;
 }
 
@@ -121,6 +124,12 @@ function due(event: EventRecord, now: Date): boolean {
   return event.attemptedAt === null || now.getTime() - event.attemptedAt.getTime() >= retryDelayMs(event.attempts);
 }
 
+/**
+ * What a pass does. For each project the machine handles: nothing on its first pass, which only
+ * marks where the project starts from; after that, the command for every event the rules find
+ * that is not on record, and again for every event on record whose command has not succeeded and
+ * whose wait is over. `known` has an entry for each project that has had its first pass.
+ */
 export function passDecision(
   seen: { projects: ProjectSeen[] },
   known: { projects: ReadonlyMap<string, ProjectKnown> },

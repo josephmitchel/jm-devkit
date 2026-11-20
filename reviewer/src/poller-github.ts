@@ -145,13 +145,20 @@ export async function projectsSeen(asking: Asking): Promise<{ projects: ProjectR
   const projects: ProjectRead[] = [];
   const unread: Array<{ slug: string; why: string }> = [];
   for (const id of installations) {
-    const token = await tokenFor(asking, id, jwt);
-    const slugs = await rememberedPages(
-      asking,
-      `installation/${id}/repositories`,
-      { path: '/installation/repositories', auth: token },
-      (body) => (JSON.parse(body) as { repositories: Array<{ full_name: string }> }).repositories.map((r) => r.full_name),
-    );
+    const repositories = (auth: string) =>
+      rememberedPages(asking, `installation/${id}/repositories`, { path: '/installation/repositories', auth }, (body) =>
+        (JSON.parse(body) as { repositories: Array<{ full_name: string }> }).repositories.map((r) => r.full_name),
+      );
+    let token = await tokenFor(asking, id, jwt);
+    let slugs: string[];
+    try {
+      slugs = await repositories(token);
+    } catch (err) {
+      // GitHub can end a token before its hour is up. This is the first question asked with it.
+      if (!(err instanceof GitHubError && err.status === 401)) throw err;
+      token = await tokenFor(asking, id, jwt, { anew: true });
+      slugs = await repositories(token);
+    }
     for (const slug of slugs) {
       try {
         projects.push({ slug, token, ...(await defaultBranch(asking, slug, token)) });
@@ -194,9 +201,9 @@ async function defaultBranch(asking: Asking, slug: string, token: string): Promi
 const TOKEN_MARGIN_MS = 5 * 60 * 1000;
 
 /** A token for an installation: the kept one while it lasts, or a new one, which is then kept. */
-async function tokenFor(asking: Asking, installation: number, jwt: string): Promise<string> {
+async function tokenFor(asking: Asking, installation: number, jwt: string, { anew = false } = {}): Promise<string> {
   const question = `installation/${installation}/token`;
-  const kept = openToken((await asking.memory.recall(question))?.answer, asking.credentials.privateKey);
+  const kept = anew ? null : openToken((await asking.memory.recall(question))?.answer, asking.credentials.privateKey);
   if (kept && kept.expiresAt - asking.now().getTime() > TOKEN_MARGIN_MS) return kept.token;
   const path = `/app/installations/${installation}/access_tokens`;
   const answer = await ask(asking, { path, auth: jwt, method: 'POST' });
