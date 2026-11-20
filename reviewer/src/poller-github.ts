@@ -1,7 +1,7 @@
 import { CONFIG_FILE } from '../../plugin/devkit-config.mjs';
 import { SWEEP_WORKFLOW } from '../../plugin/generator/generate.mjs';
 import { GitHubError, appJwt, defaultBranchFile } from '../../plugin/install/app.mjs';
-import type { PullRequestSeen } from './poller.js';
+import type { CommentSeen, PullRequestSeen } from './poller.js';
 import type { Observed } from './projects.js';
 
 /**
@@ -235,10 +235,57 @@ export async function pullRequestsSeen(
   return { at: first.at, etag: first.etag, pullRequests };
 }
 
+interface ListedPullRequest {
+  number: number;
+  updated_at: string;
+  merged_at: string | null;
+  state: string;
+  draft?: boolean;
+  labels?: Array<{ name: string }>;
+}
+
 function listed(body: string): PullRequestSeen[] {
-  return (JSON.parse(body) as Array<{ number: number; updated_at: string; merged_at: string | null }>).map((pr) => ({
+  return (JSON.parse(body) as ListedPullRequest[]).map((pr) => ({
     number: pr.number,
     updatedAt: new Date(pr.updated_at),
     mergedAt: pr.merged_at === null ? null : new Date(pr.merged_at),
+    open: pr.state === 'open',
+    draft: pr.draft === true,
+    labels: (pr.labels ?? []).map((label) => label.name),
+    // Not in the listing: read apart, and only for a pull request whose review waits on the owner.
+    comments: [],
   }));
+}
+
+/**
+ * What has been said on a pull request since `since`: its comments, and the reviews submitted on
+ * it with something written, which is the other way a reply arrives (github.ts `listRepliesSince`
+ * reads the same two). Not asked conditionally: a pass asks only when the pull request has
+ * changed and its review is waiting.
+ */
+export async function commentsSeen(asking: Asking, slug: string, token: string, pr: number, since: Date): Promise<CommentSeen[]> {
+  const pages = async <T>(path: string): Promise<T[]> => {
+    const all: T[] = [];
+    for (let n = 1; ; n++) {
+      const paged = `${path}${path.includes('?') ? '&' : '?'}per_page=100&page=${n}`;
+      const answer = await ask(asking, { path: paged, auth: token });
+      if (answer.status !== 'changed') throw new GitHubError(`GitHub GET ${paged}: no answer`, 404);
+      const items = JSON.parse(answer.body) as T[];
+      all.push(...items);
+      if (items.length < 100) return all;
+    }
+  };
+  const comments = await pages<{ id: number; created_at: string; author_association?: string }>(
+    `/repos/${slug}/issues/${pr}/comments?since=${encodeURIComponent(since.toISOString())}`,
+  );
+  const reviews = await pages<{ id: number; submitted_at?: string; state: string; body: string | null; author_association?: string }>(
+    `/repos/${slug}/pulls/${pr}/reviews`,
+  );
+  return [
+    // Absent is NONE, never trusted.
+    ...comments.map((c) => ({ id: c.id, at: new Date(c.created_at), authorAssociation: c.author_association ?? 'NONE' })),
+    ...reviews
+      .filter((r) => r.state !== 'PENDING' && r.body && r.submitted_at)
+      .map((r) => ({ id: r.id, at: new Date(r.submitted_at as string), authorAssociation: r.author_association ?? 'NONE' })),
+  ].filter((c) => c.at >= since);
 }

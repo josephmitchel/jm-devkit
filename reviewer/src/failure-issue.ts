@@ -1,7 +1,7 @@
 import type { RunKind } from './db/schema.js';
 import { projectFault, type Side } from './failure-side.js';
 import { RUN_STAGES } from './runs.js';
-import { ANSWER_AUTHORITY } from './stages/answers.js';
+import { ANSWER_AUTHORITY } from './reply-authority.js';
 
 /**
  * The failure issue: what it says and when it is opened, commented on and closed. There is one
@@ -48,6 +48,7 @@ const KIND_WORDS: Record<RunKind, string> = {
   summary: 'nightly summary',
   checks: 'run of the nightly checks',
   landed: 'landed run',
+  review: 'review',
 };
 
 // A type of error is shown by name only when it is on this list, is a project's fault (see

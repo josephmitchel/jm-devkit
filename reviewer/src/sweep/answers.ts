@@ -1,7 +1,8 @@
 import { and, eq, isNotNull, isNull } from 'drizzle-orm';
 import { db, schema } from '../db/client.js';
 import { listIssueComments } from '../github.js';
-import { ANSWER_AUTHORITY, answersFromReply } from '../stages/answers.js';
+import { ANSWER_AUTHORITY } from '../reply-authority.js';
+import { answersFromReply } from '../stages/answers.js';
 import type { QuestionRow } from '../stages/questions.js';
 import { requireRound, type SweepCtx } from '../stages/context.js';
 

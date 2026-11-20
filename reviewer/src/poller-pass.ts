@@ -1,18 +1,31 @@
-import { and, asc, desc, eq, isNotNull, isNull } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNotNull, isNull } from 'drizzle-orm';
 
 import { db, pool, schema } from './db/client.js';
 import { reportRun } from './failure-report.js';
 import { appCredentials } from './gh-auth.js';
 import { LOCK_CLASS } from './migrate.js';
-import { projectsSeen, pullRequestsSeen, type Asking, type Memory } from './poller-github.js';
-import { leftByPasses, passDecision, type Command, type EventRecord, type EventRow, type ProjectKnown, type ProjectSeen } from './poller.js';
+import { commentsSeen, projectsSeen, pullRequestsSeen, type Asking, type Memory } from './poller-github.js';
+import {
+  commandFor,
+  leftByPasses,
+  passDecision,
+  repliesToRead,
+  type Command,
+  type EventRecord,
+  type EventRow,
+  type ProjectKnown,
+  type ProjectSeen,
+  type ReviewKnown,
+} from './poller.js';
 import { ensureProjectRow } from './project-row.js';
 import { classifyProjects, projectLine } from './projects.js';
+import { OWN_COMMENT_KINDS } from './reply-authority.js';
 import { errorType, finishRun, interruptRunsLeftRunning, runCommand, runLine, startRun, stopping, type RunResult } from './runs.js';
 
 /**
  * One pass of the poller: ask GitHub what has happened in each handled project, let
- * {@link passDecision} say what to run, and run it. Everything that decides is in poller.ts and
+ * {@link passDecision} say what to run, and run it. A review is not run here: its event goes on
+ * record and the queue starts it (queue-run.ts). Everything that decides is in poller.ts and
  * everything that asks GitHub in poller-github.ts; this file only reads and writes the database
  * around them, in an order that keeps an event from being handled twice or lost.
  */
@@ -107,7 +120,14 @@ async function pass(say: (line: string) => void): Promise<PassOutcome> {
       if (position) {
         // Every event on record when the listing is read; otherwise only those still to be handled.
         const events = await eventsOnRecord(project.slug, listing.pullRequests === null);
-        known.set(project.slug, { startedAt: position.startedAt, seenTo: position.seenTo, events });
+        // Read after the listing: a comment in the listing was then written before the reviews
+        // were read, so a review that waits for it is seen to be waiting.
+        const reviews = listing.pullRequests === null ? [] : await reviewsKnown(project.slug);
+        const before: ProjectKnown = { startedAt: position.startedAt, seenTo: position.seenTo, events, reviews };
+        for (const { pr, since } of repliesToRead(listing.pullRequests ?? [], before)) {
+          pr.comments = await commentsSeen(asking, project.slug, token, pr.number, since);
+        }
+        known.set(project.slug, before);
       }
       etags.set(project.slug, listing.etag);
       seen.push({ project, at: listing.at, pullRequests: listing.pullRequests });
@@ -123,6 +143,8 @@ async function pass(say: (line: string) => void): Promise<PassOutcome> {
     await recordPass(p.project, p.found, { startedAt: p.startedAt, seenTo: p.seenTo, pullsEtag: etags.get(p.project) ?? null, lastPassAt: asking.now() });
     if (p.firstPass) say(`${p.project}: first pass. Watched from ${p.startedAt.toISOString()}; nothing before that is acted on`);
   }
+  // On record now, and not this pass's to run: the queue starts it when the machine is free.
+  for (const job of decision.queued) say(`${job.project} ${job.event}: \`${job.args.join(' ')}\` queued`);
 
   const ended: string[] = [];
   for (const command of decision.commands) {
@@ -135,7 +157,9 @@ async function pass(say: (line: string) => void): Promise<PassOutcome> {
   say(
     `pass over ${decision.projects.length} handled project(s), ${decision.leftAlone.length} not handled` +
       (unanswered > 0 ? `, ${unanswered} that could not be read` : '') +
-      `: ${decision.projects.reduce((n, p) => n + p.found.length, 0)} event(s) found, ${ended.length} command(s) run` +
+      `: ${decision.projects.reduce((n, p) => n + p.found.length, 0)} event(s) found` +
+      (decision.queued.length > 0 ? ` (${decision.queued.length} for the queue)` : '') +
+      `, ${ended.length} command(s) run` +
       (ended.length > 0 ? ` (${count('succeeded')} succeeded, ${count('failed')} failed, ${count('interrupted')} interrupted)` : '') +
       (left > 0 ? `, ${left} left for the next pass` : '') +
       `. GitHub was asked ${asking.tally.asked} time(s) and answered "unchanged" to ${asking.tally.unchanged}`,
@@ -181,6 +205,43 @@ export async function takeEvent(command: Pick<Command, 'project' | 'event' | 'at
     .where(and(keyOf(command), isNull(schema.pollerEvents.handledAt), eq(schema.pollerEvents.attempts, command.attempts)))
     .returning();
   return taken.length > 0;
+}
+
+/** A project's reviews as the decision wants them, each with the comments the code reviewer posted for it. */
+async function reviewsKnown(project: string): Promise<ReviewKnown[]> {
+  const reviews = await db
+    .select({ id: schema.reviews.id, pr: schema.reviews.prNumber, state: schema.reviews.state, since: schema.reviews.updatedAt })
+    .from(schema.reviews)
+    .innerJoin(schema.repos, eq(schema.repos.id, schema.reviews.repoId))
+    .where(eq(schema.repos.slug, project));
+  if (reviews.length === 0) return [];
+  const posted = await db
+    .select({ reviewId: schema.githubArtifacts.reviewId, githubId: schema.githubArtifacts.githubId, kind: schema.githubArtifacts.kind })
+    .from(schema.githubArtifacts)
+    .where(inArray(schema.githubArtifacts.reviewId, reviews.map((r) => r.id)));
+  return reviews.map(({ id, ...review }) => ({
+    ...review,
+    ownComments: posted
+      .filter((a) => a.reviewId === id && OWN_COMMENT_KINDS.has(a.kind))
+      .map((a) => Number(a.githubId))
+      .filter(Number.isFinite),
+  }));
+}
+
+/**
+ * Forget that a pull request's review was ever asked for: `reset` deletes the review, and the
+ * events that asked for it go with it, so labelling the pull request again starts a new one.
+ */
+export async function forgetReviewEvents(project: string, pr: number): Promise<void> {
+  const rows = await db.select().from(schema.pollerEvents).where(eq(schema.pollerEvents.project, project));
+  const asked = rows.filter((row) => {
+    const command = commandFor(project, row.event, row.attempts);
+    return command?.kind === 'review' && Number(command.args[2]) === pr;
+  });
+  if (asked.length === 0) return;
+  await db
+    .delete(schema.pollerEvents)
+    .where(and(eq(schema.pollerEvents.project, project), inArray(schema.pollerEvents.event, asked.map((row) => row.event))));
 }
 
 /** A project's events as the decision wants them. `waitingOnly` leaves out the ones already handled. */
