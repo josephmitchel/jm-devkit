@@ -25,10 +25,11 @@ node bin/code-reviewer.mjs repo add owner/name \
 # run (or resume) the review loop for a PR
 node bin/code-reviewer.mjs run owner/name 42
 
-node bin/code-reviewer.mjs status            # all reviews, concern counts and the recent nightly runs
+node bin/code-reviewer.mjs status            # all reviews, concern counts, the recent nightly runs and the poller's last passes
 node bin/code-reviewer.mjs projects          # every project the App is installed on, and its state
 node bin/code-reviewer.mjs nightly           # the whole nightly run: every handled project's sweep in turn
 node bin/code-reviewer.mjs checks owner/name # one project's nightly checks, now
+node bin/code-reviewer.mjs poll              # one pass of the poller: landed for each newly merged pull request
 node bin/code-reviewer.mjs reset owner/name 42   # forget a review (keeps concerns/policies)
 ```
 
@@ -306,19 +307,89 @@ so each report is handed to a `failure-issue` command aimed at its repository, a
 the kit's repository is given nothing but those six facts. A report that cannot be made is a line
 in the run's log and changes nothing about the run.
 
-## The service and its timer (on the machine)
+## The poller (on the machine)
+
+Nothing on GitHub can reach the machine, so the code reviewer finds events by asking.
+`node bin/code-reviewer.mjs poll` is one pass, and a timer runs one every three minutes. For each
+project the machine handles, a pass finds the pull requests that have merged since the project's
+first pass and runs `landed` for each one once, so its tickets are labelled `needs-judging` and
+unblocked within one interval. A project that is not handled is left alone.
+
+**The pass is a decision.** `passDecision` in `src/poller.ts` is a pure function from what a pass
+saw on GitHub (each project's state and its pull requests) and what the database has on record, to
+the commands to run. An event is one entry in the `EVENTS` table there: how it is found on a pull
+request, and the command that handles it. Each has a key, `<name>:<subject>`, such as `merged:12`.
+
+**Each event is handled once.** The record is the `poller_events` table, whose primary key is the
+project and the event's key, so a second record of the same event cannot be made.
+
+- What a pass found goes on record together with where the pass got to, before anything is run.
+  From then on the record alone says what is still to be handled.
+- A pass takes an event by raising its count of attempts from the number it read. Of two passes
+  that decided the same command, one finds nothing to take.
+- The event is recorded as handled only once its command has succeeded. A `landed` that failed,
+  or that was stopped with the service, stays on record and is tried again: on the next pass, then
+  after 2, 4, 8 minutes and so on, and every six hours from the tenth attempt. It is never given
+  up on, and `status` shows it as not handled.
+- Passes do not overlap. The timer does not start a pass while one is going, and a pass holds a
+  Postgres advisory lock, so one started by hand beside it does nothing.
+- A pass killed outright leaves its `landed` run recorded as `running`. The next pass records it
+  as `interrupted` and the event is tried again. This is the one way a `landed` can run twice for
+  one merge: the first may have finished its work on GitHub in the moment before it was killed.
+  `landed` sets the same labels and lifts the same blocks a second time, and comments again.
+
+**A project's first pass starts from that moment.** `poller_projects` holds, per project, GitHub's
+time at its first pass and how far the last pass's reading got. A pull request that merged before
+the first pass is never acted on, however often a later pass sees it.
+
+**A pass asks conditionally** (`src/poller-github.ts`). Every question a pass repeats is sent
+with the ETag of its last answer, and an answer of "unchanged" (304) is not counted against the
+App's rate limit. The answers and ETags are kept in `github_answers`. No credential is kept: a
+pass mints its installation tokens and holds them in memory until it ends.
+
+- The questions are: the App's installations, each installation's repositories, the head of each
+  project's default branch, and each handled project's pull requests (one listing, most recently
+  changed first). A project's `devkit.json` and sweep workflow are read again only when the head
+  of its default branch is a different commit.
+- A pass makes `1 + 2 x installations + projects + handled projects` requests when nothing has
+  happened, the installations' tokens among them.
+- **Whether those are free depends on what GitHub ties an ETag to, which has not been observed
+  with the real App.** If an ETag is good for the installation, a pass with its new token is told
+  "unchanged" throughout and an idle pass costs nothing but its tokens. If it is good only for
+  the token that got it, the lists are answered in full on every pass, and that is accepted: an
+  answer in full is read like any other, and for a handful of projects it comes to a few hundred
+  of the installation's 5,000 requests an hour. The head of a default branch is told "unchanged"
+  either way, since its ETag is the commit.
+- Each pass ends with a line saying how many times GitHub was asked and how many of the answers
+  were "unchanged", so the journal shows which of the two holds.
+
+Each `landed` is a run of its own kind in the `runs` table, with its output file, and is reported
+through `reportRun` like any other: a failure opens or comments on the failure issue for `landed`
+runs, and the next success closes it. A project whose pull requests could not be read is left
+alone for that pass and the others are still handled; the command then exits non-zero.
+
+## The service and its timers (on the machine)
 
 `vm/dev-vm-setup.sh` installs the code reviewer on the machine as a service of the unprivileged
 `reviewer` user. Run it from a checkout of the kit, as an admin: `sudo bash vm/dev-vm-setup.sh`. It
 is safe to run again.
 
-- **Units:** `code-reviewer-nightly.service` and `code-reviewer-nightly.timer`, from `vm/systemd/`.
-  The setup installs every `code-reviewer-*` service and timer in that directory.
+- **Units:** `code-reviewer-nightly.service` and `.timer` for the nightly run, and
+  `code-reviewer-poller.service` and `.timer` for the poller, from `vm/systemd/`. The setup
+  installs every `code-reviewer-*` service and timer in that directory.
 - **When:** 02:00 local time, in the machine's time zone. To change it, run the setup with the
   time: `sudo NIGHTLY_AT=03:30 bash vm/dev-vm-setup.sh`. A night missed while the machine was off
   runs when it is next up. Moving the time to one already past today starts a run at once.
 - **By hand:** `sudo systemctl start --no-block code-reviewer-nightly.service`. The log is
   `journalctl -u code-reviewer-nightly.service`.
+- **The poller:** a pass starts three minutes after the last one ended. To change the interval,
+  run the setup with it: `sudo POLL_EVERY=5min bash vm/dev-vm-setup.sh` (seconds, minutes or
+  hours: `90s`, `5min`, `1h`). The poller's service uses the same credentials file and the same
+  places as the nightly run, and has no update step: a pass runs whatever is checked out. Its
+  passes are skipped until the first nightly run has installed the code reviewer's dependencies.
+  A pass that has not finished in thirty minutes is stopped. By hand:
+  `sudo systemctl start code-reviewer-poller.service`; the log is
+  `journalctl -u code-reviewer-poller.service`.
 - **Where things are:** all under `/var/lib/code-reviewer`, which only the `reviewer` user can
   read. `kit/` is the code reviewer's own checkout, `workspaces/` the projects' checkouts
   (`REVIEWER_WORKSPACE_ROOT`) and `state/` the runs' output (`REVIEWER_STATE_DIR`).
@@ -382,6 +453,7 @@ intake → audit (scout + 10 auditors) → synthesis ──┬─ clean → gate
 - `src/nightly.ts` — the nightly run: its order of work and what it does after a failure, as decisions; `src/runs.ts` — the record of runs on the machine (run ids, output files, how a run ended) and the one place a command is run, given its time limit and told to stop
 - `src/night-summary.ts` — whether a night's summary is posted, its title and text, and the discussion category it goes in, as decisions; `src/post-summary.ts` — the `summary` command, which posts it
 - `src/nightly-checks.ts` — a project's nightly checks: the order they run in and what happens after one fails, as a decision; the account a failed run ends with; the `checks` command
+- `src/poller.ts` — a pass of the poller as a decision: the events it acts on, what it runs and when it tries again; `src/poller-github.ts` — what a pass asks GitHub, conditionally, and the answers it keeps; `src/poller-pass.ts` — the pass itself: the record of events, the lock, and running each command
 - `src/failure-side.ts` — which side a failed run is on, from the type of its error; `src/failure-issue.ts` — what a failure issue says and when it is opened, commented on and closed; `src/failure-report.ts` — which places a finished run is reported to, and the reporting (`reportRun`)
 - `bin/update.mjs` — brings the code reviewer's own checkout up to date before a nightly run; `src/project-row.ts` — creates a project's row the first time it is met
 - `../vm/` — the machine setup and the systemd units it installs

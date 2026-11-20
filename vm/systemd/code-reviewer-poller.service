@@ -1,0 +1,39 @@
+# One pass of the code reviewer's poller. Installed by vm/dev-vm-setup.sh; the timer of the same
+# name starts it every few minutes. By hand: sudo systemctl start code-reviewer-poller.service
+[Unit]
+Description=Code reviewer: one pass of the poller
+Wants=network-online.target
+After=network-online.target postgresql.service
+# Not before the nightly run's update step has installed the code reviewer's dependencies once:
+# on a machine just set up there is nothing to run yet. A pass skipped this way is not a failure.
+ConditionPathExists=/var/lib/code-reviewer/kit/reviewer/node_modules/.installed-from-lockfile
+
+[Service]
+# One pass and out. While it is going the timer cannot start another, so a pass never overlaps itself.
+Type=oneshot
+User=reviewer
+Group=reviewer
+
+# The same credentials as the nightly run, from the same file only root can read.
+EnvironmentFile=/etc/code-reviewer/credentials.env
+
+# The same places as the nightly run (see code-reviewer-nightly.service).
+StateDirectory=code-reviewer
+StateDirectoryMode=0700
+WorkingDirectory=/var/lib/code-reviewer/kit/reviewer
+Environment=REVIEWER_WORKSPACE_ROOT=/var/lib/code-reviewer/workspaces
+Environment=REVIEWER_STATE_DIR=/var/lib/code-reviewer/state
+Environment="REVIEWER_GIT_NAME=jm-code-reviewer[bot]"
+Environment="REVIEWER_GIT_EMAIL=338258166+jm-code-reviewer[bot]@users.noreply.github.com"
+
+# No update step: a pass runs whatever is checked out. Only the nightly run moves the checkout.
+# Not through bin/code-reviewer.mjs: the process systemd signals must be the one that handles it.
+ExecStart=/usr/bin/node --import tsx/esm src/cli.ts poll
+
+# A pass takes seconds, or a minute or two when pull requests have merged. One that hung would
+# hold every pass after it, so it is stopped here and the next pass takes up what it left.
+TimeoutStartSec=30min
+# On stop every process in the unit gets SIGTERM. The pass then records the command it was on as
+# interrupted, which needs the time allowed here before anything left is killed.
+KillMode=control-group
+TimeoutStopSec=90s

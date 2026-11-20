@@ -6,6 +6,7 @@ import {
   jsonb,
   pgEnum,
   pgTable,
+  primaryKey,
   serial,
   text,
   timestamp,
@@ -325,16 +326,17 @@ export const testDatabases = pgTable('test_databases', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
-// `checks`: one project's nightly checks, run after its sweep or by hand.
-export type RunKind = 'nightly' | 'sweep' | 'summary' | 'checks';
+// `checks`: one project's nightly checks, run after its sweep or by hand. `landed`: started by a
+// pass of the poller for a merged pull request, and part of no other run.
+export type RunKind = 'nightly' | 'sweep' | 'summary' | 'checks' | 'landed';
 // `interrupted`: stopped before its command finished, by its time limit or by the service stopping,
 // or found still `running` by the next run. Its work is taken up again by the next run.
 export type RunState = 'running' | 'succeeded' | 'failed' | 'interrupted';
 
 /**
- * A run of one of the code reviewer's commands on the machine: a nightly run, or one project's
- * part in it (its sweep, then the posting of the night's summary). `kind` and `state` are text, so
- * a new kind of run needs no migration.
+ * A run of one of the code reviewer's commands on the machine: a nightly run, one project's part
+ * in it (its sweep, then the posting of the night's summary), or a command a pass of the poller
+ * started. `kind` and `state` are text, so a new kind of run needs no migration.
  */
 export const runs = pgTable('runs', {
   // `run-<UTC start time>-<random>` (newRunId). The run's output is the file runOutputPath names.
@@ -343,7 +345,7 @@ export const runs = pgTable('runs', {
   // owner/name, not a repos row: a project's first run is recorded before it has one. Null for a
   // run that is not one project's, such as the nightly run itself.
   project: text('project'),
-  // The run this one is part of: the nightly run, for a project's sweep.
+  // The run this one is part of: the nightly run, for a project's sweep. Null for a run the poller started.
   parentId: text('parent_id').references((): AnyPgColumn => runs.id),
   state: text('state').$type<RunState>().notNull().default('running'),
   // Both set only on a run that failed of itself. A nightly run that failed only because a
@@ -352,4 +354,53 @@ export const runs = pgTable('runs', {
   errorType: text('error_type'),
   startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),
   finishedAt: timestamp('finished_at', { withTimezone: true }),
+});
+
+/**
+ * An event a pass of the poller found in a project, such as a merged pull request, and what
+ * became of it. The primary key is the rule that an event is handled once: a second record of
+ * the same event cannot be made, whichever pass tries.
+ */
+export const pollerEvents = pgTable(
+  'poller_events',
+  {
+    // owner/name, as in `runs`.
+    project: text('project').notNull(),
+    // `<name>:<subject>`, such as `merged:12`. The same event always has the same key.
+    event: text('event').notNull(),
+    // How many times its command has been started. A pass takes an event by raising this from
+    // the number it read, so two passes cannot both take it.
+    attempts: integer('attempts').notNull().default(0),
+    attemptedAt: timestamp('attempted_at', { withTimezone: true }),
+    // The run of its last attempt.
+    runId: text('run_id').references(() => runs.id),
+    // Set once its command has succeeded, and only then. Null: still to be handled.
+    handledAt: timestamp('handled_at', { withTimezone: true }),
+    foundAt: timestamp('found_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.project, t.event] })],
+);
+
+/** Where the poller's last pass over a project got to. A project has a row from its first pass. */
+export const pollerProjects = pgTable('poller_projects', {
+  project: text('project').primaryKey(),
+  // GitHub's time at the first pass. Nothing that happened before it is acted on.
+  startedAt: timestamp('started_at', { withTimezone: true }).notNull(),
+  // The newest change to a pull request that a pass has read: the next reads no further back.
+  seenTo: timestamp('seen_to', { withTimezone: true }).notNull(),
+  // The ETag of the listing of pull requests that pass read, sent back to ask "anything since?".
+  pullsEtag: text('pulls_etag'),
+  lastPassAt: timestamp('last_pass_at', { withTimezone: true }).notNull(),
+});
+
+/**
+ * The last answer GitHub gave to a question the poller repeats every pass, with the ETag sent
+ * back to ask "anything since?": which installations, which repositories, what a default branch
+ * holds. No credential is kept here: a pass mints its tokens and holds them in memory.
+ */
+export const githubAnswers = pgTable('github_answers', {
+  question: text('question').primaryKey(),
+  etag: text('etag'),
+  answer: jsonb('answer').notNull(),
+  askedAt: timestamp('asked_at', { withTimezone: true }).notNull().defaultNow(),
 });

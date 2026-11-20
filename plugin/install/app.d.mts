@@ -6,6 +6,9 @@ export declare class GitHubError extends Error {
   readonly status: number;
 }
 
+/** A JWT that authenticates as the App itself. `now` is in milliseconds. */
+export declare function appJwt(credentials: { clientId: string; privateKey: string }, now?: number): string;
+
 /** Every repository the App is installed on, as owner/name, with a token that can read it. */
 export declare function installedRepos(options: {
   fetch: typeof fetch;

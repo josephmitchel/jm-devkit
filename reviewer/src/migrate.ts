@@ -15,7 +15,7 @@ import { db, pool } from './db/client.js';
  * The lock is held on a connection of its own, so it serialises whole processes rather than
  * statements, and it is released even when a migration throws.
  */
-const LOCK_CLASS = 0x636f6465; // 'code' — arbitrary but stable, so every job picks the same lock
+export const LOCK_CLASS = 0x636f6465; // 'code' — arbitrary but stable, so every job picks the same lock
 const LOCK_KEY = 1;
 
 export async function runMigrations(): Promise<void> {
