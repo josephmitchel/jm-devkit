@@ -12,11 +12,15 @@ export interface DevkitConfig {
   $schema?: string;
   modules: Array<'process' | 'web' | 'canvas'>;
   kit?: string;
-  sweep: { hour: number };
+  /** Retired: accepted and ignored. */
+  sweep?: { hour: number };
   reviewer: {
     setup?: string;
     tests: Array<{ name: string; command: string }>;
     env?: Record<string, string>;
+    /** The environment variables that each get an empty database for the run. */
+    databases?: string[];
+    /** Retired: accepted, and read only by the workflow generator. */
     services?: Record<string, DevkitService>;
     harnessNotes?: string;
     redundancy?: number;

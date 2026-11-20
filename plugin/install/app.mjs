@@ -116,7 +116,8 @@ export async function takenHours({ fetch: fetchFn, credentials, repo, now }) {
     if (same(slug, repo)) continue;
     try {
       const config = parseDevkitConfig(await call(fetchFn, `/repos/${slug}/contents/devkit.json`, token, { raw: true }));
-      taken.push({ hour: config.sweep.hour, slug, from: 'devkit.json' });
+      // A project swept by the owner's machine has no sweep section, and so no hour.
+      if (config.sweep) taken.push({ hour: config.sweep.hour, slug, from: 'devkit.json' });
     } catch (e) {
       if (e instanceof GitHubError && e.status === 404) skipped.push({ slug, why: 'no devkit.json' });
       else if (e instanceof DevkitConfigError) skipped.push({ slug, why: e.message });
