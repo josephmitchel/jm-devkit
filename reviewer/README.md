@@ -60,10 +60,13 @@ per-PR review, run on demand by labelling a PR `review-now`. Adding a project:
    `node bin/code-reviewer.mjs repo add owner/name`, with no options, since `devkit.json` holds the
    setup and tests.
 
-The App needs these repository permissions: Contents, Issues, Pull requests, Commit statuses and
-Actions (all read and write), Metadata (read), and **Workflows (read and write)** — without the last
-one, GitHub rejects any fix that touches a file under `.github/workflows/`, and the push fails with
-nothing else in the system able to explain why.
+The App needs these repository permissions: Contents, Issues, Pull requests, Commit statuses,
+Actions and **Discussions** (all read and write), Metadata (read), and **Workflows (read and
+write)** — without the last one, GitHub rejects any fix that touches a file under
+`.github/workflows/`, and the push fails with nothing else in the system able to explain why.
+Discussions is what lets the code reviewer post each night's summary (see "The night's summary").
+Granting a permission added to the App is the owner's step, as are the two things each project
+needs for its summaries: Discussions turned on, and a discussion category named `Code reviewer`.
 
 Everything that accumulates is scoped per repo: the review slot (one active review per project,
 so projects never queue behind each other), concerns, and the policies built from your answers.
@@ -168,7 +171,8 @@ settle owner decisions → read answers → audit base...head → synthesis → 
   re-block the tickets the merge unblocked. The rule agents follow is "Closing work through PRs" in
   the plugin's `plugin/docs/issue-tracker.md`.
 - **What happened:** every action leaves a comment on the issue it touched, and the run's log
-  ends with the synthesis's account of the night. A sweep that stops fails its Actions run, so
+  ends with the synthesis's account of the night. On the machine that account is also posted as a
+  discussion in the project ("The night's summary"). A sweep that stops fails its Actions run, so
   GitHub's failed-run notification is the alert; the next run resumes where it stopped.
   `code-reviewer status` lists the recent sweeps.
 
@@ -185,15 +189,15 @@ versa; running both on the same repo at the same moment is not supported.
 
 `node bin/code-reviewer.mjs nightly` runs one night for every project the machine handles. It asks
 the App for the projects (the `projects` command's list), takes the handled ones in name order and
-runs each one's sweep, one at a time, each as a `sweep` command in a process of its own. A project
-that is not handled is left alone, with a line saying why. A sweep that fails is recorded and the
-run goes on to the next project; the command exits non-zero when any project failed, or when the
-projects could not be found. It needs the App's credentials and the database address in its
+runs each one's sweep and then posts its summary, one at a time, each as a `sweep` or `summary`
+command in a process of its own. A project that is not handled is left alone, with a line saying
+why. A step that fails is recorded and the run goes on to the next; the command exits non-zero
+when any step failed, or when the projects could not be found. It needs the App's credentials and the database address in its
 environment, as `projects` and `sweep` do.
 
 Every run is a row in the `runs` table with a run id (`run-<UTC start time>-<random>`, which names
-no project): the nightly run itself, and under it one row per project with how it ended and, when it
-failed, the stage it stopped in and the type of error. `code-reviewer status` lists the five most
+no project): the nightly run itself, and under it one row for each project's sweep and one for its
+summary, with how it ended and, when it failed, the stage it stopped in and the type of error. `code-reviewer status` lists the five most
 recent nightly runs with each project's result.
 
 Everything a run's command wrote is kept in a file named by the run id, `runs/<run id>.log` under
@@ -202,13 +206,42 @@ that is not set. It never leaves the machine, and a state directory inside the p
 (`REVIEWER_WORKSPACE_ROOT`) is refused, since that is where a project's own commands run. The same
 output goes to the command's own output as it comes, so the system journal has it too.
 
+### The night's summary
+
+After a project's sweep, `node bin/code-reviewer.mjs summary owner/name` posts the night as a
+discussion in that project: the synthesis's account that ends the sweep's log, then what the sweep
+did (what landed, what it filed and closed, the tickets it judged, the owner's decisions it
+settled), each issue by its number. Nothing is run again: the post is made from the sweep's row and
+its round's. The title is `Nightly summary, <date>`, the date the sweep finished on the machine's
+own calendar.
+
+- **A quiet night posts nothing.** A sweep with no diff, nothing judged and no decision settled is
+  skipped, as is a sweep that did not finish. The rule is `summaryPlan` in `src/night-summary.ts`.
+- **One discussion per sweep.** The discussion's address is recorded on the sweep's row
+  (`sweeps.discussion_url`, shown by `status`), so a nightly run started again the same night, or
+  the command run by hand, posts nothing more. Only a project's latest sweep is ever posted: a
+  night that could not be posted is not caught up once a later sweep has run, so after creating a
+  missing category run `summary` by hand to post that night.
+- **The category** is named by the setting `REVIEWER_DISCUSSION_CATEGORY`, `Code reviewer` when it
+  is not set, and matched whatever its capitals. GitHub's API creates discussions but not
+  categories (checked 2026-11-20: no such mutation in the GraphQL schema, and no discussions
+  endpoint in REST), so the owner creates it: in the project, turn on Discussions (Settings,
+  General, Features), then Discussions, the pencil beside Categories, New category, with the
+  format Open-ended discussion.
+- **A project with discussions off, or without the category,** fails the summary on the project's
+  side: a failure issue in the project says what to create. It is checked on every night, a quiet
+  one included, so the issue stays open until the category exists and closes at the first summary
+  run after that. The summary is a run of its own kind (`summary`), so the sweep's recorded result
+  is never changed by a summary that could not be posted.
+
 ### Failure issues
 
 A run that fails tells the owner through an issue, filed where the fault is. `reportRun`
 (`src/failure-report.ts`) is called with every finished run and decides the rest.
 
-- **The project's side:** its project config is invalid, or its setup command failed. The issue is
-  opened in that project, with the end of the run's output. Which types of error are a project's
+- **The project's side:** its project config is invalid, its setup command failed, or it has no
+  discussion category for the night's summary. The issue is opened in that project, with the end
+  of the run's output. Which types of error are a project's
   fault is one list in `src/failure-side.ts`.
 - **Everything else** is the code reviewer's side, a run its time limit stopped included. The issue
   is opened in the kit's repository: `REVIEWER_KIT_REPO`, which defaults to the kit's own. That
@@ -252,6 +285,7 @@ intake → audit (scout + 10 auditors) → synthesis ──┬─ clean → gate
 - `src/sweep/*` — the nightly sweep: `loop.ts` driver, `judge.ts` (owner decisions: `wontfix`, hand closes, ticked minors), `tickets.ts` (`needs-judging` tickets, concerns included), `answers.ts`, `publish.ts`, `render.ts` (issue/digest/status text)
 - `src/projects.ts` — which projects there are and whether the machine handles each: asked of the App, never listed in the kit (ADR 0004)
 - `src/nightly.ts` — the nightly run: its order of work and what it does after a failure, as decisions; `src/runs.ts` — the record of runs on the machine (run ids, output files, how a run ended)
+- `src/night-summary.ts` — whether a night's summary is posted, its title and text, and the discussion category it goes in, as decisions; `src/post-summary.ts` — the `summary` command, which posts it
 - `src/failure-side.ts` — which side a failed run is on, from the type of its error; `src/failure-issue.ts` — what a failure issue says and when it is opened, commented on and closed; `src/failure-report.ts` — which places a finished run is reported to, and the reporting (`reportRun`)
 - `src/agents/run-agent.ts` — Agent SDK wrapper (structured output, session recording, resume)
 - `worker/` — the Cloudflare Worker that starts each repo's sweep on time, as the App (`worker/README.md`)
