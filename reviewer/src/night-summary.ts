@@ -1,3 +1,4 @@
+import { discussionCategory, findDiscussionCategory, missingDiscussionCategory } from '../../plugin/discussion-category.mjs';
 import type { SweepSummary } from './db/schema.js';
 
 /**
@@ -86,13 +87,9 @@ export function summaryPlan(night: Night | null, timeZone?: string): SummaryPlan
   return { action: 'post', title: summaryTitle(night.finishedAt, timeZone), body };
 }
 
-const CATEGORY_VAR = 'REVIEWER_DISCUSSION_CATEGORY';
-const CATEGORY = 'Code reviewer';
-
-/** The name of the discussion category a night's summary is posted in. */
-export function discussionCategory(env: NodeJS.ProcessEnv = process.env): string {
-  return env[CATEGORY_VAR]?.trim() || CATEGORY;
-}
+// The category's name, the matching and the owner's instructions are in the plugin, where
+// install's check reads them too.
+export { discussionCategory };
 
 /** What GitHub says about a project's discussions. */
 export interface DiscussionSetup {
@@ -107,24 +104,14 @@ export interface DiscussionSetup {
  */
 export class MissingDiscussionCategoryError extends Error {
   constructor(project: string, category: string, enabled: boolean) {
-    const create =
-      `a discussion category named "${category}" (the project's Discussions tab, the pencil beside ` +
-      'Categories, New category; format: Open-ended discussion)';
-    super(
-      (enabled
-        ? `${project} has no discussion category named "${category}". Create ${create}.`
-        : `${project} has discussions turned off. In the project's settings on GitHub, turn on Discussions ` +
-          `(Settings, General, Features), then create ${create}.`) +
-        " The code reviewer posts each night's summary there. It cannot create the category: GitHub's API has no call for it.",
-    );
+    super(missingDiscussionCategory(project, category, enabled));
     this.name = 'MissingDiscussionCategoryError';
   }
 }
 
 /** The ids GitHub needs to create a discussion in the project's category of that name. */
 export function discussionTarget(project: string, setup: DiscussionSetup, category: string): { repositoryId: string; categoryId: string } {
-  const wanted = category.trim().toLowerCase();
-  const found = setup.enabled ? setup.categories.find((c) => c.name.trim().toLowerCase() === wanted) : undefined;
+  const found = findDiscussionCategory(setup, category);
   if (!found) throw new MissingDiscussionCategoryError(project, category.trim(), setup.enabled);
   return { repositoryId: setup.repositoryId, categoryId: found.id };
 }

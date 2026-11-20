@@ -20,7 +20,7 @@ export interface DevkitConfig {
     env?: Record<string, string>;
     /** The environment variables that each get an empty database for the run. */
     databases?: string[];
-    /** Retired: accepted, and read only by the workflow generator. */
+    /** Retired: accepted, and read by nothing but the sweep workflow's last form. */
     services?: Record<string, DevkitService>;
     harnessNotes?: string;
     redundancy?: number;

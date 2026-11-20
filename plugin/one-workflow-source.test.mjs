@@ -1,5 +1,6 @@
-// The generator is the only source of a project's code reviewer workflow. Hand-copied templates
-// drifted from it before; this keeps a second one from coming back anywhere in the kit.
+// The generator's folder is the only place in the kit that holds a code reviewer workflow's text.
+// Hand-copied templates drifted from it before; this keeps a second one from coming back anywhere
+// in the kit. The workflow is retired, so nothing writes it now, but its last form is still there.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -7,14 +8,15 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { generate } from './generator/generate.mjs';
+import { SWEEP_WORKFLOW } from './generator/generate.mjs';
+import { lastSweepWorkflow } from './generator/retired-sweep-workflow.mjs';
 
 const kitRoot = fileURLToPath(new URL('../', import.meta.url));
 const self = relative(kitRoot, fileURLToPath(import.meta.url)).split(sep).join('/');
 const SKIPPED_DIRS = new Set(['node_modules', '.git']);
 
-// The generator and its tests hold the workflow's text on purpose. This file is skipped because
-// it holds the very lines it looks for, as checks that the patterns still catch them.
+// The generator's folder and its tests hold the workflow's text on purpose. This file is skipped
+// because it holds the very lines it looks for, as checks that the patterns still catch them.
 const exempt = (path) => path.startsWith('plugin/generator/') || path === self;
 
 // A job step on the code reviewer's action, under its old name or its place in the kit.
@@ -54,10 +56,12 @@ function templateLines(path, text) {
   return hits;
 }
 
-// The kit is a project too, so its own generated workflow names the action. It passes only while
-// it is exactly what the generator gives for the kit's devkit.json: a hand edit makes it a template.
+// The kit is a project too, and until it moves to the owner's machine it keeps its own copy of the
+// retired workflow, which names the action. That copy passes only while it is exactly the
+// workflow's last form for the kit's devkit.json: a hand edit makes it a template. Once the kit
+// has moved there is no copy, and nothing here asks for one.
 const kitConfig = JSON.parse(readFileSync(join(kitRoot, 'devkit.json'), 'utf8'));
-const generated = generate(kitConfig);
+const retiredCopy = { [SWEEP_WORKFLOW]: lastSweepWorkflow(kitConfig) };
 
 test('the patterns catch the lines of the old hand-copied templates', () => {
   const old = [
@@ -88,7 +92,7 @@ test('no file outside the generator is a hand-copied code reviewer workflow', ()
   for (const path of all) {
     if (exempt(path)) continue;
     const text = readFileSync(join(kitRoot, path), 'utf8');
-    if (generated[path] === text) continue;
+    if (retiredCopy[path] === text) continue;
     found.push(...templateLines(path, text));
   }
   assert.deepEqual(found, []);

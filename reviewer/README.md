@@ -45,23 +45,27 @@ refuses the App.
 than on your machine. State lives in Postgres and nothing blocks: a review that needs an answer
 exits, and a later run continues it once you have replied.
 
-A project's workflow is never written by hand. It is the kit-owned
-`.github/workflows/nightly-sweep.yml`, which `plugin/generator/` writes from the project's
-`devkit.json` (ADR 0004): the `sweep` job, the `landed` job, and the `review-now` job, which is the
-per-PR review, run on demand by labelling a PR `review-now`. Adding a project:
+A project on GitHub Actions has the kit-owned `.github/workflows/nightly-sweep.yml`: the `sweep`
+job, the `landed` job, and the `review-now` job, which is the per-PR review, run on demand by
+labelling a PR `review-now`. The kit has retired that file. The generator (`plugin/generator/`) no
+longer writes it, so no project is added to Actions any more, and a project that still has it
+keeps working there until it moves: `/devkit:sync` opens a pull request that removes the workflow,
+and merging that pull request hands the project to the machine (`projects` then shows it
+`handled`). The pull request lists what is left for the owner: the project's four repository
+secrets to remove, and its line in the Worker's list (`worker/README.md`).
 
-1. Run `/devkit:install` in the project. It writes `devkit.json`, runs the generator to write the
-   workflow, sets the secrets (`DATABASE_URL`, `CLAUDE_CODE_OAUTH_TOKEN`,
-   `REVIEWER_APP_CLIENT_ID`, `REVIEWER_APP_PRIVATE_KEY`) and creates the `review-now` label
-   (`plugin/skills/kit/install/SKILL.md`).
+Adding a project, which puts it on the machine from the start:
+
+1. Run `/devkit:install` in the project. It writes `devkit.json`, creates the `review-now` label,
+   and checks two things it cannot do itself: that the App is installed, and that the project has
+   discussions turned on with the code reviewer's category
+   (`plugin/skills/kit/install/SKILL.md`). It sets no repository secret and writes no workflow.
 2. Install the code reviewer's GitHub App on the project. This is the owner's step: a `gh` login
    cannot add a repository to an App's installation.
-3. Until the Worker finds projects through the App, give the project its sweep slot in the Worker
-   (`worker/README.md`, "Add a repo").
-4. For a project on GitHub Actions, create its database row:
-   `node bin/code-reviewer.mjs repo add owner/name`, with no options, since `devkit.json` holds the
-   setup and tests. On the machine the nightly run creates the row the first night it meets the
-   project.
+3. Create what install said is missing for the summaries (see "The night's summary").
+
+The nightly run creates the project's database row the first night it meets the project. A project
+still on GitHub Actions got its row from `node bin/code-reviewer.mjs repo add owner/name`.
 
 The App needs these repository permissions: Contents, Issues, Pull requests, Commit statuses,
 Actions and **Discussions** (all read and write), Metadata (read), and **Workflows (read and
@@ -104,7 +108,7 @@ it has just made (so a PR that changes it is set up and tested as it says):
   (`reviewer.tests[0].command is required`). It never falls back to the row.
 
 The code reviewer validates the file with the kit's one small interpreter of the schema's keywords
-(`plugin/devkit-config.mjs`, which the workflow generator uses too), so the schema stays the one
+(`plugin/devkit-config.mjs`, which the generator uses too), so the schema stays the one
 definition; its tests fail if the schema starts using a keyword the interpreter does not enforce.
 
 ### Test databases
@@ -181,9 +185,8 @@ settle owner decisions → read answers → audit base...head → synthesis → 
   GitHub's failed-run notification is the alert; the next run resumes where it stopped.
   `code-reviewer status` lists the recent sweeps.
 
-Run it with `node bin/code-reviewer.mjs sweep owner/name`, or on Actions with the
-`.github/workflows/nightly-sweep.yml` that `plugin/generator/` writes from the project's
-`devkit.json` (`command: sweep`). GitHub's `schedule` trigger is
+Run it with `node bin/code-reviewer.mjs sweep owner/name`, or on Actions with the retired
+`.github/workflows/nightly-sweep.yml` of a project that has not moved (`command: sweep`). GitHub's `schedule` trigger is
 best-effort (hours late in practice), so the schedule lives in a Cloudflare Worker that dispatches
 each repo's workflow on the minute as the reviewer's App: `worker/README.md`. That workflow also carries a
 `review-now` job: label a PR `review-now` to get the full PR review on demand. The two modes share
@@ -241,7 +244,10 @@ own calendar.
   night that could not be posted is not caught up once a later sweep has run, so after creating a
   missing category run `summary` by hand to post that night.
 - **The category** is named by the setting `REVIEWER_DISCUSSION_CATEGORY`, `Code reviewer` when it
-  is not set, and matched whatever its capitals. GitHub's API creates discussions but not
+  is not set, and matched whatever its capitals. The name, the matching and the words the owner is
+  told are in `plugin/discussion-category.mjs`, which install's check
+  (`plugin/install/discussions.mjs`) reads too, so install and the code reviewer agree on whether
+  a project is ready. GitHub's API creates discussions but not
   categories (checked 2026-11-20: no such mutation in the GraphQL schema, and no discussions
   endpoint in REST), so the owner creates it: in the project, turn on Discussions (Settings,
   General, Features), then Discussions, the pencil beside Categories, New category, with the

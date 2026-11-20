@@ -1,12 +1,12 @@
 ---
 name: sync
-description: Bring the project's kit-owned files level with the installed kit, and open a pull request with the change.
+description: Bring the project's kit-owned files level with the installed kit, and open a pull request with the change. Removes a kit-owned file the kit has retired; removing the sweep workflow moves the project's code reviewer to the owner's machine.
 disable-model-invocation: true
 ---
 
 Sync brings this project's kit-owned files level with the kit the plugin was installed from. It runs only because the user asked; never start it on your own, and never suggest running it on a schedule.
 
-The generator is the only thing that writes a kit-owned file: `${CLAUDE_PLUGIN_ROOT}/generator/generate.mjs` (its README beside it gives the exit codes). Sync writes the files it lists and the `kit` field of `devkit.json`, and nothing else. Every other file in the project is project-owned or not the kit's at all, including the rest of `devkit.json`: leave them alone even when they look out of date. If a kit-owned file cannot be made what the user wants by the generator, the change belongs in `devkit.json` or in the kit, not in the file.
+The generator is the only thing that writes or removes a kit-owned file: `${CLAUDE_PLUGIN_ROOT}/generator/generate.mjs` (its README beside it gives the exit codes). It removes a **retired** file: a kit-owned file the kit no longer writes. Sync writes and removes the files the generator lists, sets the `kit` field of `devkit.json`, and changes nothing else. Every other file in the project is project-owned or not the kit's at all, including the rest of `devkit.json`: leave them alone even when they look out of date. If a kit-owned file cannot be made what the user wants by the generator, the change belongs in `devkit.json` or in the kit, not in the file.
 
 Shell state does not carry between commands, so write out each path in full.
 
@@ -18,7 +18,7 @@ Run `node "${CLAUDE_PLUGIN_ROOT}/generator/generate.mjs" <root> --check`:
 
 - **Exit 0**: tell the user the project is level with the kit. Stop: no branch, no commit, no pull request.
 - **Exit 2**: `devkit.json` is not valid. Show the user the errors from stderr and stop. `devkit.json` is the user's file; do not fix it for them unasked.
-- **Exit 1**: the paths on stdout are behind. Go on.
+- **Exit 1**: the paths on stdout are behind. A path that stderr calls retired (`<path> is retired: <what removing it does>`) will be removed; the others will be written. Go on.
 
 ## 2. Work on a branch from the default branch
 
@@ -31,9 +31,11 @@ Follow the Git house rule. Work in a worktree of your own, so the user's checkou
 
 ## 3. Regenerate and show the difference
 
-Run `node "${CLAUDE_PLUGIN_ROOT}/generator/generate.mjs" <tmp>`. It writes only the kit-owned files that differ and prints `wrote <path>` for each. If it writes nothing (the default branch is already level, a sync merged since the user's checkout was made, say), remove the worktree and its branch, tell the user the default branch is level, and stop. If it exits 2, the default branch's `devkit.json` is not valid: show the errors, remove the worktree and its branch, and stop.
+Run `node "${CLAUDE_PLUGIN_ROOT}/generator/generate.mjs" <tmp>`. It writes only the kit-owned files that differ, printing `wrote <path>` for each, and removes each retired file the branch still has, printing `removed <path>`. If it prints nothing (the default branch is already level, a sync merged since the user's checkout was made, say), remove the worktree and its branch, tell the user the default branch is level, and stop. If it exits 2, the default branch's `devkit.json` is not valid: show the errors, remove the worktree and its branch, and stop.
 
-Show the user `git -C <tmp> diff` for the written files, in full for a file that changed and as a list for a file that is new, with a sentence on what the change amounts to.
+Show the user `git -C <tmp> status --short` and the diff of the written files, in full for a file that changed and as a list for a file that is new or removed, with a sentence on what the change amounts to.
+
+**If the generator printed `removed .github/workflows/nightly-sweep.yml`, this sync is a move**: merging its pull request takes the project's code reviewer off GitHub Actions and hands the project to the code reviewer on the owner's machine. Read `${CLAUDE_PLUGIN_ROOT}/skills/kit/sync/moving-to-the-machine.md` now, before going on. It has what to gather, what to tell the user before a pull request exists, and the title and opening section the pull request must carry.
 
 ## 4. Record the kit commit
 
@@ -43,8 +45,8 @@ Run the check again in `<tmp>`. It must exit 0; if it does not, show the user wh
 
 ## 5. Open the pull request
 
-- Stage the written paths and `devkit.json` by path, nothing else, and commit with a message such as `Sync kit-owned files with the kit at <kit>`.
-- `git -C <tmp> push -u origin devkit-sync-<kit>`, then `gh pr create` from `<tmp>` with the base set to the default branch. The body says which kit-owned files changed and why, in a sentence each, and names the kit commit as a link to `https://github.com/josephmitchel/jm-devkit/commit/<kit>`.
+- Stage the written and removed paths and `devkit.json` by path (`git add <path>` stages a removal too), nothing else, and commit with a message such as `Sync kit-owned files with the kit at <kit>`.
+- `git -C <tmp> push -u origin devkit-sync-<kit>`, then `gh pr create` from `<tmp>` with the base set to the default branch. The body says which kit-owned files were written or removed and why, in a sentence each, and names the kit commit as a link to `https://github.com/josephmitchel/jm-devkit/commit/<kit>`. A move's title and opening section come from `moving-to-the-machine.md`.
 - Remove the worktree with `git -C <root> worktree remove <tmp>` (the branch stays: it is the pull request's).
 
 Give the user the pull request's link. Merging is theirs.

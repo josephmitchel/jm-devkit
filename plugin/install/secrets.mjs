@@ -3,6 +3,10 @@
 // repository already has is left alone. Each value goes to `gh secret set` on stdin: it is never
 // an argument, never printed and never logged.
 //
+// Install no longer runs this: the code reviewer runs on the owner's machine and a project there
+// needs no repository secrets. It stays for a project still on GitHub Actions, whose workflow
+// reads the four, until the last one has moved.
+//
 //   node secrets.mjs <owner/repo> [--dry-run]
 //
 // Prints `set NAME` for each secret it sets (or, with --dry-run, would set); nothing when the
