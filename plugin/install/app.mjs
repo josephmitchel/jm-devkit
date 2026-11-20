@@ -13,6 +13,9 @@
 // Exit 2 when the App's credentials are not in the secrets file, on bad arguments, or when GitHub
 // refuses the App.
 //
+// Install no longer runs `hour`: the owner's machine sweeps every project in one nightly run, so
+// there are no slots. It stays for a project still on GitHub Actions until the last one has moved.
+//
 // The code reviewer finds its projects with `installedRepos` and `defaultBranchFile` from here
 // (reviewer/src/projects.ts), so there is one way to list what the App is installed on.
 
