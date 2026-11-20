@@ -160,6 +160,8 @@ export const sweeps = pgTable('sweeps', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   finishedAt: timestamp('finished_at', { withTimezone: true }),
+  // The discussion this sweep's summary was posted as. Set once, so a sweep is posted once.
+  discussionUrl: text('discussion_url'),
 });
 
 export const reviews = pgTable(
