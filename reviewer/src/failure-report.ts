@@ -66,8 +66,7 @@ export function outputTail(output: string, testDatabaseServer: string | undefine
 function ownOutcome(run: Run): 'succeeded' | 'failed' | null {
   if (run.state === 'succeeded') return 'succeeded';
   if (run.state === 'failed') return run.errorType === null ? 'succeeded' : 'failed';
-  // As text: `interrupted`, and `time limit` as what stopped it, are recorded by the time limit's own code.
-  if ((run.state as string) === 'interrupted' && run.errorType === 'time limit') return 'failed';
+  if (run.state === 'interrupted' && run.errorType === 'time limit') return 'failed';
   return null;
 }
 

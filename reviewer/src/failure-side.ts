@@ -33,6 +33,7 @@ export class NightlyCheckError extends Error {
 const PROJECT_FAULTS = new Map<string, string>([
   ['DevkitConfigError', 'its project config (`devkit.json`) is invalid'],
   ['SetupCommandError', 'its setup command failed'],
+  ['MissingDiscussionCategoryError', "it has discussions turned off, or no discussion category for the code reviewer's summaries"],
   ['NightlyCheckError', 'one of its nightly checks failed'],
 ]);
 

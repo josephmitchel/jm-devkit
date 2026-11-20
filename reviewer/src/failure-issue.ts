@@ -42,7 +42,12 @@ export type IssueAction =
   | { action: 'close'; issue: number; body: string };
 
 // Each kind of run in words that follow "A" and "The code reviewer's". A new kind adds its words here.
-const KIND_WORDS: Record<RunKind, string> = { nightly: 'nightly run', sweep: 'sweep', checks: 'run of the nightly checks' };
+const KIND_WORDS: Record<RunKind, string> = {
+  nightly: 'nightly run',
+  sweep: 'sweep',
+  summary: 'nightly summary',
+  checks: 'run of the nightly checks',
+};
 
 // A type of error is shown by name only when it is on this list, is a project's fault (see
 // failure-side.ts) or is in one of the fixed forms a run's result is recorded in. A new error class of the code

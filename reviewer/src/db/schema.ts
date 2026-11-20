@@ -160,6 +160,8 @@ export const sweeps = pgTable('sweeps', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   finishedAt: timestamp('finished_at', { withTimezone: true }),
+  // The discussion this sweep's summary was posted as. Set once, so a sweep is posted once.
+  discussionUrl: text('discussion_url'),
 });
 
 export const reviews = pgTable(
@@ -324,12 +326,15 @@ export const testDatabases = pgTable('test_databases', {
 });
 
 // `checks`: one project's nightly checks, run after its sweep or by hand.
-export type RunKind = 'nightly' | 'sweep' | 'checks';
-export type RunState = 'running' | 'succeeded' | 'failed';
+export type RunKind = 'nightly' | 'sweep' | 'summary' | 'checks';
+// `interrupted`: stopped before its command finished, by its time limit or by the service stopping,
+// or found still `running` by the next run. Its work is taken up again by the next run.
+export type RunState = 'running' | 'succeeded' | 'failed' | 'interrupted';
 
 /**
  * A run of one of the code reviewer's commands on the machine: a nightly run, or one project's
- * part in it. `kind` and `state` are text, so a new kind of run needs no migration.
+ * part in it (its sweep, then the posting of the night's summary). `kind` and `state` are text, so
+ * a new kind of run needs no migration.
  */
 export const runs = pgTable('runs', {
   // `run-<UTC start time>-<random>` (newRunId). The run's output is the file runOutputPath names.
@@ -342,7 +347,7 @@ export const runs = pgTable('runs', {
   parentId: text('parent_id').references((): AnyPgColumn => runs.id),
   state: text('state').$type<RunState>().notNull().default('running'),
   // Both set only on a run that failed of itself. A nightly run that failed only because a
-  // project's run did has neither.
+  // project's run did has neither. On an interrupted run, `error_type` says what stopped it.
   stage: text('stage'),
   errorType: text('error_type'),
   startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),

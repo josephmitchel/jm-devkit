@@ -166,7 +166,7 @@
                 "minLength": 1
               },
               "command": {
-                "description": "The shell command that runs the check, with `sh -c` from the project root. A non-zero exit is a failing check, and so is a check stopped for running longer than a project command may.",
+                "description": "The shell command that runs the check, with `sh -c` from the project root. A non-zero exit is a failing check, and so is a check stopped for running longer than a check may: thirty minutes, unless the machine is set otherwise.",
                 "type": "string",
                 "minLength": 1
               }

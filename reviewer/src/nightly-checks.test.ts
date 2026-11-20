@@ -4,7 +4,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { outputTail } from './failure-report.js';
-import { checksAccount, checksDecision, checksNamed, checksOwner, runChecks, type CheckResult } from './nightly-checks.js';
+import { checksAccount, checksDecision, checksNamed, checksOwner, checkTimeoutMs, runChecks, type CheckResult } from './nightly-checks.js';
 import { errorTypeLine } from './runs.js';
 import { leftBehind, planDatabases } from './test-databases.js';
 import { checksWorkspacePath, workspacePath } from './workspace.js';
@@ -196,6 +196,13 @@ describe("running a project's nightly checks in its checkout", () => {
     expect(ended(results)).toEqual(['stuck: failed (stopped after 0 minutes)', 'after: passed']);
     expect(results[0].tail).toContain('started');
   }, 20_000);
+
+  it('gives a check thirty minutes unless the machine is set otherwise, three times what a test suite gets', () => {
+    expect(checkTimeoutMs({})).toBe(30 * 60 * 1000);
+    expect(checkTimeoutMs({ REVIEWER_CHECK_TIMEOUT_MS: '5400000' })).toBe(90 * 60 * 1000);
+    expect(checkTimeoutMs({ REVIEWER_CHECK_TIMEOUT_MS: 'soon' })).toBe(30 * 60 * 1000);
+    expect(checkTimeoutMs({ REVIEWER_COMMAND_TIMEOUT_MS: '1000' })).toBe(30 * 60 * 1000);
+  });
 
   it('fails a check whose command does not exist, as the shell reports it', async () => {
     const results = await runChecks(checkout, { nightlyChecks: [{ name: 'typo', command: 'no-such-command-here' }], env: {} }, write);

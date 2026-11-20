@@ -362,14 +362,14 @@ const STREAM_CLOSES_WITHIN_MS = 5000;
 /**
  * Run a repo command for everything it writes: each piece goes to `write` as it comes, where
  * {@link runRepoCommand} keeps only a trimmed failure. The command gets the same environment
- * (see repoCommandEnv) and the same time to run.
+ * (see repoCommandEnv), and is stopped once it has run for `timeoutMs`.
  */
 export function streamRepoCommand(
   dir: string,
   command: string,
   projectEnv: Record<string, string>,
   write: (chunk: string) => void,
-  timeoutMs = COMMAND_TIMEOUT_MS,
+  timeoutMs: number,
 ): Promise<StreamedCommand> {
   const activity = track(`command "${command.length > 60 ? `${command.slice(0, 57)}...` : command}"`);
   return new Promise((resolve) => {

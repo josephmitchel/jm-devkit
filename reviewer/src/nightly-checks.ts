@@ -8,7 +8,7 @@ import { NightlyCheckError, SetupCommandError } from './failure-side.js';
 import { getBranchHead, getDefaultBranch, getDefaultBranchFile } from './github.js';
 import { markStage } from './heartbeat.js';
 import { readProjectSetup, type ProjectRow, type ProjectSetup } from './project-config.js';
-import { errorType, finishRun, runCommand, runLine, runLog, startRun, type CHECKS_STAGES, type RunResult } from './runs.js';
+import { errorType, finishRun, runCommand, runLine, runLog, startRun, type CHECKS_STAGES, type Run, type RunResult } from './runs.js';
 import { droppingTestDatabases, provideTestDatabases, type RunOwner } from './test-databases.js';
 import { checksWorkspacePath, prepareWorkspace, runRepoCommand, streamRepoCommand, type StreamedCommand } from './workspace.js';
 
@@ -76,6 +76,15 @@ export function checksAccount(results: CheckResult[]): string {
   return [...sections, `${failed.length} of ${results.length} nightly check(s) failed: ${failed.map((r) => r.name).join(', ')}`].join('\n');
 }
 
+// A check is in the nightly run because it is slow, so it gets longer than a test suite does.
+const CHECK_TIMEOUT_MS = 30 * 60 * 1000;
+
+/** How long one check may run before it is stopped and counted as failed. */
+export function checkTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
+  const set = Number(env.REVIEWER_CHECK_TIMEOUT_MS);
+  return Number.isInteger(set) && set > 0 ? set : CHECK_TIMEOUT_MS;
+}
+
 function checkResult(name: string, ended: StreamedCommand): CheckResult {
   const how =
     ended.timedOutAfterMs !== null
@@ -97,7 +106,7 @@ export async function runChecks(
   checkoutDir: string,
   project: Pick<ProjectSetup, 'nightlyChecks' | 'env'>,
   write: (chunk: string) => void = (chunk) => void process.stdout.write(chunk),
-  timeoutMs?: number,
+  timeoutMs: number = checkTimeoutMs(),
 ): Promise<CheckResult[]> {
   const results: CheckResult[] = [];
   let decision = checksDecision(project.nightlyChecks, results);
@@ -160,9 +169,10 @@ export async function runProjectChecks(slug: string): Promise<void> {
 
 /**
  * Run one project's nightly checks by hand: recorded as a run of its own and reported like the
- * step of a nightly run. A project that names none gets no run and no checkout.
+ * step of a nightly run. A project that names none gets no run and no checkout. The caller has
+ * stop signals stop the run (stopCommandsOnSignal), so one stopped by hand ends `interrupted`.
  */
-export async function runChecksOnDemand(slug: string): Promise<'no checks' | 'succeeded' | 'failed'> {
+export async function runChecksOnDemand(slug: string): Promise<'no checks' | Run['state']> {
   if (checksNamed(await getDefaultBranchFile(slug, CONFIG_FILE)).length === 0) {
     console.log(`${slug} names no nightly checks: nothing to run`);
     return 'no checks';
@@ -179,5 +189,5 @@ export async function runChecksOnDemand(slug: string): Promise<'no checks' | 'su
   const finished = await finishRun(run, result);
   say(runLine(finished));
   await reportRun(finished, say);
-  return finished.state === 'succeeded' ? 'succeeded' : 'failed';
+  return finished.state;
 }
