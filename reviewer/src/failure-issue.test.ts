@@ -250,3 +250,45 @@ describe('the one open failure issue per place and kind of run', () => {
     expect(open.body).toContain('`````\nbefore\n```\n@acme please look\n````\nafter\n`````');
   });
 });
+
+describe("a project's nightly checks, as a kind of run of their own", () => {
+  const tail = '--- canvas: failed (exit 1); the end of what it wrote ---\n3 boards differ from the code\n1 of 2 nightly checks failed: canvas';
+  const checkFailed = (n: number): Report => ({
+    outcome: 'failed',
+    side: 'project',
+    facts: run(n, { kind: 'checks', stage: 'checking', errorType: 'NightlyCheckError' }),
+    tail,
+  });
+
+  it('a failing check opens the failure issue in the project, with the end of its output', () => {
+    const project = new Place();
+    project.told(checkFailed(1));
+    expect(project.states()).toEqual(['#1 open, 0 comment(s)']);
+    expect(project.issues[0].title).toBe("The code reviewer's run of the nightly checks failed");
+    expect(project.issues[0].body).toContain("for a reason on the project's side: one of its nightly checks failed.");
+    expect(project.issues[0].body).toContain('3 boards differ from the code');
+    expect(project.issues[0].body).toContain('- Stage: `checking`');
+    expect(project.issues[0].body).toContain('- Type of error: `NightlyCheckError`');
+  });
+
+  it("is beside the sweep's issue, not in it, and neither kind's success closes the other's", () => {
+    const project = new Place();
+    project.told(setupFailed(1));
+    project.told(checkFailed(2));
+    expect(project.states()).toEqual(['#1 open, 0 comment(s)', '#2 open, 0 comment(s)']);
+    project.told(succeeded('project', 3));
+    expect(project.states()).toEqual(['#1 closed, 1 comment(s)', '#2 open, 0 comment(s)']);
+    project.told(checkFailed(4));
+    expect(project.states()).toEqual(['#1 closed, 1 comment(s)', '#2 open, 1 comment(s)']);
+    project.told(succeeded('project', 5, { kind: 'checks' }));
+    expect(project.states()).toEqual(['#1 closed, 1 comment(s)', '#2 closed, 2 comment(s)']);
+    expect(project.issues[1].comments[1]).toContain('a run of the nightly checks succeeded');
+  });
+
+  it("opens an issue in the kit's repository when the checks could not be run for a reason on the code reviewer's side", () => {
+    const kit = new Place();
+    kit.told(kitFailed(1, { kind: 'checks', stage: 'setup', errorType: 'Error' }));
+    expect(kit.issues[0].title).toBe("A run of the nightly checks failed on the code reviewer's side");
+    expect(kit.issues[0].body).toContain('- Stage: `setup`');
+  });
+});

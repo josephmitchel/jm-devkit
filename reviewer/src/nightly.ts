@@ -5,13 +5,21 @@ import { errorType, finishRun, runCommand, runLine, runLog, startRun, type Run, 
 /** One piece of a nightly run's work: a run of `kind` for one project. */
 export interface Step {
   project: string;
-  kind: 'sweep';
+  kind: 'sweep' | 'checks';
 }
 
-/** What a nightly run does, from the projects it found: its steps in order, and a line for each project it leaves alone. */
+/**
+ * What a nightly run does, from the projects it found: its steps in order, and a line for each
+ * project it leaves alone. A project's nightly checks are a step of their own straight after its
+ * sweep, and a project that names none has no such step.
+ */
 export function nightlyWork(projects: Project[]): { steps: Step[]; skipped: string[] } {
   return {
-    steps: projects.filter((p) => p.state === 'handled').map((p) => ({ project: p.slug, kind: 'sweep' })),
+    steps: projects.flatMap((p): Step[] =>
+      p.state !== 'handled'
+        ? []
+        : [{ project: p.slug, kind: 'sweep' }, ...(p.nightlyChecks > 0 ? [{ project: p.slug, kind: 'checks' as const }] : [])],
+    ),
     skipped: projects.filter((p) => p.state !== 'handled').map(projectLine),
   };
 }

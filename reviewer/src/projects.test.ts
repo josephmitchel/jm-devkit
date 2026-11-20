@@ -10,7 +10,18 @@ const config = JSON.stringify({
 
 describe('projectState', () => {
   it('is handled with a project config and no sweep workflow', () => {
-    expect(projectState({ config, sweepWorkflow: false })).toEqual({ state: 'handled' });
+    expect(projectState({ config, sweepWorkflow: false })).toEqual({ state: 'handled', nightlyChecks: 0 });
+  });
+
+  it('says how many nightly checks a handled project names', () => {
+    const naming = (nightly: unknown) => ({ config: JSON.stringify({ ...JSON.parse(config), nightly }), sweepWorkflow: false });
+    const checks = [
+      { name: 'canvas', command: 'npm run canvas:check' },
+      { name: 'links', command: 'npm run check:links' },
+    ];
+    expect(projectState(naming({ checks }))).toEqual({ state: 'handled', nightlyChecks: 2 });
+    expect(projectState(naming({ checks: [] }))).toEqual({ state: 'handled', nightlyChecks: 0 });
+    expect(projectState(naming({}))).toEqual({ state: 'handled', nightlyChecks: 0 });
   });
 
   it('is still on Actions while the sweep workflow is there, whatever else it has', () => {

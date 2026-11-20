@@ -57,6 +57,22 @@ describe('how a run ended, from what was seen of its command', () => {
     expect(runResult(ID, { exitCode: 1, signal: null, output })).toMatchObject({ state: 'failed', stage: 'fixing' });
   });
 
+  it("reads the stages of a run of a project's nightly checks", () => {
+    const output = [
+      at('=== checks state: setup ==='),
+      at('=== checks state: checking ==='),
+      '3 boards differ from the code',
+      at('1 of 2 nightly checks failed: canvas'),
+      `${ID} error type: NightlyCheckError`,
+    ].join('\n');
+    expect(runResult(ID, { exitCode: 1, signal: null, output })).toEqual({
+      state: 'failed',
+      stage: 'checking',
+      errorType: 'NightlyCheckError',
+    });
+    expect(runResult(ID, { exitCode: 1, signal: null, output: at('=== checks state: setup ===') })).toMatchObject({ stage: 'setup' });
+  });
+
   it("takes no stage from a line that names none of the code reviewer's own, such as one in a project's output", () => {
     const output = [
       at('=== sweep state: intake ==='),

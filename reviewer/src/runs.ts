@@ -27,10 +27,12 @@ export interface RunResult {
   errorType: string | null;
 }
 
-// The lines the sweep's and the review's drivers print as they enter or resume a stage.
-const STAGE_LINE = /=== (?:sweep )?state: (\w+) ===|resuming (?:sweep|review) \d+ for \S+ in state (\w+)/g;
+/** The stages of a run of a project's nightly checks: its setup command, then the checks themselves. */
+export const CHECKS_STAGES = ['setup', 'checking'] as const;
+// The lines the sweep's, the review's and the nightly checks' drivers print as they enter or resume a stage.
+const STAGE_LINE = /=== (?:sweep |checks )?state: (\w+) ===|resuming (?:sweep|review) \d+ for \S+ in state (\w+)/g;
 // Only these count as a stage, so a line in a project's output cannot name one of its choosing.
-const STAGES = new Set<string>([...schema.sweepState.enumValues, ...schema.reviewState.enumValues]);
+const STAGES = new Set<string>([...schema.sweepState.enumValues, ...schema.reviewState.enumValues, ...CHECKS_STAGES]);
 /** Every stage a run can be recorded as having stopped in: the ones above, and the two before any of them. */
 export const RUN_STAGES: ReadonlySet<string> = new Set([...STAGES, 'starting', 'finding the projects']);
 

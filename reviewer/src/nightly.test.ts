@@ -30,6 +30,47 @@ describe("the nightly run's order of work", () => {
   });
 });
 
+describe("a project's nightly checks in the order of work", () => {
+  const naming = (checks: unknown) =>
+    JSON.stringify({ modules: ['process'], reviewer: { tests: [{ name: 'unit', command: 'npm test' }] }, nightly: { checks } });
+  const canvas = { name: 'canvas', command: 'npm run canvas:check' };
+  const links = { name: 'links', command: 'npm run check:links' };
+
+  it('come straight after that project\'s sweep, as one step, and only for a project that names some', () => {
+    const projects = classifyProjects([
+      { slug: 'acme/zippers', config: naming([]), sweepWorkflow: false },
+      { slug: 'acme/widgets', config: naming([canvas, links]), sweepWorkflow: false },
+      { slug: 'acme/anvils', config, sweepWorkflow: false },
+      { slug: 'acme/gadgets', config: naming([canvas]), sweepWorkflow: true },
+    ]);
+    expect(nightlyWork(projects).steps).toEqual([
+      { project: 'acme/anvils', kind: 'sweep' },
+      { project: 'acme/widgets', kind: 'sweep' },
+      { project: 'acme/widgets', kind: 'checks' },
+      { project: 'acme/zippers', kind: 'sweep' },
+    ]);
+  });
+
+  const steps: Step[] = [
+    { project: 'acme/widgets', kind: 'sweep' },
+    { project: 'acme/widgets', kind: 'checks' },
+    { project: 'acme/zippers', kind: 'sweep' },
+  ];
+
+  it('run after a sweep that succeeded', () => {
+    expect(nightlyDecision(steps, ['succeeded'])).toEqual({ next: { project: 'acme/widgets', kind: 'checks' } });
+  });
+
+  it('still run after a sweep that failed: they are the project\'s own, and the sweep failing says nothing about them', () => {
+    expect(nightlyDecision(steps, ['failed'])).toEqual({ next: { project: 'acme/widgets', kind: 'checks' } });
+  });
+
+  it('do not stop the next project when they fail, and the night ends failed', () => {
+    expect(nightlyDecision(steps, ['succeeded', 'failed'])).toEqual({ next: { project: 'acme/zippers', kind: 'sweep' } });
+    expect(nightlyDecision(steps, ['succeeded', 'failed', 'succeeded'])).toEqual({ done: 'failed' });
+  });
+});
+
 describe('what a nightly run does next', () => {
   const steps: Step[] = [
     { project: 'acme/anvils', kind: 'sweep' },

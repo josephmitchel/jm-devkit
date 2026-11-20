@@ -58,6 +58,12 @@ describe('where a finished run is reported', () => {
     expect(JSON.stringify(reports)).not.toMatch(/acme|widgets|the end of the output/);
   });
 
+  it("reports a failing nightly check to the project, as a run of the checks and not of the sweep", () => {
+    const checks = failed('NightlyCheckError', { kind: 'checks', stage: 'checking', parentId: NIGHT });
+    expect(told(checks)).toEqual(['acme/widgets: project-side checks failed']);
+    expect(reportsFor(checks, seen)[0].report).toMatchObject({ tail: 'the end of the output' });
+  });
+
   it("reports a failure that is no project's, such as the nightly run not finding the projects, to the kit's repository", () => {
     const nightly = failed('DevkitConfigError', { kind: 'nightly', project: null, stage: 'finding the projects' });
     expect(told(nightly)).toEqual([`${KIT}: kit-side nightly failed`]);
@@ -102,6 +108,23 @@ describe("what a nightly run tells the kit's repository once its projects are do
   it("that its sweeps succeeded when the only failure was on a project's side", () => {
     const parts = [part({ project: 'acme/gadgets', state: 'failed', stage: 'judging', errorType: 'SetupCommandError' }), part({})];
     expect(told(nightly({ state: 'failed' }), { parts })).toEqual([`${KIT}: kit-side nightly succeeded`, `${KIT}: kit-side sweep succeeded`]);
+  });
+
+  it("what became of its sweeps and of its projects' checks, each kind by its own runs", () => {
+    const failingCheck = part({ kind: 'checks', state: 'failed', stage: 'checking', errorType: 'NightlyCheckError' });
+    const brokenChecks = part({ kind: 'checks', project: 'acme/gadgets', state: 'failed', stage: 'starting', errorType: 'TypeError' });
+    const passingChecks = part({ kind: 'checks', project: 'acme/gadgets' });
+    const sweeps = [part({ project: 'acme/gadgets' }), part({})];
+    const nightSucceeded = `${KIT}: kit-side nightly succeeded`;
+    expect(told(nightly({ state: 'failed' }), { parts: [...sweeps, failingCheck, passingChecks] })).toEqual([
+      nightSucceeded,
+      `${KIT}: kit-side sweep succeeded`,
+      `${KIT}: kit-side checks succeeded`,
+    ]);
+    expect(told(nightly({ state: 'failed' }), { parts: [...sweeps, brokenChecks, failingCheck] })).toEqual([
+      nightSucceeded,
+      `${KIT}: kit-side sweep succeeded`,
+    ]);
   });
 
   it("nothing about its sweeps when a time limit stopped one, which is a failure on the code reviewer's side", () => {

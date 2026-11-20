@@ -323,7 +323,8 @@ export const testDatabases = pgTable('test_databases', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
-export type RunKind = 'nightly' | 'sweep';
+// `checks`: one project's nightly checks, run after its sweep or by hand.
+export type RunKind = 'nightly' | 'sweep' | 'checks';
 export type RunState = 'running' | 'succeeded' | 'failed';
 
 /**
