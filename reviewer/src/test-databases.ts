@@ -127,8 +127,11 @@ function decoded(part: string): string {
   }
 }
 
-/** The run that databases belong to: a review or a sweep, by its id. A resumed run has the same owner. */
-export type RunOwner = `review:${number}` | `sweep:${number}`;
+/**
+ * The run that databases belong to: a review or a sweep, by its id, or a project's nightly checks,
+ * by the project. A resumed run has the same owner, and so has the next run of a project's checks.
+ */
+export type RunOwner = `review:${number}` | `sweep:${number}` | `checks:${string}`;
 
 /** A database recorded as created, and the run it was created for. */
 export interface DatabaseRecord {

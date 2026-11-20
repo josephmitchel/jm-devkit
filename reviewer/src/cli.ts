@@ -14,6 +14,7 @@ import { markGate, progressStep } from './stages/progress.js';
 import { postFailureNotice } from './stages/report.js';
 import { runMigrations } from './migrate.js';
 import { runNightly } from './nightly.js';
+import { runChecksOnDemand, runProjectChecks } from './nightly-checks.js';
 import { listProjects, projectLine } from './projects.js';
 import { runReview } from './review-loop.js';
 import { errorTypeLine, nightlyStatus, recentNightlyRuns } from './runs.js';
@@ -34,6 +35,10 @@ Usage:
   code-reviewer nightly                         the whole nightly run: sweep every project the
                                                 machine handles, in name order, one at a time;
                                                 a sweep that fails does not stop the next
+  code-reviewer checks <owner/repo>             run the project's nightly checks (nightly.checks in
+                                                its devkit.json) now, in a fresh checkout of its
+                                                default branch; recorded and reported as the
+                                                nightly run's step is, and exits 1 when one fails
   code-reviewer failure-issue <owner/repo>      open, comment on or close that repository's failure
                                                 issue, from the report of a finished run on its
                                                 input (the nightly run starts this; not for hand use)
@@ -61,7 +66,7 @@ Usage:
 
 // The commands CI runs unattended. The admin ones print tables and confirmations for a person at
 // a terminal, where a timestamp on every line is only noise.
-const STAMPED = new Set(['run', 'sweep', 'nightly', 'landed', 'migrate', 'next', 'abandon', 'carry-gate']);
+const STAMPED = new Set(['run', 'sweep', 'nightly', 'checks', 'landed', 'migrate', 'next', 'abandon', 'carry-gate']);
 
 async function main() {
   const [cmd, ...rest] = process.argv.slice(2);
@@ -108,6 +113,26 @@ async function main() {
     case 'nightly': {
       if (rest.length > 0) return usageExit();
       const outcome = await runNightly();
+      printRaw(`outcome: ${outcome}`);
+      if (outcome === 'failed') process.exitCode = 1;
+      break;
+    }
+    case 'checks': {
+      const [slug, ...extra] = rest;
+      if (!slug || extra.length > 0) return usageExit();
+      configureAppAuth(slug);
+      // Under a run id this is the work of a run already recorded: the nightly run's step, or the
+      // one this command records for itself when a person runs it.
+      if (process.env.REVIEWER_RUN_ID) {
+        const stopHeartbeat = startHeartbeat();
+        try {
+          await runProjectChecks(slug);
+        } finally {
+          stopHeartbeat();
+        }
+        break;
+      }
+      const outcome = await runChecksOnDemand(slug);
       printRaw(`outcome: ${outcome}`);
       if (outcome === 'failed') process.exitCode = 1;
       break;

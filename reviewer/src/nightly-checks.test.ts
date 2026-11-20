@@ -4,9 +4,10 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { outputTail } from './failure-report.js';
-import { checksAccount, checksDecision, runChecks, type CheckResult } from './nightly-checks.js';
+import { checksAccount, checksDecision, checksNamed, checksOwner, runChecks, type CheckResult } from './nightly-checks.js';
 import { errorTypeLine } from './runs.js';
-import { planDatabases } from './test-databases.js';
+import { leftBehind, planDatabases } from './test-databases.js';
+import { checksWorkspacePath, workspacePath } from './workspace.js';
 
 const canvas = { name: 'canvas', command: 'npm run canvas:check' };
 const links = { name: 'links', command: 'npm run check:links' };
@@ -40,6 +41,45 @@ describe("what a run of a project's nightly checks does next", () => {
 
   it('ends succeeded at once when there is no check to run', () => {
     expect(checksDecision([], [])).toEqual({ done: 'succeeded' });
+  });
+});
+
+describe('whether a project names nightly checks, from the project config on its default branch', () => {
+  const config = (nightly?: unknown) =>
+    JSON.stringify({ modules: ['process'], reviewer: { tests: [{ name: 'unit', command: 'npm test' }] }, ...(nightly ? { nightly } : {}) });
+
+  it('is the checks it lists, in the order written', () => {
+    expect(checksNamed(config({ checks: [links, canvas] }))).toEqual([links, canvas]);
+  });
+
+  it('is none for a project that lists none, or has no project config at all', () => {
+    expect(checksNamed(config())).toEqual([]);
+    expect(checksNamed(config({ checks: [] }))).toEqual([]);
+    expect(checksNamed(null)).toEqual([]);
+  });
+
+  it('is refused, naming the fault, when the project config is invalid', () => {
+    expect(() => checksNamed(config({ checks: [{ name: 'canvas' }] }))).toThrow('nightly.checks[0].command is required');
+  });
+});
+
+describe("where a project's nightly checks run and what they are given", () => {
+  it('is a checkout of their own, so a run by hand never resets the tree under a review or a sweep of the same project', () => {
+    const root = path.dirname(workspacePath('acme/widgets'));
+    expect(checksWorkspacePath('acme/widgets')).toBe(path.join(root, 'checks', 'acme__widgets'));
+    expect(checksWorkspacePath('acme/widgets')).not.toBe(workspacePath('acme/widgets'));
+    // No project's checkout can be the directory the checks' checkouts are in: an owner and a name are always both there.
+    expect(path.basename(workspacePath('checks/checks'))).not.toBe('checks');
+  });
+
+  it("are test databases of their own, not the sweep's, which are gone by the time the checks start", () => {
+    const records = [
+      { name: 'reviewer_test_aaaaaaaaaaaaaaaa_0', owner: 'sweep:7' },
+      { name: 'reviewer_test_bbbbbbbbbbbbbbbb_0', owner: checksOwner('acme/widgets') },
+      { name: 'reviewer_test_cccccccccccccccc_0', owner: checksOwner('acme/widgets-two') },
+    ];
+    expect(checksOwner('acme/widgets')).toBe('checks:acme/widgets');
+    expect(leftBehind(records, checksOwner('acme/widgets'))).toEqual(['reviewer_test_bbbbbbbbbbbbbbbb_0']);
   });
 });
 

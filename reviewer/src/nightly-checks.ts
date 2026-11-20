@@ -1,11 +1,37 @@
+import { eq } from 'drizzle-orm';
+
+import { CONFIG_FILE, parseDevkitConfig } from '../../plugin/devkit-config.mjs';
+import { db, schema } from './db/client.js';
 import type { TestCommand } from './db/schema.js';
-import type { ProjectSetup } from './project-config.js';
-import { streamRepoCommand, type StreamedCommand } from './workspace.js';
+import { reportRun } from './failure-report.js';
+import { NightlyCheckError, SetupCommandError } from './failure-side.js';
+import { getBranchHead, getDefaultBranch, getDefaultBranchFile } from './github.js';
+import { markStage } from './heartbeat.js';
+import { readProjectSetup, type ProjectRow, type ProjectSetup } from './project-config.js';
+import { errorType, finishRun, runCommand, runLine, runLog, startRun, type CHECKS_STAGES, type RunResult } from './runs.js';
+import { droppingTestDatabases, provideTestDatabases, type RunOwner } from './test-databases.js';
+import { checksWorkspacePath, prepareWorkspace, runRepoCommand, streamRepoCommand, type StreamedCommand } from './workspace.js';
 
 /**
  * A project's nightly checks (`nightly.checks` in its project config): commands too slow for
  * every pull request, run once a night after the project's sweep, or by hand. No agent runs.
  */
+
+/**
+ * The checks a project names, from the text of the project config on its default branch (null:
+ * it has none). Read without a checkout, so a project that names none costs nothing more.
+ */
+export function checksNamed(config: string | null): TestCommand[] {
+  return config === null ? [] : (parseDevkitConfig(config).nightly?.checks ?? []).map(({ name, command }) => ({ name, command }));
+}
+
+/**
+ * Who a project's checks' test databases belong to. The project, not the run: the checks have no
+ * row of their own to resume, so what a killed run left is dropped by the project's next one.
+ */
+export function checksOwner(slug: string): RunOwner {
+  return `checks:${slug}`;
+}
 
 /** How one check ended. */
 export interface CheckResult {
@@ -84,4 +110,74 @@ export async function runChecks(
     decision = checksDecision(project.nightlyChecks, results);
   }
   return results;
+}
+
+// A project that names checks has a project config, so nothing is ever taken from a database row.
+const NO_ROW: ProjectRow = { setupCommand: null, testCommands: [], redundancy: 1, harnessNotes: null, extraContext: null };
+
+function enter(stage: (typeof CHECKS_STAGES)[number]): void {
+  markStage(stage);
+  console.log(`\n=== checks state: ${stage} ===`);
+}
+
+/**
+ * One run of a project's nightly checks, as the command a recorded run starts.
+ *
+ * The checks get a checkout of their own (see checksWorkspacePath) at the default branch's head
+ * as it is now, read after the project's sweep has finished: the head the sweep audited or a
+ * newer one, never an older. It is made and set up the way the sweep's is: the same reset, the
+ * project's setup command, `reviewer.env`, and fresh databases for `reviewer.databases`, since the
+ * sweep's were dropped when it ended. Throws {@link NightlyCheckError} when a check failed.
+ */
+export async function runProjectChecks(slug: string): Promise<void> {
+  const [repo] = await db.select().from(schema.repos).where(eq(schema.repos.slug, slug));
+  const branch = await getDefaultBranch(slug);
+  const head = await getBranchHead(slug, branch);
+  const cloneUrl = repo?.cloneUrl ?? `https://github.com/${slug}.git`;
+  const dir = await prepareWorkspace(slug, cloneUrl, branch, head, checksWorkspacePath(slug));
+  console.log(`checkout of ${branch} at ${head.slice(0, 10)} ready at ${dir}`);
+  const read = readProjectSetup(dir, NO_ROW);
+  if (read.nightlyChecks.length === 0) {
+    console.log(`${slug} names no nightly checks at ${head.slice(0, 10)}: nothing to run`);
+    return;
+  }
+  const owner = checksOwner(slug);
+  await droppingTestDatabases(owner, async () => {
+    const project = await provideTestDatabases(owner, read);
+    enter('setup');
+    if (project.setupCommand) {
+      console.log(`running setup: ${project.setupCommand}`);
+      const setup = await runRepoCommand(dir, project.setupCommand, project.env);
+      if (!setup.passed) throw new SetupCommandError(setup.trimmedOutput);
+    }
+    enter('checking');
+    const results = await runChecks(dir, project);
+    const account = checksAccount(results);
+    if (results.some((r) => !r.passed)) throw new NightlyCheckError(account);
+    console.log(account);
+  });
+}
+
+/**
+ * Run one project's nightly checks by hand: recorded as a run of its own and reported like the
+ * step of a nightly run. A project that names none gets no run and no checkout.
+ */
+export async function runChecksOnDemand(slug: string): Promise<'no checks' | 'succeeded' | 'failed'> {
+  if (checksNamed(await getDefaultBranchFile(slug, CONFIG_FILE)).length === 0) {
+    console.log(`${slug} names no nightly checks: nothing to run`);
+    return 'no checks';
+  }
+  const run = await startRun({ kind: 'checks', project: slug });
+  const say = runLog(run);
+  say(`${slug} checks started as ${run.id}`);
+  let result: RunResult;
+  try {
+    result = await runCommand(run, ['checks', slug]);
+  } catch (err) {
+    result = { state: 'failed', stage: 'starting', errorType: errorType(err) };
+  }
+  const finished = await finishRun(run, result);
+  say(runLine(finished));
+  await reportRun(finished, say);
+  return finished.state === 'succeeded' ? 'succeeded' : 'failed';
 }

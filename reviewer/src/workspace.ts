@@ -32,6 +32,15 @@ export function workspacePath(repoSlug: string): string {
   return path.join(workspaceRoot(), repoSlug.replace('/', '__'));
 }
 
+/**
+ * Where a project's nightly checks are checked out: a tree of their own, so checks run by hand
+ * never reset the one a review or a sweep of the same project is working in. `checks` is no
+ * project's directory, since those all hold an owner and a name.
+ */
+export function checksWorkspacePath(repoSlug: string): string {
+  return path.join(workspaceRoot(), 'checks', repoSlug.replace('/', '__'));
+}
+
 async function git(cwd: string, args: string[]): Promise<string> {
   const { stdout } = await execFileAsync('git', args, { cwd, maxBuffer: 32 * 1024 * 1024 });
   return stdout.trim();
@@ -43,8 +52,8 @@ export async function prepareWorkspace(
   cloneUrl: string,
   branch: string,
   headSha: string,
+  dir: string = workspacePath(repoSlug),
 ): Promise<string> {
-  const dir = workspacePath(repoSlug);
   if (!fs.existsSync(path.join(dir, '.git'))) {
     fs.mkdirSync(path.dirname(dir), { recursive: true });
     await execFileAsync('git', ['clone', cloneUrl, dir]);
