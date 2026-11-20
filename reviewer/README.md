@@ -29,7 +29,7 @@ node bin/code-reviewer.mjs status            # all reviews, concern counts, the 
 node bin/code-reviewer.mjs projects          # every project the App is installed on, and its state
 node bin/code-reviewer.mjs nightly           # the whole nightly run: every handled project's sweep in turn
 node bin/code-reviewer.mjs checks owner/name # one project's nightly checks, now
-node bin/code-reviewer.mjs poll              # one pass of the poller: landed for each newly merged pull request
+node bin/code-reviewer.mjs poll              # one pass of the poller: landed for each newly merged pull request, carry-gate for a passed one's new head
 node bin/code-reviewer.mjs reset owner/name 42   # forget a review (keeps concerns/policies)
 ```
 
@@ -349,6 +349,23 @@ project and the event's key, so a second record of the same event cannot be made
 time at its first pass and how far the last pass's reading got. A pull request that merged before
 the first pass is never acted on, however often a later pass sees it.
 
+**A passed pull request's new head** is the event `head-moved:<pr>@<commit>`. A pass finds it on
+an open pull request whose review has passed, when its head is a commit that review's gate is not
+on (`github_artifacts` holds every commit the gate was posted on or carried to). It runs
+`carry-gate` for the pull request once. That command, not the poller, decides whether the new head
+holds only reviewed code, and carries the gate if it does.
+
+- Either answer handles the event, so the same head is not looked at again. A head that moves
+  again is a new event with a new key. To have one head looked at a second time, run `carry-gate`
+  by hand.
+- A `carry-gate` that failed is tried again like a `landed` that failed. It asks GitHub for the
+  head at that moment, so a retry after the head has moved on decides for the newer head.
+- `carry-gate` runs no agents. It runs inside the pass like `landed`, has no time limit of its own
+  and waits for no sweep or review.
+- GitHub's listing gives no time for a head, only for the pull request's last change. A pull
+  request not changed since the project's first pass is left alone. One whose head moved before
+  the first pass and which is commented on after it has `carry-gate` run once for that head.
+
 **A pass asks conditionally** (`src/poller-github.ts`). Every question a pass repeats is sent
 with the ETag of its last answer, and an answer of "unchanged" (304) is not counted against the
 App's rate limit. The answers and ETags are kept in `github_answers`. No credential is kept: a
@@ -370,9 +387,9 @@ pass mints its installation tokens and holds them in memory until it ends.
 - Each pass ends with a line saying how many times GitHub was asked and how many of the answers
   were "unchanged", so the journal shows which of the two holds.
 
-Each `landed` is a run of its own kind in the `runs` table, with its output file, and is reported
-through `reportRun` like any other: a failure opens or comments on the failure issue for `landed`
-runs, and the next success closes it. A project whose pull requests could not be read is left
+Each `landed` and each `carry-gate` is a run of its own kind in the `runs` table, with its output
+file, and is reported through `reportRun` like any other: a failure opens or comments on the
+failure issue for runs of its kind, and the next success of that kind closes it. A project whose pull requests could not be read is left
 alone for that pass and the others are still handled; the command then exits non-zero.
 
 ## The queue of reviews (on the machine)
@@ -535,7 +552,7 @@ intake → audit (scout + 10 auditors) → synthesis ──┬─ clean → gate
 - The gate only ever follows a clean audit of the current head — fix commits are always re-audited.
 - Until then `code-reviewer/gate` sits at pending with the current stage (`Round 2: making fixes`), and turns red if the review stops.
 - Once a fix cycle starts ("Got it" after your answers), one progress comment is edited as it moves, up to the next report. A stopped review posts a comment saying where and why.
-- A passed PR whose head later moves to already-reviewed code (merging a PR stacked on it leaves such a merge commit) gets its gate carried to the new head, on the push or on any comment. Only identical code qualifies, and only when the reviews cover everything since the PR's own gated commit.
+- A passed PR whose head later moves to already-reviewed code (merging a PR stacked on it leaves such a merge commit) gets its gate carried to the new head: on Actions on the push or on any comment, on the machine by the poller, once for each new head. Only identical code qualifies, and only when the reviews cover everything since the PR's own gated commit.
 
 ## Layout
 

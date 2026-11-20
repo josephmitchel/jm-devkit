@@ -3,6 +3,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
+  gatesOfPassedReviews,
   leftByPasses,
   passDecision,
   pollerStatus,
@@ -25,12 +26,15 @@ const widgets = (pullRequests: PullRequestSeen[] | null, slug = 'acme/widgets'):
   pullRequests,
 });
 
+const HEAD = 'c3'.repeat(20);
+
 /** An open pull request, last changed at `when`, with nothing else about it unless given. */
 const pull = (number: number, when: string, fields: Partial<PullRequestSeen> = {}): PullRequestSeen => ({
   number,
   updatedAt: at(when),
   mergedAt: null,
   open: true,
+  headSha: HEAD,
   draft: false,
   labels: [],
   comments: [],
@@ -41,7 +45,7 @@ const merged = (number: number, when: string): PullRequestSeen => pull(number, w
 
 /** What the database holds for a project whose first pass was at 09:00. */
 const known = (events: EventRecord[] = [], slug = 'acme/widgets', reviews: ReviewKnown[] = []): Map<string, ProjectKnown> =>
-  new Map([[slug, { startedAt: at('09:00:00'), seenTo: at('11:57:00'), events, reviews }]]);
+  new Map([[slug, { startedAt: at('09:00:00'), seenTo: at('11:57:00'), events, passedGates: new Map(), reviews }]]);
 
 const NOW = at('12:00:01');
 
@@ -328,6 +332,121 @@ describe('the order a pass works in', () => {
   });
 });
 
+describe('a new head on a pull request whose review passed', () => {
+  const REVIEWED = 'a1'.repeat(20);
+  const MOVED = 'b2'.repeat(20);
+
+  /** An open pull request as a pass saw it, with the commit its branch is at. */
+  const open = (number: number, headSha: string, when: string): PullRequestSeen => pull(number, when, { headSha });
+
+  /** What is on record when the review of #12 has passed and its gate is on the given commits. */
+  const passed = (gated: string[], events: EventRecord[] = []): Map<string, ProjectKnown> =>
+    new Map([['acme/widgets', { ...known(events).get('acme/widgets')!, passedGates: new Map([[12, gated]]) }]]);
+
+  it('runs carry-gate once for that head', () => {
+    const decision = passDecision({ projects: [widgets([open(12, MOVED, '11:59:00')])] }, { projects: passed([REVIEWED]) }, NOW);
+    expect(decision.commands).toEqual([
+      { project: 'acme/widgets', event: `head-moved:12@${MOVED}`, kind: 'carry-gate', args: ['carry-gate', 'acme/widgets', '12'], attempts: 0 },
+    ]);
+    expect(decision.projects[0].found).toEqual([`head-moved:12@${MOVED}`]);
+  });
+
+  it('runs nothing for the same head seen again once carry-gate has run, whether or not it carried the gate', () => {
+    const handled: EventRecord = { event: `head-moved:12@${MOVED}`, handledAt: at('11:59:30'), attempts: 1, attemptedAt: at('11:59:20'), running: false };
+    // A comment since: the pull request is listed again with the same head, and the gate is still not on it.
+    const decision = passDecision({ projects: [widgets([open(12, MOVED, '11:59:50')])] }, { projects: passed([REVIEWED], [handled]) }, NOW);
+    expect(decision.commands).toEqual([]);
+    expect(decision.projects[0].found).toEqual([]);
+  });
+
+  it('runs carry-gate again when the head moves a second time', () => {
+    const AGAIN = 'd4'.repeat(20);
+    const handled: EventRecord = { event: `head-moved:12@${MOVED}`, handledAt: at('11:50:30'), attempts: 1, attemptedAt: at('11:50:20'), running: false };
+    const decision = passDecision({ projects: [widgets([open(12, AGAIN, '11:59:00')])] }, { projects: passed([REVIEWED, MOVED], [handled]) }, NOW);
+    expect(decision.commands).toEqual([
+      { project: 'acme/widgets', event: `head-moved:12@${AGAIN}`, kind: 'carry-gate', args: ['carry-gate', 'acme/widgets', '12'], attempts: 0 },
+    ]);
+  });
+
+  it('runs nothing for a pull request with no passed review', () => {
+    // #13 has no review, or one that is still going or stopped: only #12 is on record as passed.
+    const decision = passDecision({ projects: [widgets([open(13, MOVED, '11:59:00')])] }, { projects: passed([REVIEWED]) }, NOW);
+    expect(decision.commands).toEqual([]);
+    expect(decision.projects[0].found).toEqual([]);
+  });
+
+  it('runs nothing while the head is a commit the gate is already on: the one the review gated, or one it was carried to', () => {
+    const run = (gated: string[]) => passDecision({ projects: [widgets([open(12, MOVED, '11:59:00')])] }, { projects: passed(gated) }, NOW);
+    expect(run([MOVED]).commands).toEqual([]);
+    expect(run([REVIEWED, MOVED]).projects[0].found).toEqual([]);
+  });
+
+  it('runs nothing for a pull request that has merged or been closed, whatever its head', () => {
+    const closed: PullRequestSeen = { ...open(12, MOVED, '11:59:00'), open: false };
+    const decision = passDecision({ projects: [widgets([closed])] }, { projects: passed([REVIEWED]) }, NOW);
+    expect(decision.commands).toEqual([]);
+    const landed = passDecision({ projects: [widgets([{ ...closed, mergedAt: at('11:59:00') }])] }, { projects: passed([REVIEWED]) }, NOW);
+    expect(landed.commands.map((c) => c.event)).toEqual(['merged:12']);
+  });
+
+  it("starts from the project's first pass: a head that moved before it is left until the pull request changes again", () => {
+    const events = (pr: PullRequestSeen) => passDecision({ projects: [widgets([pr])] }, { projects: passed([REVIEWED]) }, NOW).commands.map((c) => c.event);
+    // Last changed at 08:00, an hour before the first pass, and still listed.
+    expect(events(open(12, MOVED, '08:00:00'))).toEqual([]);
+    const AGAIN = 'd4'.repeat(20);
+    expect(events(open(12, AGAIN, '11:59:00'))).toEqual([`head-moved:12@${AGAIN}`]);
+    // GitHub's listing has no time for a head, only for the pull request's last change. So a
+    // comment after the first pass also brings up a head that moved before it, once.
+    expect(events(open(12, MOVED, '11:59:00'))).toEqual([`head-moved:12@${MOVED}`]);
+  });
+
+  it("runs nothing on the project's first pass", () => {
+    const decision = passDecision({ projects: [widgets([open(12, MOVED, '11:59:00')])] }, { projects: new Map() }, NOW);
+    expect(decision.commands).toEqual([]);
+    expect(decision.projects[0]).toMatchObject({ firstPass: true, found: [] });
+  });
+
+  it('is tried again when carry-gate failed, from the record alone when GitHub says nothing has changed', () => {
+    const failed: EventRecord = { event: `head-moved:12@${MOVED}`, handledAt: null, attempts: 1, attemptedAt: at('11:57:10'), running: false };
+    const decision = passDecision({ projects: [widgets(null)] }, { projects: passed([REVIEWED], [failed]) }, NOW);
+    expect(decision.commands).toEqual([
+      { project: 'acme/widgets', event: `head-moved:12@${MOVED}`, kind: 'carry-gate', args: ['carry-gate', 'acme/widgets', '12'], attempts: 1 },
+    ]);
+    expect(decision.projects[0].found).toEqual([]);
+  });
+
+  it('is run by the pass itself, beside a landed and in the order found, with nothing held back', () => {
+    const decision = passDecision(
+      { projects: [widgets([open(12, MOVED, '11:59:30'), merged(9, '11:58:00')])] },
+      { projects: passed([REVIEWED]) },
+      NOW,
+    );
+    expect(decision.commands.map((c) => c.args.join(' '))).toEqual(['landed acme/widgets 9', 'carry-gate acme/widgets 12']);
+  });
+});
+
+describe("the commits the gates of a project's passed reviews are on, from the statuses the database has for them", () => {
+  const A = 'a1'.repeat(20);
+  const B = 'b2'.repeat(20);
+
+  it('are, for each pull request, every commit a success was posted on: the one the review gated and each it was carried to', () => {
+    const gates = gatesOfPassedReviews([
+      { prNumber: 12, sha: A, payload: { state: 'success', score: 9 } },
+      { prNumber: 12, sha: B, payload: { state: 'success', carriedFrom: A } },
+      { prNumber: 14, sha: B, payload: { state: 'success' } },
+    ]);
+    expect([...gates]).toEqual([[12, [A, B]], [14, [B]]]);
+  });
+
+  it('leave out a status that is not a success, and keep a passed review that has none on record', () => {
+    const gates = gatesOfPassedReviews([
+      { prNumber: 12, sha: A, payload: { state: 'pending' } },
+      { prNumber: 12, sha: null, payload: null },
+    ]);
+    expect([...gates]).toEqual([[12, []]]);
+  });
+});
+
 describe('the runs a starting pass finds still recorded as running', () => {
   const running = (id: string, fields: Partial<Run>): Run => ({
     id,
@@ -345,6 +464,11 @@ describe('the runs a starting pass finds still recorded as running', () => {
   it('are the landed runs of an earlier pass, which died before it could record them', () => {
     const rows = [running('run-20261120T115700Z-aaaaaa', {}), running('run-20261120T115400Z-bbbbbb', { state: 'succeeded', finishedAt: at('11:54:05') })];
     expect(leftByPasses(rows).map((r) => r.id)).toEqual(['run-20261120T115700Z-aaaaaa']);
+  });
+
+  it('are also its carry-gate runs, which a pass waits for like a landed', () => {
+    const rows = [running('run-20261120T115700Z-ffffff', { kind: 'carry-gate' })];
+    expect(leftByPasses(rows).map((r) => r.id)).toEqual(['run-20261120T115700Z-ffffff']);
   });
 
   it('are not a nightly run or its parts, nor a run of a kind no pass waits for', () => {

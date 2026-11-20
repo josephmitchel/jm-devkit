@@ -48,6 +48,7 @@ const KIND_WORDS: Record<RunKind, string> = {
   summary: 'nightly summary',
   checks: 'run of the nightly checks',
   landed: 'landed run',
+  'carry-gate': 'carry-gate run',
   review: 'review',
 };
 

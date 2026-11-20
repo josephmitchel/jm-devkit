@@ -240,6 +240,7 @@ interface ListedPullRequest {
   updated_at: string;
   merged_at: string | null;
   state: string;
+  head: { sha: string };
   draft?: boolean;
   labels?: Array<{ name: string }>;
 }
@@ -250,6 +251,7 @@ function listed(body: string): PullRequestSeen[] {
     updatedAt: new Date(pr.updated_at),
     mergedAt: pr.merged_at === null ? null : new Date(pr.merged_at),
     open: pr.state === 'open',
+    headSha: pr.head.sha,
     draft: pr.draft === true,
     labels: (pr.labels ?? []).map((label) => label.name),
     // Not in the listing: read apart, and only for a pull request whose review waits on the owner.

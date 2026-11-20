@@ -58,9 +58,11 @@ Usage:
                                                 machine's update step (bin/update.mjs) calls it
   code-reviewer poll                            one pass of the poller: for every project the
                                                 machine handles, run landed for each pull request
-                                                merged since the last pass, and queue the review
-                                                of each one labelled review-now or answered by
-                                                the owner (a timer runs this every few minutes)
+                                                merged since the last pass and carry-gate for each
+                                                new head of one whose review passed, and queue
+                                                the review of each one labelled review-now or
+                                                answered by the owner (a timer runs this every
+                                                few minutes)
   code-reviewer queue                           one turn of the queue: start the next queued
                                                 review if no agent job is running on the machine
                                                 and see it through (the machine runs this after

@@ -17,7 +17,10 @@ interface World {
   installations: Record<number, string[]>;
   heads: Record<string, string>;
   files: Record<string, Record<string, string>>;
-  pulls: Record<string, Array<{ number: number; updated_at: string; merged_at: string | null; state?: string; draft?: boolean; labels?: Array<{ name: string }> }>>;
+  pulls: Record<
+    string,
+    Array<{ number: number; updated_at: string; merged_at: string | null; state: 'open' | 'closed'; head: { sha: string }; draft?: boolean; labels?: Array<{ name: string }> }>
+  >;
   /** By `owner/name#number`: the comments on a pull request, and the reviews submitted on it. */
   comments?: Record<string, Array<{ id: number; created_at: string; author_association?: string }>>;
   reviews?: Record<string, Array<{ id: number; submitted_at?: string; state: string; body: string | null; author_association?: string }>>;
@@ -296,14 +299,17 @@ describe('finding the projects on every pass', () => {
 });
 
 describe("reading a project's pull requests", () => {
-  const pr = (number: number, updated: string, merged: string | null = null) => ({
+  const HEAD = 'c3'.repeat(20);
+  const pr = (number: number, updated: string, merged: string | null = null, head = HEAD) => ({
     number,
     updated_at: `2026-11-20T${updated}Z`,
     merged_at: merged && `2026-11-20T${merged}Z`,
-    state: merged ? 'closed' : 'open',
+    // A pull request closed without merging reads the same to the poller as a merged one: not open.
+    state: merged ? ('closed' as const) : ('open' as const),
+    head: { sha: head },
   });
   const at = (time: string) => new Date(`2026-11-20T${time}Z`);
-  const open = { open: true, draft: false, labels: [], comments: [] };
+  const open = { open: true, headSha: HEAD, draft: false, labels: [], comments: [] };
   const closed = { ...open, open: false };
 
   async function reading(pulls: World['pulls'][string], etags: World['etags'] = 'installation') {
@@ -314,13 +320,14 @@ describe("reading a project's pull requests", () => {
     return { ...set, w, token };
   }
 
-  it('lists them, newest change first, with when each merged and GitHub\'s time', async () => {
-    const { asking, token } = await reading([pr(11, '08:00:00', '08:00:00'), pr(12, '11:59:00', '11:58:00'), pr(13, '11:30:00')]);
+  it('lists them, newest change first, with when each merged, whether it is open, its head and GitHub\'s time', async () => {
+    const MOVED = 'b2'.repeat(20);
+    const { asking, token } = await reading([pr(11, '08:00:00', '08:00:00'), pr(12, '11:59:00', '11:58:00'), pr(13, '11:30:00', null, MOVED)]);
     const seen = await pullRequestsSeen(asking, 'acme/widgets', token, { etag: null, seenTo: null });
     expect(seen.at).toEqual(at('12:00:00'));
     expect(seen.pullRequests).toEqual([
       { number: 12, updatedAt: at('11:59:00'), mergedAt: at('11:58:00'), ...closed },
-      { number: 13, updatedAt: at('11:30:00'), mergedAt: null, ...open },
+      { number: 13, updatedAt: at('11:30:00'), mergedAt: null, ...open, headSha: MOVED },
       { number: 11, updatedAt: at('08:00:00'), mergedAt: at('08:00:00'), ...closed },
     ]);
   });

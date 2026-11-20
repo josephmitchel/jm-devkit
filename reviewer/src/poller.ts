@@ -18,6 +18,8 @@ export interface PullRequestSeen {
   mergedAt: Date | null;
   /** Whether it is open: neither merged nor closed. */
   open: boolean;
+  /** The commit its branch is at. */
+  headSha: string;
   draft: boolean;
   /** The names of its labels. */
   labels: string[];
@@ -83,6 +85,22 @@ export interface ProjectKnown {
   events: EventRecord[];
   /** The project's reviews, one per pull request that has one. */
   reviews: ReviewKnown[];
+  /** For each pull request whose review has passed: the commits that review's gate is on, carried ones included. */
+  passedGates: ReadonlyMap<number, readonly string[]>;
+}
+
+/**
+ * A project's passed reviews as {@link ProjectKnown} holds them, from one row per review and gate
+ * status on record. A review with no status on record has a row with no commit.
+ */
+export function gatesOfPassedReviews(rows: Array<{ prNumber: number; sha: string | null; payload: unknown }>): Map<number, string[]> {
+  const gates = new Map<number, string[]>();
+  for (const { prNumber, sha, payload } of rows) {
+    const gated = gates.get(prNumber) ?? [];
+    if (sha && (payload as { state?: string } | null)?.state === 'success') gated.push(sha);
+    gates.set(prNumber, gated);
+  }
+  return gates;
 }
 
 /** One command for a pass to run, for one event. */
@@ -157,6 +175,18 @@ const EVENTS: Record<string, EventRule> = {
     kind: 'landed',
     subject: (pr, known) => (pr.mergedAt !== null && pr.mergedAt > known.startedAt ? String(pr.number) : null),
     command: (project, pr) => ['landed', project, pr],
+  },
+  // `carry-gate` decides whether the new head holds only reviewed code; this only notices the head.
+  'head-moved': {
+    kind: 'carry-gate',
+    subject: (pr, known) => {
+      // The listing has no time for a head. A push changes the pull request, so one not changed
+      // since the first pass still has the head it had then.
+      if (!pr.open || pr.updatedAt <= known.startedAt) return null;
+      const gated = known.passedGates.get(pr.number);
+      return gated && !gated.includes(pr.headSha) ? `${pr.number}@${pr.headSha}` : null;
+    },
+    command: (project, subject) => ['carry-gate', project, subject.split('@')[0]],
   },
   // An open pull request labelled for review that has no review. A label has no time of its own,
   // so "since the first pass" is the pull request having changed since. A review that never left
