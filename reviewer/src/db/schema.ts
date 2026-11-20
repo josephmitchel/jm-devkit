@@ -323,7 +323,8 @@ export const testDatabases = pgTable('test_databases', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
-export type RunKind = 'nightly' | 'sweep';
+// `landed`: started by a pass of the poller for a merged pull request, and part of no other run.
+export type RunKind = 'nightly' | 'sweep' | 'landed';
 // `interrupted`: stopped before its command finished, by its time limit or by the service stopping,
 // or found still `running` by the next run. Its work is taken up again by the next run.
 export type RunState = 'running' | 'succeeded' | 'failed' | 'interrupted';

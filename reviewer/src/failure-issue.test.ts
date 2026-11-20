@@ -91,6 +91,12 @@ describe("what a failure issue in the kit's repository may contain", () => {
     expect(open.body).toContain('Stage: `installing dependencies`');
   });
 
+  it('opens an issue of its own for a landed run the poller started', () => {
+    const [open] = failureIssuePlan({ ...kitFailure, facts: { ...facts, kind: 'landed', stage: 'starting', errorType: 'exit 1' } }, []);
+    expect(open).toMatchObject({ action: 'open', title: "A landed run failed on the code reviewer's side" });
+    expect(open.body.split('\n')[0]).toBe('<!-- code-reviewer:failure side=kit kind=landed -->');
+  });
+
   it('tells the owner where the full output is, by the run id alone', () => {
     const [open] = failureIssuePlan(kitFailure, []);
     expect(open.body).toContain(`runs/${ID}.log`);
