@@ -1,7 +1,9 @@
 import { UPDATE_STAGES } from '../bin/update.mjs';
 import { reportRun } from './failure-report.js';
+import { MACHINE_LOCK, NIGHTLY_LOCK, tryLock, type Held } from './machine.js';
 import { ensureProjectRow } from './project-row.js';
 import { listProjects, projectLine, type Project } from './projects.js';
+import { machineFor } from './queue.js';
 import {
   errorType,
   finishRun,
@@ -55,19 +57,75 @@ export function nightlyDecision(steps: Step[], outcomes: Outcome[], stopping = f
   return { done: outcomes.every((o) => o === 'succeeded') ? 'succeeded' : 'failed' };
 }
 
+// How often a nightly run that is waiting for the machine looks again.
+const LOOKS_AGAIN_EVERY_MS = 15_000;
+
+/**
+ * Take the machine for the night, waiting for a review that is running to finish first. The wait
+ * is at most a review's time limit. Returns null when this process was told to stop meanwhile.
+ */
+async function takeMachine(say: (line: string) => void): Promise<Held | null> {
+  let said = false;
+  for (;;) {
+    const machine = await tryLock(MACHINE_LOCK);
+    const turn = machineFor('nightly run', { agentJobRunning: machine === null, nightlyGoing: true });
+    if (machine && turn.take) return machine;
+    await machine?.release();
+    if (!turn.take && !said) say(turn.why);
+    said = true;
+    for (let waited = 0; waited < LOOKS_AGAIN_EVERY_MS; waited += 1000) {
+      if (stopping()) return null;
+      await new Promise((again) => setTimeout(again, 1000));
+    }
+  }
+}
+
 /**
  * The whole nightly run: every handled project's sweep, one after another, each in a process of
  * its own. Every run is recorded and reported, and the nightly run ends failed if any part of it did.
  * Told to stop, it stops the sweep it is on, takes no further step and ends interrupted.
+ *
+ * It has the machine from its first step to its last. While it is going no review starts (the
+ * queue sees its lock), and a review already running is waited for, so the night is put back and
+ * never skipped. A second nightly run beside one that is going does not start.
  */
-export async function runNightly(): Promise<Outcome> {
-  // Before this run records itself, or it would be among them.
+export async function runNightly(): Promise<Outcome | 'not started'> {
+  const night = await tryLock(NIGHTLY_LOCK);
+  if (!night) {
+    console.log('another nightly run is going: this one does not start');
+    return 'not started';
+  }
+  try {
+    return await theNight();
+  } finally {
+    await night.release();
+  }
+}
+
+async function theNight(): Promise<Outcome> {
+  // Before this run records itself, or it would be among them. No other nightly run is going, so
+  // what an earlier one left `running` is dead.
   const left = await interruptRunsLeftRunning();
   const nightly = await startRun({ kind: 'nightly' });
   const say = runLog(nightly);
   say(`nightly run ${nightly.id} started`);
   for (const run of left) say(`an earlier run never recorded how it ended: ${runLine(run)}`);
 
+  const machine = await takeMachine(say);
+  if (!machine) {
+    const finished = await finishRun(nightly, { state: 'interrupted', stage: null, errorType: 'service stopped' });
+    say(`nightly run ${nightly.id} interrupted while it waited for the machine: nothing was started`);
+    await reportRun(finished, say);
+    return 'interrupted';
+  }
+  try {
+    return await takeSteps(nightly, say);
+  } finally {
+    await machine.release();
+  }
+}
+
+async function takeSteps(nightly: Run, say: (line: string) => void): Promise<Outcome> {
   let work: ReturnType<typeof nightlyWork>;
   try {
     work = nightlyWork(await listProjects());

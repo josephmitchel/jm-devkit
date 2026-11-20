@@ -13,7 +13,7 @@ import {
   type IssueComment,
   type IssueInfo,
 } from '../github.js';
-import { ANSWER_AUTHORITY } from '../stages/answers.js';
+import { ANSWER_AUTHORITY } from '../reply-authority.js';
 import { requireRound, type ConcernRow, type SweepCtx } from '../stages/context.js';
 import { LABELS, parseDigestDismissals, withStatus } from './render.js';
 

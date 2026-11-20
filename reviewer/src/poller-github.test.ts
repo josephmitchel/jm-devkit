@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 
-import { projectsSeen, pullRequestsSeen, type Asking, type Remembered } from './poller-github.js';
+import { commentsSeen, projectsSeen, pullRequestsSeen, type Asking, type Remembered } from './poller-github.js';
 
 const { privateKey } = crypto.generateKeyPairSync('rsa', {
   modulusLength: 2048,
@@ -17,7 +17,13 @@ interface World {
   installations: Record<number, string[]>;
   heads: Record<string, string>;
   files: Record<string, Record<string, string>>;
-  pulls: Record<string, Array<{ number: number; updated_at: string; merged_at: string | null; state: 'open' | 'closed'; head: { sha: string } }>>;
+  pulls: Record<
+    string,
+    Array<{ number: number; updated_at: string; merged_at: string | null; state: 'open' | 'closed'; head: { sha: string }; draft?: boolean; labels?: Array<{ name: string }> }>
+  >;
+  /** By `owner/name#number`: the comments on a pull request, and the reviews submitted on it. */
+  comments?: Record<string, Array<{ id: number; created_at: string; author_association?: string }>>;
+  reviews?: Record<string, Array<{ id: number; submitted_at?: string; state: string; body: string | null; author_association?: string }>>;
   /**
    * What GitHub ties an ETag to. `installation`: whoever asks for that installation is told
    * "unchanged". `token`: only the very credential that got the answer is, and a pass mints its
@@ -64,6 +70,15 @@ function github(world: World) {
     if (method === 'GET' && (m = path.match(/^\/repos\/([^/]+\/[^/]+)\/pulls\?state=all&sort=updated&direction=desc&per_page=100&page=(\d+)$/))) {
       const newestFirst = [...(world.pulls[m[1]] ?? [])].sort((a, b) => b.updated_at.localeCompare(a.updated_at));
       return [200, JSON.stringify(newestFirst.slice((Number(m[2]) - 1) * 100, Number(m[2]) * 100))];
+    }
+    if (method === 'GET' && (m = path.match(/^\/repos\/([^/]+\/[^/]+)\/issues\/(\d+)\/comments\?since=([^&]+)&per_page=100&page=(\d+)$/))) {
+      const since = decodeURIComponent(m[3]);
+      const all = (world.comments?.[`${m[1]}#${m[2]}`] ?? []).filter((c) => c.created_at >= since);
+      return [200, JSON.stringify(all.slice((Number(m[4]) - 1) * 100, Number(m[4]) * 100))];
+    }
+    if (method === 'GET' && (m = path.match(/^\/repos\/([^/]+\/[^/]+)\/pulls\/(\d+)\/reviews\?per_page=100&page=(\d+)$/))) {
+      const all = world.reviews?.[`${m[1]}#${m[2]}`] ?? [];
+      return [200, JSON.stringify(all.slice((Number(m[3]) - 1) * 100, Number(m[3]) * 100))];
     }
     return [404, 'Not Found'];
   };
@@ -294,6 +309,8 @@ describe("reading a project's pull requests", () => {
     head: { sha: head },
   });
   const at = (time: string) => new Date(`2026-11-20T${time}Z`);
+  const open = { open: true, headSha: HEAD, draft: false, labels: [], comments: [] };
+  const closed = { ...open, open: false };
 
   async function reading(pulls: World['pulls'][string], etags: World['etags'] = 'installation') {
     const w = { ...world(etags), pulls: { 'acme/widgets': pulls } };
@@ -309,9 +326,23 @@ describe("reading a project's pull requests", () => {
     const seen = await pullRequestsSeen(asking, 'acme/widgets', token, { etag: null, seenTo: null });
     expect(seen.at).toEqual(at('12:00:00'));
     expect(seen.pullRequests).toEqual([
-      { number: 12, updatedAt: at('11:59:00'), mergedAt: at('11:58:00'), open: false, headSha: HEAD },
-      { number: 13, updatedAt: at('11:30:00'), mergedAt: null, open: true, headSha: MOVED },
-      { number: 11, updatedAt: at('08:00:00'), mergedAt: at('08:00:00'), open: false, headSha: HEAD },
+      { number: 12, updatedAt: at('11:59:00'), mergedAt: at('11:58:00'), ...closed },
+      { number: 13, updatedAt: at('11:30:00'), mergedAt: null, ...open, headSha: MOVED },
+      { number: 11, updatedAt: at('08:00:00'), mergedAt: at('08:00:00'), ...closed },
+    ]);
+  });
+
+  it('says of each whether it is open, whether it is a draft, and which labels it has', async () => {
+    const { asking, token } = await reading([
+      { ...pr(14, '11:59:00'), draft: true, labels: [{ name: 'review-now' }] },
+      { ...pr(15, '11:58:00'), labels: [{ name: 'bug' }, { name: 'review-now' }] },
+      { ...pr(16, '11:57:00'), state: 'closed' },
+    ]);
+    const seen = await pullRequestsSeen(asking, 'acme/widgets', token, { etag: null, seenTo: null });
+    expect(seen.pullRequests!.map(({ number, open, draft, labels, comments }) => ({ number, open, draft, labels, comments }))).toEqual([
+      { number: 14, open: true, draft: true, labels: ['review-now'], comments: [] },
+      { number: 15, open: true, draft: false, labels: ['bug', 'review-now'], comments: [] },
+      { number: 16, open: false, draft: false, labels: [], comments: [] },
     ]);
   });
 
@@ -322,7 +353,7 @@ describe("reading a project's pull requests", () => {
     expect(again).toEqual({ at: at('12:00:00'), etag: first.etag, pullRequests: null });
     w.pulls['acme/widgets'][0] = pr(12, '12:01:00', '12:01:00');
     const changed = await pullRequestsSeen(asking, 'acme/widgets', token, { etag: first.etag, seenTo: at('11:59:00') });
-    expect(changed.pullRequests).toEqual([{ number: 12, updatedAt: at('12:01:00'), mergedAt: at('12:01:00'), open: false, headSha: HEAD }]);
+    expect(changed.pullRequests).toEqual([{ number: 12, updatedAt: at('12:01:00'), mergedAt: at('12:01:00'), ...closed }]);
     expect(changed.etag).not.toBe(first.etag);
     expect(made().map((r) => r.split(' ')[2])).toEqual(['200', '304', '200']);
   });
@@ -366,5 +397,70 @@ describe("reading a project's pull requests", () => {
     const { asking, token, made } = await reading(many);
     await pullRequestsSeen(asking, 'acme/widgets', token, { etag: null, seenTo: null });
     expect(made()).toHaveLength(1);
+  });
+});
+
+describe('reading what has been said on a pull request', () => {
+  const at = (time: string) => new Date(`2026-11-20T${time}Z`);
+  const stamp = (time: string) => `2026-11-20T${time}Z`;
+
+  async function reading(said: Pick<World, 'comments' | 'reviews'>) {
+    const w = { ...world(), ...said };
+    const set = setUp(w);
+    const token = (await projectsSeen(set.asking)).projects[0].token;
+    set.made();
+    return { ...set, token };
+  }
+
+  it('gives the comments and the submitted reviews written since a time, with what GitHub says each author is to the project', async () => {
+    const { asking, token, made } = await reading({
+      comments: {
+        'acme/widgets#12': [
+          { id: 900, created_at: stamp('10:00:00'), author_association: 'OWNER' },
+          { id: 901, created_at: stamp('11:30:00'), author_association: 'OWNER' },
+          { id: 902, created_at: stamp('11:31:00'), author_association: 'NONE' },
+        ],
+      },
+      reviews: {
+        'acme/widgets#12': [
+          { id: 700, submitted_at: stamp('11:40:00'), state: 'COMMENTED', body: '1. yes', author_association: 'COLLABORATOR' },
+          { id: 701, submitted_at: stamp('09:00:00'), state: 'COMMENTED', body: 'earlier', author_association: 'OWNER' },
+        ],
+      },
+    });
+    expect(await commentsSeen(asking, 'acme/widgets', token, 12, at('11:00:00'))).toEqual([
+      { id: 901, at: at('11:30:00'), authorAssociation: 'OWNER' },
+      { id: 902, at: at('11:31:00'), authorAssociation: 'NONE' },
+      { id: 700, at: at('11:40:00'), authorAssociation: 'COLLABORATOR' },
+    ]);
+    expect(made()).toEqual([
+      'GET /repos/acme/widgets/issues/12/comments?since=2026-11-20T11%3A00%3A00.000Z 200',
+      'GET /repos/acme/widgets/pulls/12/reviews 200',
+    ]);
+  });
+
+  it('leaves out a review that is not submitted or says nothing, as the review does when it reads answers', async () => {
+    const { asking, token } = await reading({
+      reviews: {
+        'acme/widgets#12': [
+          { id: 700, state: 'PENDING', body: 'a draft of a review', author_association: 'OWNER' },
+          { id: 701, submitted_at: stamp('11:40:00'), state: 'APPROVED', body: '', author_association: 'OWNER' },
+          { id: 702, submitted_at: stamp('11:41:00'), state: 'APPROVED', body: null, author_association: 'OWNER' },
+        ],
+      },
+    });
+    expect(await commentsSeen(asking, 'acme/widgets', token, 12, at('11:00:00'))).toEqual([]);
+  });
+
+  it('takes an author GitHub says nothing about to be nobody to the project', async () => {
+    const { asking, token } = await reading({ comments: { 'acme/widgets#12': [{ id: 900, created_at: stamp('11:30:00') }] } });
+    expect(await commentsSeen(asking, 'acme/widgets', token, 12, at('11:00:00'))).toEqual([{ id: 900, at: at('11:30:00'), authorAssociation: 'NONE' }]);
+  });
+
+  it('reads on while a page is full', async () => {
+    const many = Array.from({ length: 150 }, (_, i) => ({ id: 1000 + i, created_at: stamp('11:30:00'), author_association: 'NONE' }));
+    const { asking, token, made } = await reading({ comments: { 'acme/widgets#12': many } });
+    expect(await commentsSeen(asking, 'acme/widgets', token, 12, at('11:00:00'))).toHaveLength(150);
+    expect(made().filter((r) => r.includes('/comments'))).toHaveLength(2);
   });
 });

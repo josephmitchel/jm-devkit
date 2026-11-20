@@ -1,10 +1,12 @@
 import type { RunKind, pollerEvents, pollerProjects } from './db/schema.js';
 import type { Project } from './projects.js';
+import { countsAsReply } from './reply-authority.js';
 import { runLine, runOutputPath, type Run } from './runs.js';
 
 /**
  * The poller's pass as a decision: from what a pass saw on GitHub and what the database says was
- * already handled, to the commands to run. Nothing here asks GitHub or the database anything.
+ * already handled, to the commands to run and the reviews to queue. Nothing here asks GitHub or
+ * the database anything.
  */
 
 /** A pull request as a pass saw it in a project's listing. */
@@ -18,6 +20,34 @@ export interface PullRequestSeen {
   open: boolean;
   /** The commit its branch is at. */
   headSha: string;
+  draft: boolean;
+  /** The names of its labels. */
+  labels: string[];
+  /**
+   * What has been said on it, comments and submitted reviews alike. Read only for a pull request
+   * whose review waits on the owner, and empty for every other.
+   */
+  comments: CommentSeen[];
+}
+
+/** A comment on a pull request, as far as the poller needs it. */
+export interface CommentSeen {
+  id: number;
+  /** When it was written. */
+  at: Date;
+  /** What GitHub says its author is to the project: `OWNER`, `MEMBER`, `NONE` and so on. */
+  authorAssociation: string;
+}
+
+/** A pull request's review, as the database has it. */
+export interface ReviewKnown {
+  pr: number;
+  /** One of the review's states: `pending`, `auditing`, `awaiting_answers`, `passed`, `failed` and the rest. */
+  state: string;
+  /** When it entered that state. */
+  since: Date;
+  /** The comments the code reviewer posted for it, which are never the owner's word. */
+  ownComments: number[];
 }
 
 /** What a pass saw of one project. Its pull requests are asked for only when the machine handles it. */
@@ -36,7 +66,7 @@ export interface ProjectSeen {
 export interface EventRecord {
   /** The event's key, `<name>:<subject>`, such as `merged:12`. The same event always has the same key. */
   event: string;
-  /** When its command succeeded, or null while it has not. */
+  /** When it was handled, or null while it has not been. */
   handledAt: Date | null;
   /** How many times its command has been started. */
   attempts: number;
@@ -53,6 +83,8 @@ export interface ProjectKnown {
   /** How far the last pass's reading of the pull requests got: the newest change it saw. */
   seenTo: Date;
   events: EventRecord[];
+  /** The project's reviews, one per pull request that has one. */
+  reviews: ReviewKnown[];
   /** For each pull request whose review has passed: the commits that review's gate is on, carried ones included. */
   passedGates: ReadonlyMap<number, readonly string[]>;
 }
@@ -84,8 +116,10 @@ export interface Command {
 }
 
 export interface PassDecision {
-  /** The commands to run now, in order. */
+  /** The commands for the pass to run now, in order. */
   commands: Command[];
+  /** The agent jobs found for the first time: on record for the queue, which starts them. */
+  queued: Command[];
   /** For each handled project: the events found for the first time, and where this pass got to. */
   projects: Array<{ project: string; firstPass: boolean; startedAt: Date; seenTo: Date; found: string[] }>;
   /** The projects the machine does not handle. Nothing is run for them and nothing recorded. */
@@ -108,6 +142,33 @@ interface EventRule {
   command(project: string, subject: string): string[];
 }
 
+// The label that asks for a pull request's review (plugin/install/label.mjs creates it).
+const REVIEW_LABEL = 'review-now';
+// The states in which a review does nothing until the owner says something on its pull request:
+// waiting for answers, or stopped with a notice that says a comment retries it.
+const WAITS_ON_OWNER = new Set(['awaiting_answers', 'failed']);
+// One command starts a review, continues it and retries it: the review's own state says which.
+const review = (project: string, pr: string) => ['run', project, pr, '--once'];
+
+/** The review that waits for the owner's word on this pull request, or null when none does. */
+function waitingOn(pr: PullRequestSeen, reviews: ReviewKnown[]): ReviewKnown | null {
+  const waiting = reviews.find((r) => r.pr === pr.number && WAITS_ON_OWNER.has(r.state));
+  return pr.open && waiting ? waiting : null;
+}
+
+/**
+ * The pull requests whose comments a pass has to read before it can decide, each with the time to
+ * read from: those whose review waits on the owner, and that have changed since the last pass's
+ * reading. A comment moves its pull request's time of last change, so nothing new is on any other.
+ */
+export function repliesToRead(pullRequests: PullRequestSeen[], known: ProjectKnown): Array<{ pr: PullRequestSeen; since: Date }> {
+  return pullRequests.flatMap((pr) => {
+    const waiting = waitingOn(pr, known.reviews);
+    // Not later-than: GitHub's times are whole seconds, and a second comment can share one.
+    return waiting && pr.updatedAt >= known.seenTo ? [{ pr, since: waiting.since }] : [];
+  });
+}
+
 /** Every event the poller acts on. A new event is a new entry here. */
 const EVENTS: Record<string, EventRule> = {
   merged: {
@@ -127,10 +188,45 @@ const EVENTS: Record<string, EventRule> = {
     },
     command: (project, subject) => ['carry-gate', project, subject.split('@')[0]],
   },
+  // An open pull request labelled for review that has no review. A label has no time of its own,
+  // so "since the first pass" is the pull request having changed since. A review that never left
+  // `pending` has not started: it counts as none.
+  labelled: {
+    kind: 'review',
+    subject: (pr, known) => {
+      const asked = pr.open && !pr.draft && pr.labels.includes(REVIEW_LABEL) && pr.updatedAt > known.startedAt;
+      const started = known.reviews.some((r) => r.pr === pr.number && r.state !== 'pending');
+      return asked && !started ? String(pr.number) : null;
+    },
+    command: review,
+  },
+  // The owner's word on a review that waits for it. The event is the newest such comment, so
+  // several written before a pass are one event and the review is continued once for them.
+  replied: {
+    kind: 'review',
+    subject: (pr, known) => {
+      const waiting = waitingOn(pr, known.reviews);
+      if (!waiting) return null;
+      const own = new Set(waiting.ownComments);
+      const newest = pr.comments
+        .filter((c) => c.at > waiting.since && c.at > known.startedAt && countsAsReply(c, own))
+        // Of two written in the same second, the one listed later: GitHub lists them as written.
+        .reduce<CommentSeen | null>((last, c) => (last === null || c.at >= last.at ? c : last), null);
+      return newest === null ? null : `${pr.number}/${newest.id}`;
+    },
+    command: (project, subject) => review(project, subject.split('/')[0]),
+  },
 };
 
+/**
+ * The kinds of run that run agents. A pass finds their events and puts them on record, and does
+ * not run them: a review can take hours and a pass must stay short. The queue starts them, one at
+ * a time on the machine (queue.ts).
+ */
+export const AGENT_JOB_KINDS: ReadonlySet<RunKind> = new Set<RunKind>(['review']);
+
 /** The command for a recorded event, or null when no rule knows its key. */
-function commandFor(project: string, event: string, attempts: number): Command | null {
+export function commandFor(project: string, event: string, attempts: number): Command | null {
   const [name, ...subject] = event.split(':');
   if (!Object.hasOwn(EVENTS, name)) return null;
   const rule = EVENTS[name];
@@ -160,14 +256,15 @@ function due(event: EventRecord, now: Date): boolean {
  * What a pass does. For each project the machine handles: nothing on its first pass, which only
  * marks where the project starts from; after that, the command for every event the rules find
  * that is not on record, and again for every event on record whose command has not succeeded and
- * whose wait is over. `known` has an entry for each project that has had its first pass.
+ * whose wait is over. An agent job's event is found the same way and never run here: it is
+ * returned as queued. `known` has an entry for each project that has had its first pass.
  */
 export function passDecision(
   seen: { projects: ProjectSeen[] },
   known: { projects: ReadonlyMap<string, ProjectKnown> },
   now: Date,
 ): PassDecision {
-  const decision: PassDecision = { commands: [], projects: [], leftAlone: [] };
+  const decision: PassDecision = { commands: [], queued: [], projects: [], leftAlone: [] };
   for (const { project, at, pullRequests } of seen.projects) {
     if (project.state !== 'handled') {
       decision.leftAlone.push(project);
@@ -193,7 +290,9 @@ export function passDecision(
     const again = before.events.filter((e) => due(e, now)).map((e) => ({ event: e.event, attempts: e.attempts }));
     for (const { event, attempts } of [...again, ...found.map((event) => ({ event, attempts: 0 }))]) {
       const command = commandFor(project.slug, event, attempts);
-      if (command) decision.commands.push(command);
+      if (!command) continue;
+      if (!AGENT_JOB_KINDS.has(command.kind)) decision.commands.push(command);
+      else if (found.includes(event)) decision.queued.push(command);
     }
     const newest = Math.max(before.seenTo.getTime(), ...(pullRequests ?? []).map((pr) => pr.updatedAt.getTime()));
     decision.projects.push({ project: project.slug, firstPass: false, startedAt: before.startedAt, seenTo: new Date(newest), found });
@@ -204,11 +303,11 @@ export function passDecision(
 /**
  * Of the runs still recorded as `running`, those an earlier pass left behind: its process died
  * before it could record how they ended. A pass waits for every command it starts and no two
- * passes run at once, so a pass that is starting may call these dead. A kind of run that outlasts
- * the pass that started it would need a rule of its own and must not be counted here.
+ * passes run at once, so a pass that is starting may call these dead. An agent job outlasts the
+ * pass that found it and is not counted here: the queue has the rule for those (leftByQueue).
  */
 export function leftByPasses(rows: Run[]): Run[] {
-  const waitedFor = new Set<string>(Object.values(EVENTS).map((rule) => rule.kind));
+  const waitedFor = new Set<string>(Object.values(EVENTS).map((rule) => rule.kind).filter((kind) => !AGENT_JOB_KINDS.has(kind)));
   return rows.filter((r) => r.state === 'running' && r.parentId === null && waitedFor.has(r.kind));
 }
 

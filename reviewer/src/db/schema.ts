@@ -327,8 +327,9 @@ export const testDatabases = pgTable('test_databases', {
 });
 
 // `checks`: one project's nightly checks, run after its sweep or by hand. `landed`: started by a
-// pass of the poller for a merged pull request, and part of no other run.
-export type RunKind = 'nightly' | 'sweep' | 'summary' | 'checks' | 'landed' | 'carry-gate';
+// pass of the poller for a merged pull request, and part of no other run. `review`: a pull
+// request's review, found by a pass and started by the queue; also part of no other run.
+export type RunKind = 'nightly' | 'sweep' | 'summary' | 'checks' | 'landed' | 'carry-gate' | 'review';
 // `interrupted`: stopped before its command finished, by its time limit or by the service stopping,
 // or found still `running` by the next run. Its work is taken up again by the next run.
 export type RunState = 'running' | 'succeeded' | 'failed' | 'interrupted';
@@ -374,7 +375,9 @@ export const pollerEvents = pgTable(
     attemptedAt: timestamp('attempted_at', { withTimezone: true }),
     // The run of its last attempt.
     runId: text('run_id').references(() => runs.id),
-    // Set once its command has succeeded, and only then. Null: still to be handled.
+    // Set once the event needs nothing more done. For a command a pass runs, that is once it has
+    // succeeded, and only then; a review's event has its own rule (queue.ts afterReviewRun). Null:
+    // still to be handled.
     handledAt: timestamp('handled_at', { withTimezone: true }),
     foundAt: timestamp('found_at', { withTimezone: true }).notNull().defaultNow(),
   },

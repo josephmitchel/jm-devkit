@@ -17,7 +17,9 @@ import { runMigrations } from './migrate.js';
 import { recordNightlyNotStarted, runNightly } from './nightly.js';
 import { runChecksOnDemand, runProjectChecks } from './nightly-checks.js';
 import { pollerStatus } from './poller.js';
-import { pollerStatusRows, runPass } from './poller-pass.js';
+import { forgetReviewEvents, pollerStatusRows, runPass } from './poller-pass.js';
+import { queueStatus } from './queue.js';
+import { queueStatusFacts, runQueueTurn } from './queue-run.js';
 import { listProjects, projectLine } from './projects.js';
 import { runReview } from './review-loop.js';
 import { cloneUrl } from './project-row.js';
@@ -48,15 +50,23 @@ Usage:
                                                 sweep, its summary and then its nightly checks if
                                                 it names any; a step that fails does not stop the
                                                 next, and a sweep that runs past five and a half
-                                                hours is stopped and resumed the next night
+                                                hours is stopped and resumed the next night; it
+                                                waits for a review that is running, and no review
+                                                starts until it is over
   code-reviewer nightly-not-started <stage> <error type>
                                                 record a nightly run that could not start; the
                                                 machine's update step (bin/update.mjs) calls it
   code-reviewer poll                            one pass of the poller: for every project the
                                                 machine handles, run landed for each pull request
                                                 merged since the last pass and carry-gate for each
-                                                new head of one whose review passed (a timer runs
-                                                this every few minutes)
+                                                new head of one whose review passed, and queue
+                                                the review of each one labelled review-now or
+                                                answered by the owner (a timer runs this every
+                                                few minutes)
+  code-reviewer queue                           one turn of the queue: start the next queued
+                                                review if no agent job is running on the machine
+                                                and see it through (the machine runs this after
+                                                every pass of the poller)
   code-reviewer failure-issue <owner/repo>      open, comment on or close that repository's failure
                                                 issue, from the report of a finished run on its
                                                 input (the nightly run starts this; not for hand use)
@@ -78,14 +88,15 @@ Usage:
       --redundancy <n>                          auditors per characteristic (default 1)
   code-reviewer repo set <owner/repo> [opts]    update repo config (same options)
   code-reviewer status [owner/repo]             show reviews and their states, the recent
-                                                nightly runs with each project's result, and
-                                                what the poller's last passes found
+                                                nightly runs with each project's result, what
+                                                the poller's last passes found, and the queue:
+                                                the agent job running and the reviews waiting
   code-reviewer reset <owner/repo> <pr#>        delete a review's state (concerns/policies kept)
 `;
 
 // The commands CI runs unattended. The admin ones print tables and confirmations for a person at
 // a terminal, where a timestamp on every line is only noise.
-const STAMPED = new Set(['run', 'sweep', 'summary', 'checks', 'nightly', 'nightly-not-started', 'poll', 'landed', 'migrate', 'next', 'abandon', 'carry-gate']);
+const STAMPED = new Set(['run', 'sweep', 'summary', 'checks', 'nightly', 'nightly-not-started', 'poll', 'queue', 'landed', 'migrate', 'next', 'abandon', 'carry-gate']);
 
 async function main() {
   const [cmd, ...rest] = process.argv.slice(2);
@@ -141,7 +152,7 @@ async function main() {
       stopCommandsOnSignal();
       const outcome = await runNightly();
       printRaw(`outcome: ${outcome}`);
-      if (outcome !== 'succeeded') process.exitCode = 1;
+      if (outcome !== 'succeeded' && outcome !== 'not started') process.exitCode = 1;
       break;
     }
     case 'nightly-not-started': {
@@ -175,6 +186,14 @@ async function main() {
       // A pass told to stop stops the command it is on and records it, as the nightly run does.
       stopCommandsOnSignal();
       if ((await runPass()) === 'failed') process.exitCode = 1;
+      break;
+    }
+    case 'queue': {
+      if (rest.length > 0) return usageExit();
+      // A turn told to stop stops the review it is on, which is then recorded as stopped.
+      stopCommandsOnSignal();
+      const outcome = await runQueueTurn();
+      if (outcome === 'failed' || outcome === 'interrupted') process.exitCode = 1;
       break;
     }
     case 'failure-issue': {
@@ -519,6 +538,9 @@ async function showStatus(slug?: string): Promise<void> {
   console.log(`\n${nightlyStatus(shown).join('\n')}`);
   const poller = await pollerStatusRows(slug);
   console.log(`\n${pollerStatus(poller.projects, poller.events).join('\n')}`);
+  // The whole machine's, whichever project was asked for: one queue serves them all.
+  const queue = await queueStatusFacts();
+  console.log(`\n${queueStatus(queue.decision, queue.running, queue.machine).join('\n')}`);
 }
 
 async function resetReview(slug: string, prNumber: number): Promise<void> {
@@ -560,6 +582,8 @@ async function resetReview(slug: string, prNumber: number): Promise<void> {
     await tx.delete(schema.rounds).where(eq(schema.rounds.reviewId, review.id));
     await tx.delete(schema.reviews).where(eq(schema.reviews.id, review.id));
   });
+  // With the review gone, so is the record that it was asked for: the label starts a new one.
+  await forgetReviewEvents(slug, prNumber);
   console.log(`review for ${slug}#${prNumber} deleted (concerns and policies preserved)`);
 }
 

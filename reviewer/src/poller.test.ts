@@ -2,7 +2,19 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-import { gatesOfPassedReviews, leftByPasses, passDecision, pollerStatus, retryDelayMs, type EventRecord, type ProjectKnown, type ProjectSeen, type PullRequestSeen } from './poller.js';
+import {
+  gatesOfPassedReviews,
+  leftByPasses,
+  passDecision,
+  pollerStatus,
+  repliesToRead,
+  retryDelayMs,
+  type EventRecord,
+  type ProjectKnown,
+  type ProjectSeen,
+  type PullRequestSeen,
+  type ReviewKnown,
+} from './poller.js';
 import type { Run } from './runs.js';
 
 const at = (time: string) => new Date(`2026-11-20T${time}Z`);
@@ -16,11 +28,24 @@ const widgets = (pullRequests: PullRequestSeen[] | null, slug = 'acme/widgets'):
 
 const HEAD = 'c3'.repeat(20);
 
-const merged = (number: number, when: string): PullRequestSeen => ({ number, updatedAt: at(when), mergedAt: at(when), open: false, headSha: HEAD });
+/** An open pull request, last changed at `when`, with nothing else about it unless given. */
+const pull = (number: number, when: string, fields: Partial<PullRequestSeen> = {}): PullRequestSeen => ({
+  number,
+  updatedAt: at(when),
+  mergedAt: null,
+  open: true,
+  headSha: HEAD,
+  draft: false,
+  labels: [],
+  comments: [],
+  ...fields,
+});
+
+const merged = (number: number, when: string): PullRequestSeen => pull(number, when, { mergedAt: at(when), open: false });
 
 /** What the database holds for a project whose first pass was at 09:00. */
-const known = (events: EventRecord[] = [], slug = 'acme/widgets'): Map<string, ProjectKnown> =>
-  new Map([[slug, { startedAt: at('09:00:00'), seenTo: at('11:57:00'), events, passedGates: new Map() }]]);
+const known = (events: EventRecord[] = [], slug = 'acme/widgets', reviews: ReviewKnown[] = []): Map<string, ProjectKnown> =>
+  new Map([[slug, { startedAt: at('09:00:00'), seenTo: at('11:57:00'), events, passedGates: new Map(), reviews }]]);
 
 const NOW = at('12:00:01');
 
@@ -52,15 +77,15 @@ describe('what a pass of the poller runs, from what it saw on GitHub and what wa
 
   it('never goes back over a merge from before the first pass, however often a later pass sees it', () => {
     // Merged at 08:00, an hour before the first pass, and commented on since.
-    const old: PullRequestSeen = { number: 11, updatedAt: at('11:59:00'), mergedAt: at('08:00:00'), open: false, headSha: HEAD };
+    const old = pull(11, '11:59:00', { mergedAt: at('08:00:00'), open: false });
     const decision = passDecision({ projects: [widgets([old])] }, { projects: known() }, NOW);
     expect(decision.commands).toEqual([]);
     expect(decision.projects[0].found).toEqual([]);
   });
 
   it('runs nothing for a pull request that is open, or was closed without merging', () => {
-    const open: PullRequestSeen = { number: 13, updatedAt: at('11:59:00'), mergedAt: null, open: true, headSha: HEAD };
-    expect(passDecision({ projects: [widgets([open])] }, { projects: known() }, NOW).commands).toEqual([]);
+    const closed = pull(14, '11:59:00', { open: false });
+    expect(passDecision({ projects: [widgets([pull(13, '11:59:00'), closed])] }, { projects: known() }, NOW).commands).toEqual([]);
   });
 
   it('leaves alone a project the machine does not handle, whatever was seen of it', () => {
@@ -140,6 +165,151 @@ describe('a merge whose landed did not succeed', () => {
   });
 });
 
+describe('a pull request labelled review-now', () => {
+  const labelled = (number: number, when: string, fields: Partial<PullRequestSeen> = {}) => pull(number, when, { labels: ['review-now'], ...fields });
+  const found = (pullRequests: PullRequestSeen[], reviews: ReviewKnown[] = [], events: EventRecord[] = []) =>
+    passDecision({ projects: [widgets(pullRequests)] }, { projects: known(events, 'acme/widgets', reviews) }, NOW);
+  const review = (pr: number, state: string): ReviewKnown => ({ pr, state, since: at('10:00:00'), ownComments: [] });
+
+  it('has its review put on record for the queue, and the pass does not run it', () => {
+    const decision = found([labelled(12, '11:59:00', { labels: ['bug', 'review-now'] })]);
+    expect(decision.projects[0].found).toEqual(['labelled:12']);
+    expect(decision.queued).toEqual([
+      { project: 'acme/widgets', event: 'labelled:12', kind: 'review', args: ['run', 'acme/widgets', '12', '--once'], attempts: 0 },
+    ]);
+    // A review runs for hours and a pass waits for what it runs.
+    expect(decision.commands).toEqual([]);
+  });
+
+  it('is not found a second time, on a later pass or after its review has been tried', () => {
+    const onRecord: EventRecord = { event: 'labelled:12', handledAt: null, attempts: 1, attemptedAt: at('11:00:00'), running: false };
+    const decision = found([labelled(12, '11:59:00')], [review(12, 'pending')], [onRecord]);
+    expect(decision.projects[0].found).toEqual([]);
+    expect(decision.queued).toEqual([]);
+    // Nor is the one on record run by the pass when its wait is over: the queue starts reviews.
+    expect(decision.commands).toEqual([]);
+  });
+
+  it('is not reviewed while it is a draft', () => {
+    expect(found([labelled(12, '11:59:00', { draft: true })]).projects[0].found).toEqual([]);
+  });
+
+  it('is reviewed once it leaves draft with the label still on', () => {
+    // The draft was seen and nothing recorded; leaving draft changes it, so a later pass sees it again.
+    expect(found([labelled(12, '11:59:30')]).projects[0].found).toEqual(['labelled:12']);
+  });
+
+  it('is not reviewed without the label, or once it is closed or merged', () => {
+    const decision = found([pull(12, '11:59:00', { labels: ['bug'] }), labelled(13, '11:59:00', { open: false }), { ...merged(14, '11:58:00'), labels: ['review-now'] }]);
+    expect(decision.queued).toEqual([]);
+  });
+
+  it('is not reviewed again when it already has a review, whatever state that is in', () => {
+    for (const state of ['auditing', 'awaiting_answers', 'passed', 'failed']) {
+      expect(found([labelled(12, '11:59:00')], [review(12, state)]).projects[0].found, state).toEqual([]);
+    }
+  });
+
+  it('is queued when its only review never started: one left waiting for the slot before the machine took the project', () => {
+    expect(found([labelled(12, '11:59:00')], [review(12, 'pending')]).projects[0].found).toEqual(['labelled:12']);
+  });
+
+  it("is not acted on when nothing about it has changed since the project's first pass", () => {
+    expect(found([labelled(12, '08:30:00')]).projects[0].found).toEqual([]);
+  });
+});
+
+describe("a comment on the pull request of a review that waits on the owner", () => {
+  const owner = (id: number, when: string) => ({ id, at: at(when), authorAssociation: 'OWNER' });
+  const waiting = (state = 'awaiting_answers', ownComments: number[] = []): ReviewKnown => ({ pr: 12, state, since: at('11:00:00'), ownComments });
+  const found = (comments: PullRequestSeen['comments'], review: ReviewKnown = waiting(), fields: Partial<PullRequestSeen> = {}) =>
+    passDecision({ projects: [widgets([pull(12, '11:59:00', { comments, ...fields })])] }, { projects: known([], 'acme/widgets', [review]) }, NOW);
+
+  it("continues the review when it is the owner's, through the queue", () => {
+    const decision = found([owner(900, '11:58:00')]);
+    expect(decision.queued).toEqual([
+      { project: 'acme/widgets', event: 'replied:12/900', kind: 'review', args: ['run', 'acme/widgets', '12', '--once'], attempts: 0 },
+    ]);
+    expect(decision.commands).toEqual([]);
+  });
+
+  it('counts a member or a collaborator as it counts the owner, as the review itself does when it reads answers', () => {
+    for (const authorAssociation of ['MEMBER', 'COLLABORATOR']) {
+      expect(found([{ ...owner(900, '11:58:00'), authorAssociation }]).projects[0].found).toEqual(['replied:12/900']);
+    }
+  });
+
+  it("does nothing for anyone else's comment", () => {
+    for (const authorAssociation of ['NONE', 'CONTRIBUTOR', 'FIRST_TIME_CONTRIBUTOR']) {
+      expect(found([{ ...owner(900, '11:58:00'), authorAssociation }]).projects[0].found, authorAssociation).toEqual([]);
+    }
+  });
+
+  it("does nothing for the code reviewer's own comments", () => {
+    expect(found([owner(900, '11:58:00')], waiting('awaiting_answers', [900])).projects[0].found).toEqual([]);
+  });
+
+  it('does nothing for what was said before the review began to wait', () => {
+    expect(found([owner(900, '10:59:00')]).projects[0].found).toEqual([]);
+  });
+
+  it("does nothing for what was said before the project's first pass", () => {
+    const since0800: ReviewKnown = { ...waiting(), since: at('08:00:00') };
+    expect(found([owner(900, '08:30:00')], since0800).projects[0].found).toEqual([]);
+  });
+
+  it('continues it once for several new comments: the event is the newest of them', () => {
+    expect(found([owner(902, '11:58:30'), owner(900, '11:58:00'), owner(901, '11:58:10')]).projects[0].found).toEqual(['replied:12/902']);
+  });
+
+  it('takes the later of two comments written in the same second, so the second is not lost when a pass saw only the first', () => {
+    // GitHub's times are whole seconds, and it lists comments in the order they were written.
+    expect(found([owner(900, '11:58:00'), owner(901, '11:58:00')]).projects[0].found).toEqual(['replied:12/901']);
+  });
+
+  it('does not continue it again for a comment already acted on, and does for a later one', () => {
+    const acted: EventRecord = { event: 'replied:12/900', handledAt: at('11:58:40'), attempts: 1, attemptedAt: at('11:58:05'), running: false };
+    const again = (comments: PullRequestSeen['comments']) =>
+      passDecision({ projects: [widgets([pull(12, '11:59:00', { comments })])] }, { projects: known([acted], 'acme/widgets', [waiting()]) }, NOW).projects[0].found;
+    expect(again([owner(900, '11:58:00')])).toEqual([]);
+    expect(again([owner(900, '11:58:00'), owner(905, '11:59:00')])).toEqual(['replied:12/905']);
+  });
+
+  it('retries a review that stopped, as its notice on the pull request says a comment will', () => {
+    expect(found([owner(900, '11:58:00')], waiting('failed')).projects[0].found).toEqual(['replied:12/900']);
+  });
+
+  it('does nothing for a review that is working, queued or finished', () => {
+    for (const state of ['pending', 'auditing', 'fixing', 'passed']) {
+      expect(found([owner(900, '11:58:00')], waiting(state)).projects[0].found, state).toEqual([]);
+    }
+  });
+
+  it('does nothing once the pull request is closed', () => {
+    expect(found([owner(900, '11:58:00')], waiting(), { open: false }).projects[0].found).toEqual([]);
+  });
+});
+
+describe('the pull requests a pass reads the comments of', () => {
+  const review = (pr: number, state: string, since = '11:00:00'): ReviewKnown => ({ pr, state, since: at(since), ownComments: [] });
+  // The last pass read as far as 11:57.
+  const position = (reviews: ReviewKnown[]) => known([], 'acme/widgets', reviews).get('acme/widgets')!;
+
+  it('are those whose review waits on the owner and that have changed since the last pass, each from when its review began to wait', () => {
+    const listing = [pull(12, '11:59:00'), pull(13, '11:58:00'), pull(14, '11:58:30')];
+    const wanted = repliesToRead(listing, position([review(12, 'awaiting_answers'), review(13, 'auditing'), review(14, 'failed', '11:30:00')]));
+    expect(wanted.map(({ pr, since }) => [pr.number, since])).toEqual([
+      [12, at('11:00:00')],
+      [14, at('11:30:00')],
+    ]);
+  });
+
+  it('are not those the last pass already read, a closed one, or one with no review', () => {
+    const listing = [pull(12, '11:50:00'), pull(13, '11:59:00', { open: false }), pull(14, '11:59:00')];
+    expect(repliesToRead(listing, position([review(12, 'awaiting_answers'), review(13, 'awaiting_answers')]))).toEqual([]);
+  });
+});
+
 describe('the order a pass works in', () => {
   it('takes what is waiting to be tried again first, then what it found, oldest first', () => {
     const waiting: EventRecord = { event: 'merged:9', handledAt: null, attempts: 2, attemptedAt: at('11:50:00'), running: false };
@@ -167,7 +337,7 @@ describe('a new head on a pull request whose review passed', () => {
   const MOVED = 'b2'.repeat(20);
 
   /** An open pull request as a pass saw it, with the commit its branch is at. */
-  const open = (number: number, headSha: string, when: string): PullRequestSeen => ({ number, updatedAt: at(when), mergedAt: null, open: true, headSha });
+  const open = (number: number, headSha: string, when: string): PullRequestSeen => pull(number, when, { headSha });
 
   /** What is on record when the review of #12 has passed and its gate is on the given commits. */
   const passed = (gated: string[], events: EventRecord[] = []): Map<string, ProjectKnown> =>
@@ -255,6 +425,26 @@ describe('a new head on a pull request whose review passed', () => {
   });
 });
 
+describe('what a pass runs and what it leaves for the queue', () => {
+  it('runs landed and carry-gate itself and only queues a review, so neither ever waits for an agent job', () => {
+    const MOVED = 'b2'.repeat(20);
+    const decision = passDecision(
+      { projects: [widgets([pull(14, '11:59:40', { labels: ['review-now'] }), pull(12, '11:59:30', { headSha: MOVED }), merged(9, '11:58:00')])] },
+      { projects: new Map([['acme/widgets', { ...known().get('acme/widgets')!, passedGates: new Map([[12, ['a1'.repeat(20)]]]) }]]) },
+      NOW,
+    );
+    expect(decision.commands.map((c) => c.args.join(' '))).toEqual(['landed acme/widgets 9', 'carry-gate acme/widgets 12']);
+    expect(decision.queued.map((c) => c.args.join(' '))).toEqual(['run acme/widgets 14 --once']);
+  });
+
+  it('does not run a queued review when it is due again either: only the queue starts one', () => {
+    const waiting: EventRecord = { event: 'labelled:14', handledAt: null, attempts: 2, attemptedAt: at('09:30:00'), running: false };
+    const decision = passDecision({ projects: [widgets(null)] }, { projects: known([waiting]) }, NOW);
+    expect(decision.commands).toEqual([]);
+    expect(decision.queued).toEqual([]);
+  });
+});
+
 describe("the commits the gates of a project's passed reviews are on, from the statuses the database has for them", () => {
   const A = 'a1'.repeat(20);
   const B = 'b2'.repeat(20);
@@ -305,8 +495,8 @@ describe('the runs a starting pass finds still recorded as running', () => {
     const rows = [
       running('run-20261120T020000Z-cccccc', { kind: 'nightly', project: null }),
       running('run-20261120T020001Z-dddddd', { kind: 'sweep', parentId: 'run-20261120T020000Z-cccccc' }),
-      // Not a kind of run today. A review the poller starts would outlast the pass that started it.
-      running('run-20261120T110000Z-eeeeee', { kind: 'review' as Run['kind'] }),
+      // A review outlasts the pass that found it: the queue runs it and has its own rule for it.
+      running('run-20261120T110000Z-eeeeee', { kind: 'review' }),
     ];
     expect(leftByPasses(rows)).toEqual([]);
   });

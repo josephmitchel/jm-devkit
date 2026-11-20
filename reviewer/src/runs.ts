@@ -113,9 +113,9 @@ export function afterInterruption(args: string[], reason: StopReason): string[] 
 
 /**
  * Of the runs still recorded as `running`, those a nightly run left behind: an earlier nightly run
- * and its parts. Only a nightly run that is starting may call them dead, because the machine
- * starts one nightly run at a time. A run that is no part of a nightly run (one the poller
- * started) may be going on beside it and is not this rule's to judge.
+ * and its parts. Only a nightly run that is starting may call them dead, because one nightly run
+ * goes at a time (it holds the nightly run's lock). A run that is no part of a nightly run (a
+ * `landed` or a review) may be going on beside it and is not this rule's to judge.
  */
 export function leftByNightlyRuns(rows: Run[]): Run[] {
   return rows.filter((r) => r.state === 'running' && (r.kind === 'nightly' || r.parentId !== null));
@@ -213,7 +213,8 @@ export function runLog(run: Run): (line: string) => void {
  * Record as interrupted what an earlier nightly run left as `running`: its process was killed, or
  * the machine went down, before it could record how it ended. For a nightly run that is starting,
  * before it records itself. The sweeps it left resume when tonight's run reaches their projects.
- * `leftBehind` says which of the running runs the caller may call dead; the poller has its own.
+ * `leftBehind` says which of the running runs the caller may call dead; the poller and the queue
+ * have their own.
  */
 export async function interruptRunsLeftRunning(leftBehind: (running: Run[]) => Run[] = leftByNightlyRuns): Promise<Run[]> {
   const left = leftBehind(await db.select().from(schema.runs).where(eq(schema.runs.state, 'running')));
@@ -279,13 +280,21 @@ function signalGroup(child: ChildProcess, signal: NodeJS.Signals): void {
  */
 export async function runCommand(run: Run, args: string[]): Promise<RunResult> {
   const result = runResult(run.id, await runChild(run, args, timeLimitMs(args), true));
-  const cleanup = result.state === 'interrupted' ? afterInterruption(args, result.errorType as StopReason) : null;
-  if (cleanup) {
-    // Not stopped with the rest: it is what a stopping service still has to get done.
-    const cleaned = await runChild(run, cleanup, CLEANUP_LIMIT_MS, false);
-    if (cleaned.exitCode !== 0) console.warn(`${run.id}: could not record the interrupted work as stopped (${cleanup[0]})`);
-  }
+  if (result.state === 'interrupted') await tidyAfterInterruption(run, args, result.errorType as StopReason);
   return result;
+}
+
+/**
+ * Do what an interrupted command's work needs before it can be taken up again
+ * ({@link afterInterruption}), as part of the same run. runCommand does it for a command it
+ * stopped; whoever finds a run dead, its process gone unrecorded, calls it for that run.
+ */
+export async function tidyAfterInterruption(run: Run, args: string[], reason: StopReason): Promise<void> {
+  const cleanup = afterInterruption(args, reason);
+  if (!cleanup) return;
+  // Not stopped with the rest: it is what a stopping service still has to get done.
+  const cleaned = await runChild(run, cleanup, CLEANUP_LIMIT_MS, false);
+  if (cleaned.exitCode !== 0) console.warn(`${run.id}: could not record the interrupted work as stopped (${cleanup[0]})`);
 }
 
 async function runChild(run: Run, args: string[], limitMs: number | null, stoppable: boolean): Promise<Ended> {

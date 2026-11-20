@@ -7,6 +7,10 @@ After=network-online.target postgresql.service
 # Not before the nightly run's update step has installed the code reviewer's dependencies once:
 # on a machine just set up there is nothing to run yet. A pass skipped this way is not a failure.
 ConditionPathExists=/var/lib/code-reviewer/kit/reviewer/node_modules/.installed-from-lockfile
+# A pass finds the reviews to start and does not run them: when it ends, however it ended, the
+# queue takes a turn (code-reviewer-queue.service). A turn already going is left to go on.
+OnSuccess=code-reviewer-queue.service
+OnFailure=code-reviewer-queue.service
 
 [Service]
 # One pass and out. While it is going the timer cannot start another, so a pass never overlaps itself.

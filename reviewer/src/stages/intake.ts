@@ -38,6 +38,12 @@ export const ACTIVE_WORK_STATES = new Set([
  */
 const STALE_HOLDER_MS = 7 * 60 * 60 * 1000;
 
+/**
+ * The states in which a review does not hold its project's review slot: finished, stopped, or
+ * still waiting for the slot. A review in any other state holds it.
+ */
+export const OFF_THE_SLOT = ['passed', 'failed', 'pending'] as const;
+
 /** Either this review holds the repo's review slot, or the review that does is named. */
 export type SlotClaim =
   | { ok: true }
@@ -114,7 +120,7 @@ export async function resolveSlot(
     .where(
       and(
         eq(schema.reviews.repoId, repoId),
-        notInArray(schema.reviews.state, ['passed', 'failed', 'pending']),
+        notInArray(schema.reviews.state, [...OFF_THE_SLOT]),
       ),
     );
   const conflicts: ReviewSlotConflict[] = rows
