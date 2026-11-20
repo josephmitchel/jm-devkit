@@ -65,12 +65,14 @@ const LOOKS_AGAIN_EVERY_MS = 15_000;
  * is at most a review's time limit. Returns null when this process was told to stop meanwhile.
  */
 async function takeMachine(say: (line: string) => void): Promise<Held | null> {
-  for (let said = false; ; said = true) {
+  let said = false;
+  for (;;) {
     const machine = await tryLock(MACHINE_LOCK);
     const turn = machineFor('nightly run', { agentJobRunning: machine === null, nightlyGoing: true });
     if (machine && turn.take) return machine;
     await machine?.release();
     if (!turn.take && !said) say(turn.why);
+    said = true;
     for (let waited = 0; waited < LOOKS_AGAIN_EVERY_MS; waited += 1000) {
       if (stopping()) return null;
       await new Promise((again) => setTimeout(again, 1000));

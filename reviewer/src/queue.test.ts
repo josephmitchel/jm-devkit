@@ -108,8 +108,9 @@ describe('the next review the machine starts', () => {
     expect(decision.waiting).toEqual([]);
   });
 
-  it('leaves alone an event no rule knows, and one that is not an agent job', () => {
-    expect(decide([queued('eclipse:4', '11:58:00'), queued('merged:12', '11:58:00')])).toEqual({ start: null, waiting: [] });
+  it('leaves alone an event no rule knows, and those a pass runs itself', () => {
+    const notTheQueues = [queued('eclipse:4', '11:58:00'), queued('merged:12', '11:58:00'), queued(`head-moved:12@${'b2'.repeat(20)}`, '11:58:00')];
+    expect(decide(notTheQueues)).toEqual({ start: null, waiting: [] });
   });
 });
 

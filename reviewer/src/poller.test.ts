@@ -425,6 +425,26 @@ describe('a new head on a pull request whose review passed', () => {
   });
 });
 
+describe('what a pass runs and what it leaves for the queue', () => {
+  it('runs landed and carry-gate itself and only queues a review, so neither ever waits for an agent job', () => {
+    const MOVED = 'b2'.repeat(20);
+    const decision = passDecision(
+      { projects: [widgets([pull(14, '11:59:40', { labels: ['review-now'] }), pull(12, '11:59:30', { headSha: MOVED }), merged(9, '11:58:00')])] },
+      { projects: new Map([['acme/widgets', { ...known().get('acme/widgets')!, passedGates: new Map([[12, ['a1'.repeat(20)]]]) }]]) },
+      NOW,
+    );
+    expect(decision.commands.map((c) => c.args.join(' '))).toEqual(['landed acme/widgets 9', 'carry-gate acme/widgets 12']);
+    expect(decision.queued.map((c) => c.args.join(' '))).toEqual(['run acme/widgets 14 --once']);
+  });
+
+  it('does not run a queued review when it is due again either: only the queue starts one', () => {
+    const waiting: EventRecord = { event: 'labelled:14', handledAt: null, attempts: 2, attemptedAt: at('09:30:00'), running: false };
+    const decision = passDecision({ projects: [widgets(null)] }, { projects: known([waiting]) }, NOW);
+    expect(decision.commands).toEqual([]);
+    expect(decision.queued).toEqual([]);
+  });
+});
+
 describe("the commits the gates of a project's passed reviews are on, from the statuses the database has for them", () => {
   const A = 'a1'.repeat(20);
   const B = 'b2'.repeat(20);

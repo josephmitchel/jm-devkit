@@ -37,17 +37,17 @@ const why = (err: unknown) => (err instanceof Error ? err.message : String(err))
  * on to the next job, and a project with reviews waiting for its slot does not hold up another's.
  */
 export async function runQueueTurn(say: (line: string) => void = console.log): Promise<TurnOutcome> {
-  const held = await locksHeld();
-  const nightlyGoing = held.has(NIGHTLY_LOCK);
+  const nightlyGoing = async () => (await locksHeld()).has(NIGHTLY_LOCK);
   // Taken before anything is decided, so nothing else can start an agent job meanwhile. Not
   // touched while a nightly run is going: it may be waiting to take it.
-  const machine = nightlyGoing ? null : await tryLock(MACHINE_LOCK);
+  const machine = (await nightlyGoing()) ? null : await tryLock(MACHINE_LOCK);
   try {
-    const seen: Machine = { agentJobRunning: nightlyGoing ? held.has(MACHINE_LOCK) : machine === null, nightlyGoing };
     // With the machine held no agent job has a process, so a review still `running` has died.
     if (machine) await recordDeadRuns(say);
     const turnedAway = new Set<string>();
     for (;;) {
+      // Looked at afresh before each job: a nightly run that has started since comes first.
+      const seen: Machine = { agentJobRunning: machine === null, nightlyGoing: await nightlyGoing() };
       const decision = queueDecision(await queuedEvents(), await slotsHeld(), seen, new Date());
       const next = decision.start;
       // A job turned away twice in one turn would be turned away for ever: leave it for the next.
