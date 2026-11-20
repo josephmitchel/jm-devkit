@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import { leftByPasses, passDecision, pollerStatus, retryDelayMs, type EventRecord, type ProjectKnown, type ProjectSeen, type PullRequestSeen } from './poller.js';
@@ -247,5 +249,32 @@ describe('what the last passes found, in status', () => {
 
   it('says so when no pass has got as far as a project', () => {
     expect(pollerStatus([], [], outputAt)).toEqual(['the poller: no pass yet']);
+  });
+});
+
+describe("the poller's service on the machine", () => {
+  const unit = (name: string) => fs.readFileSync(path.join(import.meta.dirname, '../../vm/systemd', name), 'utf8').split('\n');
+  const settings = (lines: string[], names: string[]) => lines.filter((line) => names.some((name) => line.startsWith(`${name}=`)));
+  const poller = unit('code-reviewer-poller.service');
+
+  it('runs as the same user, with the same credentials file and the same places, as the nightly run', () => {
+    const shared = ['User', 'Group', 'EnvironmentFile', 'StateDirectory', 'StateDirectoryMode', 'WorkingDirectory', 'Environment'];
+    expect(settings(poller, shared)).toEqual(settings(unit('code-reviewer-nightly.service'), shared));
+    expect(settings(poller, ['EnvironmentFile'])).toEqual(['EnvironmentFile=/etc/code-reviewer/credentials.env']);
+  });
+
+  it('runs one pass of whatever is checked out, and cannot be started while one is going', () => {
+    expect(settings(poller, ['Type', 'ExecStartPre', 'ExecStart'])).toEqual([
+      'Type=oneshot',
+      'ExecStart=/usr/bin/node --import tsx/esm src/cli.ts poll',
+    ]);
+  });
+
+  it('is started three minutes after the last pass ended, unless the setting says otherwise', () => {
+    expect(settings(unit('code-reviewer-poller.timer'), ['OnUnitInactiveSec'])).toEqual(['OnUnitInactiveSec=3min']);
+    const setup = fs.readFileSync(path.join(import.meta.dirname, '../../vm/dev-vm-setup.sh'), 'utf8');
+    // The setting replaces exactly that line, in a drop-in beside the timer.
+    expect(setup).toContain("'# Written by dev-vm-setup.sh from POLL_EVERY.\\n[Timer]\\nOnUnitInactiveSec=\\nOnUnitInactiveSec=%s\\n' \"$POLL_EVERY\"");
+    expect(setup).toContain('/etc/systemd/system/code-reviewer-poller.timer.d/interval.conf');
   });
 });

@@ -6,6 +6,8 @@
 #   sudo bash vm/dev-vm-setup.sh
 # To set the local time the nightly run starts at (02:00 unless set):
 #   sudo NIGHTLY_AT=03:30 bash vm/dev-vm-setup.sh
+# To set how long the poller waits between passes (3min unless set):
+#   sudo POLL_EVERY=5min bash vm/dev-vm-setup.sh
 set -euo pipefail
 
 # The units come from beside this script, in the admin's checkout. Never from the code reviewer's
@@ -33,6 +35,7 @@ REVIEWER_TESTS_ROLE=code_reviewer_tests
 # What the credentials file must hold. Names only: this script never prints a value.
 CREDENTIAL_NAMES=(DATABASE_URL REVIEWER_TEST_DATABASES_URL CLAUDE_CODE_OAUTH_TOKEN REVIEWER_APP_CLIENT_ID REVIEWER_APP_PRIVATE_KEY)
 NIGHTLY_AT=${NIGHTLY_AT:-}
+POLL_EVERY=${POLL_EVERY:-}
 
 step() { printf '\n== %s\n' "$1"; }
 fail() { printf 'error: %s\n' "$1" >&2; exit 1; }
@@ -45,6 +48,8 @@ fail() { printf 'error: %s\n' "$1" >&2; exit 1; }
   || fail "no units in $UNITS_DIR: run this script from a checkout of the kit, not from a copy of the file"
 [[ -z "$NIGHTLY_AT" || "$NIGHTLY_AT" =~ ^([01][0-9]|2[0-3]):[0-5][0-9]$ ]] \
   || fail "NIGHTLY_AT must be a time of day as HH:MM, not '$NIGHTLY_AT'"
+[[ -z "$POLL_EVERY" || "$POLL_EVERY" =~ ^[1-9][0-9]*(s|min|h)$ ]] \
+  || fail "POLL_EVERY must be a length of time such as 3min, 90s or 1h, not '$POLL_EVERY'"
 
 cd /
 export DEBIAN_FRONTEND=noninteractive
@@ -252,6 +257,13 @@ if [ -n "$NIGHTLY_AT" ]; then
   install_unit "$drop_in" /etc/systemd/system/code-reviewer-nightly.timer.d/time.conf
   rm -f "$drop_in"
 fi
+if [ -n "$POLL_EVERY" ]; then
+  # The same for the poller: a drop-in over the timer's own interval.
+  drop_in=$(mktemp)
+  printf '# Written by dev-vm-setup.sh from POLL_EVERY.\n[Timer]\nOnUnitInactiveSec=\nOnUnitInactiveSec=%s\n' "$POLL_EVERY" > "$drop_in"
+  install_unit "$drop_in" /etc/systemd/system/code-reviewer-poller.timer.d/interval.conf
+  rm -f "$drop_in"
+fi
 systemctl daemon-reload
 
 # The timers are turned on only once every credential has a value: a run without them can only fail.
@@ -290,6 +302,10 @@ if [ ${#missing[@]} -eq 0 ]; then
 The code reviewer's timers are on; the nightly run starts at the local time listed above.
   By hand:  sudo systemctl start --no-block code-reviewer-nightly.service
   Its log:  journalctl -u code-reviewer-nightly.service
+The poller's passes start once the first nightly run has installed the code reviewer's
+dependencies; until then each is skipped.
+  By hand:  sudo systemctl start code-reviewer-poller.service
+  Its log:  journalctl -u code-reviewer-poller.service
 EOF
 else
   cat <<EOF

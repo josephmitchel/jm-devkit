@@ -331,8 +331,9 @@ export type RunKind = 'nightly' | 'sweep' | 'landed';
 export type RunState = 'running' | 'succeeded' | 'failed' | 'interrupted';
 
 /**
- * A run of one of the code reviewer's commands on the machine: a nightly run, or one project's
- * part in it. `kind` and `state` are text, so a new kind of run needs no migration.
+ * A run of one of the code reviewer's commands on the machine: a nightly run, one project's part
+ * in it, or a command a pass of the poller started. `kind` and `state` are text, so a new kind of
+ * run needs no migration.
  */
 export const runs = pgTable('runs', {
   // `run-<UTC start time>-<random>` (newRunId). The run's output is the file runOutputPath names.
@@ -341,7 +342,7 @@ export const runs = pgTable('runs', {
   // owner/name, not a repos row: a project's first run is recorded before it has one. Null for a
   // run that is not one project's, such as the nightly run itself.
   project: text('project'),
-  // The run this one is part of: the nightly run, for a project's sweep.
+  // The run this one is part of: the nightly run, for a project's sweep. Null for a run the poller started.
   parentId: text('parent_id').references((): AnyPgColumn => runs.id),
   state: text('state').$type<RunState>().notNull().default('running'),
   // Both set only on a run that failed of itself. A nightly run that failed only because a
