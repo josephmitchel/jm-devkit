@@ -26,8 +26,15 @@ node bin/code-reviewer.mjs repo add owner/name \
 node bin/code-reviewer.mjs run owner/name 42
 
 node bin/code-reviewer.mjs status            # all reviews and concern counts
+node bin/code-reviewer.mjs projects          # every project the App is installed on, and its state
 node bin/code-reviewer.mjs reset owner/name 42   # forget a review (keeps concerns/policies)
 ```
+
+`projects` needs the App's credentials in the environment (`REVIEWER_APP_CLIENT_ID`,
+`REVIEWER_APP_PRIVATE_KEY`). It prints one line per project, in name order: `handled` when the
+project's default branch has a valid `devkit.json` and no sweep workflow, `still on Actions` while
+the workflow is there, and `skipped` with the reason otherwise. It exits non-zero when GitHub
+refuses the App.
 
 ## On GitHub Actions
 
@@ -192,6 +199,7 @@ intake → audit (scout + 10 auditors) → synthesis ──┬─ clean → gate
 
 - `src/review-loop.ts` — PR state machine driver; `src/stages/*` — one module per stage (audit and synthesis are shared)
 - `src/sweep/*` — the nightly sweep: `loop.ts` driver, `judge.ts` (owner decisions: `wontfix`, hand closes, ticked minors), `tickets.ts` (`needs-judging` tickets, concerns included), `answers.ts`, `publish.ts`, `render.ts` (issue/digest/status text)
+- `src/projects.ts` — which projects there are and whether the machine handles each: asked of the App, never listed in the kit (ADR 0004)
 - `src/agents/run-agent.ts` — Agent SDK wrapper (structured output, session recording, resume)
 - `worker/` — the Cloudflare Worker that starts each repo's sweep on time, as the App (`worker/README.md`)
 - `prompts/` — auditor definitions (ISO 25010 verbatim) and pipeline role prompts; `prompts/sweep/` — the sweep's framing of scout, auditor, synthesis and the ticket judge

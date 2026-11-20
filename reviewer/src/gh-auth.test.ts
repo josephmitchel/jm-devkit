@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
-import { appJwt, isFresh, isTransient, resetTokenCacheForTests } from './gh-auth.js';
+import { appCredentials, appJwt, isFresh, isTransient, resetTokenCacheForTests } from './gh-auth.js';
 
 /**
  * Two things here fail nowhere but in production. The refresh margin decides whether a two-hour
@@ -40,6 +40,20 @@ describe('isFresh', () => {
 
   it('refreshes an already-expired token', () => {
     expect(isFresh(token(-MINUTE), Date.now())).toBe(false);
+  });
+});
+
+describe('appCredentials', () => {
+  it('has none on a local run, and none with only half of them', () => {
+    expect(appCredentials()).toBeNull();
+    process.env.REVIEWER_APP_CLIENT_ID = 'Iv23liABCDEF';
+    expect(appCredentials()).toBeNull();
+  });
+
+  it("is the App's client id and private key from the environment", () => {
+    process.env.REVIEWER_APP_CLIENT_ID = 'Iv23liABCDEF';
+    process.env.REVIEWER_APP_PRIVATE_KEY = 'a PEM';
+    expect(appCredentials()).toEqual({ clientId: 'Iv23liABCDEF', privateKey: 'a PEM' });
   });
 });
 
