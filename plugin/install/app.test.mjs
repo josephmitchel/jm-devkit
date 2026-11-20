@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 
-import { FIRST_HOUR, WORKER_LIST_URL, appJwt, chooseHour, main, parseWorkerList } from './app.mjs';
+import { FIRST_HOUR, GitHubError, WORKER_LIST_URL, appJwt, chooseHour, defaultBranchFile, main, parseWorkerList } from './app.mjs';
 import { PRIVATE_KEY, PUBLIC_KEY, VALUES, configDir, sink } from './test-helpers.mjs';
 
 const credentials = { clientId: VALUES.REVIEWER_APP_CLIENT_ID, privateKey: PRIVATE_KEY };
@@ -113,6 +113,18 @@ test("hour: a repository in the Worker list keeps that hour, and the list is not
   const gone = fleet({ [`GET ${WORKER_LIST_URL}`]: [404, 'Not Found'] });
   const result = await run(['hour', 'owner/project'], gone.fetch);
   assert.match(result.out, /^hour 7\ntaken 9 owner\/kit \(devkit\.json\)\n/);
+});
+
+test("defaultBranchFile gives a file's text, null when it is not there, and GitHub's refusal otherwise", async () => {
+  const { fetch, requests } = github({
+    'GET /repos/owner/project/contents/devkit.json': [200, config(9)],
+    'GET /repos/owner/project/contents/docs/private.md': [403, 'Resource not accessible by integration'],
+  });
+  const read = (path) => defaultBranchFile({ fetch, slug: 'owner/project', token: 'ghs_install', path });
+  assert.equal(await read('devkit.json'), config(9));
+  assert.equal(await read('.github/workflows/nightly-sweep.yml'), null);
+  await assert.rejects(read('docs/private.md'), (e) => e instanceof GitHubError && e.status === 403);
+  assert.ok(requests.every((r) => r.auth === 'Bearer ghs_install'));
 });
 
 test('chooseHour wraps past midnight and gives up only when the day is full', () => {

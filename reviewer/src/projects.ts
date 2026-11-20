@@ -1,5 +1,7 @@
 import { CONFIG_FILE, DevkitConfigError, parseDevkitConfig } from '../../plugin/devkit-config.mjs';
 import { SWEEP_WORKFLOW } from '../../plugin/generator/generate.mjs';
+import { GitHubError, defaultBranchFile, installedRepos } from '../../plugin/install/app.mjs';
+import { appCredentials } from './gh-auth.js';
 
 /** What was seen on a project's default branch. */
 export interface Observed {
@@ -43,4 +45,29 @@ const compare = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 export function projectLine(project: Project): string {
   if (project.state === 'handled') return `${project.slug} handled`;
   return `${project.slug} ${project.state}: ${project.reason.replace(/\s+/g, ' ')}`;
+}
+
+/**
+ * Every project the code reviewer's App is installed on, in name order, each with whether the
+ * machine handles it. Asked of GitHub on every call: the kit keeps no list (ADR 0004).
+ */
+export async function listProjects(): Promise<Project[]> {
+  const credentials = appCredentials();
+  if (!credentials) {
+    throw new Error("finding the projects needs the code reviewer's App: set REVIEWER_APP_CLIENT_ID and REVIEWER_APP_PRIVATE_KEY");
+  }
+  try {
+    const repos = await installedRepos({ fetch, credentials });
+    const observed = await Promise.all(
+      repos.map(async ({ slug, token }) => {
+        const read = (path: string) => defaultBranchFile({ fetch, slug, token, path });
+        const [config, workflow] = await Promise.all([read(CONFIG_FILE), read(SWEEP_WORKFLOW)]);
+        return { slug, config, sweepWorkflow: workflow !== null };
+      }),
+    );
+    return classifyProjects(observed);
+  } catch (err) {
+    if (!(err instanceof GitHubError)) throw err;
+    throw new Error(`GitHub refused the code reviewer's App: ${err.message}`, { cause: err });
+  }
 }

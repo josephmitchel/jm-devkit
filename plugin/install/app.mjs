@@ -12,10 +12,13 @@
 //
 // Exit 2 when the App's credentials are not in the secrets file, on bad arguments, or when GitHub
 // refuses the App.
+//
+// The code reviewer finds its projects with `installedRepos` and `defaultBranchFile` from here
+// (reviewer/src/projects.ts), so there is one way to list what the App is installed on.
 
 import crypto from 'node:crypto';
 
-import { DevkitConfigError, parseDevkitConfig } from '../devkit-config.mjs';
+import { CONFIG_FILE, DevkitConfigError, parseDevkitConfig } from '../devkit-config.mjs';
 import { isMain, repoSlug } from './gh.mjs';
 import { SecretsFileError, configDir, readSecrets } from './secrets-file.mjs';
 
@@ -94,6 +97,16 @@ export async function installedRepos({ fetch: fetchFn, credentials, now }) {
   return repos;
 }
 
+/** The text of the file at `path` on `slug`'s default branch, or null when it has none. */
+export async function defaultBranchFile({ fetch: fetchFn, slug, token, path }) {
+  try {
+    return await call(fetchFn, `/repos/${slug}/contents/${path}`, token, { raw: true });
+  } catch (e) {
+    if (e instanceof GitHubError && e.status === 404) return null;
+    throw e;
+  }
+}
+
 /** `{ slug, hour }` for each cron in the Worker's list (`slug: 'a/b', cron: 'M H * * *'`). */
 export function parseWorkerList(source) {
   const entries = [];
@@ -114,13 +127,16 @@ export async function takenHours({ fetch: fetchFn, credentials, repo, now }) {
   const skipped = [];
   for (const { slug, token } of await installedRepos({ fetch: fetchFn, credentials, now })) {
     if (same(slug, repo)) continue;
+    const text = await defaultBranchFile({ fetch: fetchFn, slug, token, path: CONFIG_FILE });
+    if (text === null) {
+      skipped.push({ slug, why: `no ${CONFIG_FILE}` });
+      continue;
+    }
     try {
-      const config = parseDevkitConfig(await call(fetchFn, `/repos/${slug}/contents/devkit.json`, token, { raw: true }));
-      taken.push({ hour: config.sweep.hour, slug, from: 'devkit.json' });
+      taken.push({ hour: parseDevkitConfig(text).sweep.hour, slug, from: CONFIG_FILE });
     } catch (e) {
-      if (e instanceof GitHubError && e.status === 404) skipped.push({ slug, why: 'no devkit.json' });
-      else if (e instanceof DevkitConfigError) skipped.push({ slug, why: e.message });
-      else throw e;
+      if (!(e instanceof DevkitConfigError)) throw e;
+      skipped.push({ slug, why: e.message });
     }
   }
 
