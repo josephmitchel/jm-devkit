@@ -72,13 +72,13 @@ describe('where a finished run is reported', () => {
   });
 
   it('reports nothing for a run the service stopping interrupted, or one still running: neither a failure nor a success', () => {
-    expect(told(run({ state: 'interrupted' as never, stage: 'auditing', errorType: 'service stopped' }))).toEqual([]);
-    expect(told(run({ state: 'interrupted' as never, stage: 'auditing', errorType: 'found running' }))).toEqual([]);
+    expect(told(run({ state: 'interrupted', stage: 'auditing', errorType: 'service stopped' }))).toEqual([]);
+    expect(told(run({ state: 'interrupted', stage: 'auditing', errorType: 'found running' }))).toEqual([]);
     expect(told(run({ state: 'running', finishedAt: null }))).toEqual([]);
   });
 
   it("reports a run its time limit stopped as a failure on the code reviewer's side", () => {
-    const stopped = run({ state: 'interrupted' as never, stage: 'auditing', errorType: 'time limit' });
+    const stopped = run({ state: 'interrupted', stage: 'auditing', errorType: 'time limit' });
     expect(told(stopped)).toEqual([`${KIT}: kit-side sweep failed`]);
     expect(reportsFor(stopped, seen)[0].report.facts).toMatchObject({ stage: 'auditing', errorType: 'time limit' });
   });
@@ -105,17 +105,17 @@ describe("what a nightly run tells the kit's repository once its projects are do
   });
 
   it("nothing about its sweeps when a time limit stopped one, which is a failure on the code reviewer's side", () => {
-    const parts = [part({ project: 'acme/gadgets', state: 'interrupted' as never, stage: 'auditing', errorType: 'time limit' }), part({})];
+    const parts = [part({ project: 'acme/gadgets', state: 'interrupted', stage: 'auditing', errorType: 'time limit' }), part({})];
     expect(told(nightly({ state: 'failed' }), { parts })).toEqual([`${KIT}: kit-side nightly succeeded`]);
   });
 
   it('nothing at all when the service stopping interrupted it', () => {
     const parts = [part({})];
-    expect(told(nightly({ state: 'interrupted' as never, errorType: 'service stopped' }), { parts })).toEqual([]);
+    expect(told(nightly({ state: 'interrupted', errorType: 'service stopped' }), { parts })).toEqual([]);
   });
 
   it('nothing about its sweeps when none succeeded', () => {
-    const parts = [part({ state: 'interrupted' as never, errorType: 'service stopped' })];
+    const parts = [part({ state: 'interrupted', errorType: 'service stopped' })];
     expect(told(nightly(), { parts })).toEqual([`${KIT}: kit-side nightly succeeded`]);
     expect(told(nightly(), { parts: [] })).toEqual([`${KIT}: kit-side nightly succeeded`]);
   });
@@ -228,7 +228,7 @@ describe('reporting a run', () => {
     const never = () => {
       throw new Error('asked');
     };
-    const r = run({ state: 'interrupted' as never, errorType: 'service stopped' });
+    const r = run({ state: 'interrupted', errorType: 'service stopped' });
     await reportRun(r, say, { kitRepo: never, kitCommit: never, tail: never, parts: never, send: never });
     expect(lines).toEqual([]);
   });

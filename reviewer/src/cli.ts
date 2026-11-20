@@ -13,10 +13,11 @@ import { ACTIVE_WORK_STATES, resolveSlot } from './stages/intake.js';
 import { markGate, progressStep } from './stages/progress.js';
 import { postFailureNotice } from './stages/report.js';
 import { runMigrations } from './migrate.js';
-import { runNightly } from './nightly.js';
+import { recordNightlyNotStarted, runNightly } from './nightly.js';
 import { listProjects, projectLine } from './projects.js';
 import { runReview } from './review-loop.js';
-import { errorTypeLine, nightlyStatus, recentNightlyRuns } from './runs.js';
+import { cloneUrl } from './project-row.js';
+import { errorTypeLine, nightlyStatus, recentNightlyRuns, stopCommandsOnSignal } from './runs.js';
 import { runSweep } from './sweep/loop.js';
 import { runLanded } from './landed.js';
 import { dropTestDatabases } from './test-databases.js';
@@ -33,7 +34,12 @@ Usage:
                                                 file concerns as issues (never fixes, never gates)
   code-reviewer nightly                         the whole nightly run: sweep every project the
                                                 machine handles, in name order, one at a time;
-                                                a sweep that fails does not stop the next
+                                                a sweep that fails does not stop the next, and
+                                                one that runs past five and a half hours is
+                                                stopped and resumed the next night
+  code-reviewer nightly-not-started <stage> <error type>
+                                                record a nightly run that could not start; the
+                                                machine's update step (bin/update.mjs) calls it
   code-reviewer failure-issue <owner/repo>      open, comment on or close that repository's failure
                                                 issue, from the report of a finished run on its
                                                 input (the nightly run starts this; not for hand use)
@@ -61,7 +67,7 @@ Usage:
 
 // The commands CI runs unattended. The admin ones print tables and confirmations for a person at
 // a terminal, where a timestamp on every line is only noise.
-const STAMPED = new Set(['run', 'sweep', 'nightly', 'landed', 'migrate', 'next', 'abandon', 'carry-gate']);
+const STAMPED = new Set(['run', 'sweep', 'nightly', 'nightly-not-started', 'landed', 'migrate', 'next', 'abandon', 'carry-gate']);
 
 async function main() {
   const [cmd, ...rest] = process.argv.slice(2);
@@ -107,9 +113,15 @@ async function main() {
     }
     case 'nightly': {
       if (rest.length > 0) return usageExit();
+      stopCommandsOnSignal();
       const outcome = await runNightly();
       printRaw(`outcome: ${outcome}`);
-      if (outcome === 'failed') process.exitCode = 1;
+      if (outcome !== 'succeeded') process.exitCode = 1;
+      break;
+    }
+    case 'nightly-not-started': {
+      const [stage, type, ...extra] = rest;
+      if (!stage || !type || extra.length > 0 || !(await recordNightlyNotStarted(stage, type))) return usageExit();
       break;
     }
     case 'failure-issue': {
@@ -227,7 +239,7 @@ async function repoUpsert(mode: 'add' | 'set', slug: string, argv: string[]): Pr
     if (existing) throw new Error(`repo ${slug} already registered — use repo set`);
     await db.insert(schema.repos).values({
       slug,
-      cloneUrl: `https://github.com/${slug}.git`,
+      cloneUrl: cloneUrl(slug),
       ...patch,
     });
     console.log(`registered ${slug}`);

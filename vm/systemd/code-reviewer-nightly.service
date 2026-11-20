@@ -1,0 +1,40 @@
+# The code reviewer's nightly run. Installed by vm/dev-vm-setup.sh; the timer of the same name
+# starts it. By hand: sudo systemctl start --no-block code-reviewer-nightly.service
+[Unit]
+Description=Code reviewer: the nightly run
+Wants=network-online.target
+After=network-online.target postgresql.service
+
+[Service]
+Type=oneshot
+User=reviewer
+Group=reviewer
+
+# The credentials reach the service only here. systemd reads the file as root before it drops to
+# the reviewer user, who cannot read it. vm/dev-vm-setup.sh names what it must hold.
+EnvironmentFile=/etc/code-reviewer/credentials.env
+
+# /var/lib/code-reviewer, the reviewer user's alone: the code reviewer's own checkout (kit), the
+# projects' checkouts with the home their commands are given (workspaces), and the runs' output
+# (state), which is kept out of the checkouts.
+StateDirectory=code-reviewer
+StateDirectoryMode=0700
+WorkingDirectory=/var/lib/code-reviewer/kit/reviewer
+Environment=REVIEWER_WORKSPACE_ROOT=/var/lib/code-reviewer/workspaces
+Environment=REVIEWER_STATE_DIR=/var/lib/code-reviewer/state
+# The App's bot account, as the author of anything the code reviewer commits.
+Environment="REVIEWER_GIT_NAME=jm-code-reviewer[bot]"
+Environment="REVIEWER_GIT_EMAIL=338258166+jm-code-reviewer[bot]@users.noreply.github.com"
+
+# Move the checkout to the kit's default branch, install dependencies when the lockfile changed,
+# apply migrations. If that fails the unit fails and no run starts on stale code.
+ExecStartPre=/usr/bin/node bin/update.mjs
+# Not through bin/code-reviewer.mjs: the process systemd signals must be the one that handles it.
+ExecStart=/usr/bin/node --import tsx/esm src/cli.ts nightly
+
+# A night of sweeps takes hours. Each sweep has its own limit, kept by the code reviewer.
+TimeoutStartSec=infinity
+# On stop every process in the unit gets SIGTERM. The nightly run then records what it was doing
+# as interrupted, which needs the time allowed here before anything left is killed.
+KillMode=control-group
+TimeoutStopSec=3min

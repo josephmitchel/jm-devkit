@@ -1,7 +1,18 @@
 import { describe, expect, it } from 'vitest';
 
 import { DevkitConfigError } from '../../plugin/devkit-config.mjs';
-import { errorType, errorTypeLine, newRunId, nightlyStatus, runOutputPath, runResult, type Run } from './runs.js';
+import {
+  afterInterruption,
+  errorType,
+  errorTypeLine,
+  leftByNightlyRuns,
+  newRunId,
+  nightlyStatus,
+  runOutputPath,
+  runResult,
+  timeLimitMs,
+  type Run,
+} from './runs.js';
 
 const at = (line: string) => `[2026-11-20T03:15:02.000Z] ${line}`;
 const ID = 'run-20261120T031502Z-a1b2c3';
@@ -104,6 +115,63 @@ describe('how a run ended, from what was seen of its command', () => {
   });
 });
 
+describe('a run that was stopped before its command finished', () => {
+  const output = [at('=== sweep state: intake ==='), at('=== sweep state: auditing ===')].join('\n');
+
+  it('is interrupted, not failed, when its time limit stopped it', () => {
+    expect(runResult(ID, { exitCode: null, signal: 'SIGTERM', output, stopped: 'time limit' })).toEqual({
+      state: 'interrupted',
+      stage: 'auditing',
+      errorType: 'time limit',
+    });
+  });
+
+  it('is interrupted when the service was stopping, even if the command had to be killed outright', () => {
+    expect(runResult(ID, { exitCode: null, signal: 'SIGKILL', output, stopped: 'service stopped' })).toEqual({
+      state: 'interrupted',
+      stage: 'auditing',
+      errorType: 'service stopped',
+    });
+  });
+
+  it('succeeded all the same when the command had finished by the time it was told to stop', () => {
+    expect(runResult(ID, { exitCode: 0, signal: null, output, stopped: 'service stopped' })).toMatchObject({ state: 'succeeded' });
+  });
+});
+
+describe("a command's time limit", () => {
+  it('is five and a half hours for a job that runs agents: a sweep or a review', () => {
+    expect(timeLimitMs(['sweep', 'acme/widgets'], {})).toBe(19_800_000);
+    expect(timeLimitMs(['run', 'acme/widgets', '42', '--once'], {})).toBe(19_800_000);
+  });
+
+  it('is none for a command that runs no agents', () => {
+    expect(timeLimitMs(['landed', 'acme/widgets', '42'], {})).toBeNull();
+    expect(timeLimitMs(['carry-gate', 'acme/widgets', '42'], {})).toBeNull();
+  });
+
+  it('can be set for the machine, and a setting that is no number of milliseconds is ignored', () => {
+    expect(timeLimitMs(['sweep', 'acme/widgets'], { REVIEWER_AGENT_JOB_LIMIT_MS: '2000' })).toBe(2000);
+    expect(timeLimitMs(['sweep', 'acme/widgets'], { REVIEWER_AGENT_JOB_LIMIT_MS: 'soon' })).toBe(19_800_000);
+    expect(timeLimitMs(['sweep', 'acme/widgets'], { REVIEWER_AGENT_JOB_LIMIT_MS: '0' })).toBe(19_800_000);
+  });
+});
+
+describe('what an interrupted command needs before its work can be taken up again', () => {
+  it('is nothing for a sweep, which resumes from its own recorded state when it is next run', () => {
+    expect(afterInterruption(['sweep', 'acme/widgets'], 'time limit')).toBeNull();
+  });
+
+  it("is the review recorded as stopped mid-stage, so the next run retries the stage and the project's slot is free", () => {
+    expect(afterInterruption(['run', 'acme/widgets', '42', '--once'], 'service stopped')).toEqual([
+      'abandon',
+      'acme/widgets',
+      '42',
+      'the run on the machine was interrupted (service stopped)',
+    ]);
+  });
+});
+
 describe('the type of an error', () => {
   it("is the error's class, which the run that started a command reads back from the command's last line", () => {
     const thrown = new DevkitConfigError('devkit.json is malformed: reviewer is required');
@@ -162,19 +230,38 @@ describe("where a run's output is kept", () => {
   });
 });
 
-describe('the recent nightly runs in status', () => {
-  const run = (id: string, fields: Partial<Run>): Run => ({
-    id,
-    kind: 'sweep',
-    project: null,
-    parentId: null,
-    state: 'succeeded',
-    stage: null,
-    errorType: null,
-    startedAt: new Date('2026-11-20T03:15:02Z'),
-    finishedAt: new Date('2026-11-20T04:15:02Z'),
-    ...fields,
+const run = (id: string, fields: Partial<Run>): Run => ({
+  id,
+  kind: 'sweep',
+  project: null,
+  parentId: null,
+  state: 'succeeded',
+  stage: null,
+  errorType: null,
+  startedAt: new Date('2026-11-20T03:15:02Z'),
+  finishedAt: new Date('2026-11-20T04:15:02Z'),
+  ...fields,
+});
+
+describe('the runs a starting nightly run finds still recorded as running', () => {
+  const running = { state: 'running', finishedAt: null } as const;
+
+  it('are an earlier nightly run and its parts, whose process died before it could record them', () => {
+    const rows = [
+      run('run-20261119T031500Z-aaaaaa', { kind: 'nightly', ...running }),
+      run('run-20261119T031501Z-bbbbbb', { project: 'acme/anvils', parentId: 'run-20261119T031500Z-aaaaaa' }),
+      run('run-20261119T041501Z-cccccc', { project: 'acme/widgets', parentId: 'run-20261119T031500Z-aaaaaa', ...running }),
+    ];
+    expect(leftByNightlyRuns(rows).map((r) => r.id)).toEqual(['run-20261119T031500Z-aaaaaa', 'run-20261119T041501Z-cccccc']);
   });
+
+  it('are not a run that is no part of a nightly run, which may be going on beside this one', () => {
+    const rows = [run('run-20261120T031000Z-dddddd', { project: 'acme/widgets', ...running })];
+    expect(leftByNightlyRuns(rows)).toEqual([]);
+  });
+});
+
+describe('the recent nightly runs in status', () => {
   const outputAt = (id: string) => `/var/lib/code-reviewer/runs/${id}.log`;
   const rows = [
     run('run-20261120T031502Z-aaaaaa', { kind: 'nightly', state: 'failed' }),
@@ -219,6 +306,26 @@ describe('the recent nightly runs in status', () => {
       'nightly runs',
       '  run-20261120T031502Z-aaaaaa [running]',
       '    acme/anvils sweep [running] run-20261120T031503Z-bbbbbb',
+    ]);
+  });
+
+  it('shows an interrupted run with the stage it had reached and what stopped it', () => {
+    const interrupted = [
+      run('run-20261120T031502Z-aaaaaa', { kind: 'nightly', state: 'interrupted', errorType: 'service stopped' }),
+      run('run-20261120T031503Z-bbbbbb', {
+        project: 'acme/anvils',
+        parentId: 'run-20261120T031502Z-aaaaaa',
+        state: 'interrupted',
+        stage: 'auditing',
+        errorType: 'time limit',
+      }),
+    ];
+    expect(nightlyStatus(interrupted, outputAt)).toEqual([
+      'nightly runs',
+      '  run-20261120T031502Z-aaaaaa [interrupted: service stopped]' +
+        ', output: /var/lib/code-reviewer/runs/run-20261120T031502Z-aaaaaa.log',
+      '    acme/anvils sweep [interrupted in auditing: time limit] run-20261120T031503Z-bbbbbb' +
+        ', output: /var/lib/code-reviewer/runs/run-20261120T031503Z-bbbbbb.log',
     ]);
   });
 

@@ -85,6 +85,12 @@ describe("what a failure issue in the kit's repository may contain", () => {
     expect(open.body).toContain('Type of error: `time limit`');
   });
 
+  it('names the step that failed when the code reviewer could not be brought up to date before a nightly run', () => {
+    const notStarted = { ...facts, kind: 'nightly', stage: 'installing dependencies', errorType: 'exit 1' };
+    const [open] = failureIssuePlan({ ...kitFailure, facts: notStarted }, []);
+    expect(open.body).toContain('Stage: `installing dependencies`');
+  });
+
   it('tells the owner where the full output is, by the run id alone', () => {
     const [open] = failureIssuePlan(kitFailure, []);
     expect(open.body).toContain(`runs/${ID}.log`);

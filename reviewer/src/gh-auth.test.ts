@@ -52,8 +52,9 @@ describe('appCredentials', () => {
 
   it("is the App's client id and private key from the environment", () => {
     process.env.REVIEWER_APP_CLIENT_ID = 'Iv23liABCDEF';
-    process.env.REVIEWER_APP_PRIVATE_KEY = 'a PEM';
-    expect(appCredentials()).toEqual({ clientId: 'Iv23liABCDEF', privateKey: 'a PEM' });
+    const pem = '-----BEGIN RSA PRIVATE KEY-----\nMIIE\n-----END RSA PRIVATE KEY-----\n';
+    process.env.REVIEWER_APP_PRIVATE_KEY = pem;
+    expect(appCredentials()).toEqual({ clientId: 'Iv23liABCDEF', privateKey: pem });
   });
 });
 
@@ -91,6 +92,15 @@ describe('appJwt', () => {
     // GitHub's downloaded .pem is "BEGIN RSA PRIVATE KEY" (PKCS#1), not PKCS#8.
     process.env.REVIEWER_APP_CLIENT_ID = 'Iv23liABCDEF';
     process.env.REVIEWER_APP_PRIVATE_KEY = privateKey.export({ type: 'pkcs1', format: 'pem' }).toString();
+    expect(parse(appJwt()).verified).toBe(true);
+  });
+
+  it('accepts the key as one line of base64, which is how an environment file on the machine carries it', () => {
+    const pem = privateKey.export({ type: 'pkcs1', format: 'pem' }).toString();
+    process.env.REVIEWER_APP_CLIENT_ID = 'Iv23liABCDEF';
+    process.env.REVIEWER_APP_PRIVATE_KEY = Buffer.from(pem).toString('base64');
+
+    expect(appCredentials()?.privateKey).toBe(pem);
     expect(parse(appJwt()).verified).toBe(true);
   });
 });

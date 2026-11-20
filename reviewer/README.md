@@ -56,9 +56,10 @@ per-PR review, run on demand by labelling a PR `review-now`. Adding a project:
    cannot add a repository to an App's installation.
 3. Until the Worker finds projects through the App, give the project its sweep slot in the Worker
    (`worker/README.md`, "Add a repo").
-4. Until the code reviewer creates a project's database row on its first run, create it:
+4. For a project on GitHub Actions, create its database row:
    `node bin/code-reviewer.mjs repo add owner/name`, with no options, since `devkit.json` holds the
-   setup and tests.
+   setup and tests. On the machine the nightly run creates the row the first night it meets the
+   project.
 
 The App needs these repository permissions: Contents, Issues, Pull requests, Commit statuses and
 Actions (all read and write), Metadata (read), and **Workflows (read and write)** — without the last
@@ -189,7 +190,15 @@ runs each one's sweep, one at a time, each as a `sweep` command in a process of 
 that is not handled is left alone, with a line saying why. A sweep that fails is recorded and the
 run goes on to the next project; the command exits non-zero when any project failed, or when the
 projects could not be found. It needs the App's credentials and the database address in its
-environment, as `projects` and `sweep` do.
+environment, as `projects` and `sweep` do. A handled project needs nothing registered: the nightly
+run makes its row in the code reviewer's database the first night it meets it (ADR 0004).
+
+A sweep has five and a half hours, as a run on GitHub Actions had. One that runs longer is stopped,
+with the agents and commands it started, and the run goes on to the next project. Told to stop
+(SIGTERM, as when its service is stopped), the nightly run stops the sweep it is on and takes no
+further step. Either way the run is recorded as `interrupted`, with what stopped it, and so is a
+run found still `running` when the next nightly run starts, whose process died before it could
+record anything. An interrupted sweep resumes from its own state the next time it is run.
 
 Every run is a row in the `runs` table with a run id (`run-<UTC start time>-<random>`, which names
 no project): the nightly run itself, and under it one row per project with how it ended and, when it
@@ -231,6 +240,59 @@ so each report is handed to a `failure-issue` command aimed at its repository, a
 the kit's repository is given nothing but those six facts. A report that cannot be made is a line
 in the run's log and changes nothing about the run.
 
+## The service and its timer (on the machine)
+
+`vm/dev-vm-setup.sh` installs the code reviewer on the machine as a service of the unprivileged
+`reviewer` user. Run it from a checkout of the kit, as an admin: `sudo bash vm/dev-vm-setup.sh`. It
+is safe to run again.
+
+- **Units:** `code-reviewer-nightly.service` and `code-reviewer-nightly.timer`, from `vm/systemd/`.
+  The setup installs every `code-reviewer-*` service and timer in that directory.
+- **When:** 02:00 local time, in the machine's time zone. To change it, run the setup with the
+  time: `sudo NIGHTLY_AT=03:30 bash vm/dev-vm-setup.sh`. A night missed while the machine was off
+  runs when it is next up. Moving the time to one already past today starts a run at once.
+- **By hand:** `sudo systemctl start --no-block code-reviewer-nightly.service`. The log is
+  `journalctl -u code-reviewer-nightly.service`.
+- **Where things are:** all under `/var/lib/code-reviewer`, which only the `reviewer` user can
+  read. `kit/` is the code reviewer's own checkout, `workspaces/` the projects' checkouts
+  (`REVIEWER_WORKSPACE_ROOT`) and `state/` the runs' output (`REVIEWER_STATE_DIR`).
+- **Before each nightly run** the service runs `bin/update.mjs`: it moves `kit/` to the head of
+  the kit's default branch, runs `npm ci` when the lockfile is not the one the installed
+  dependencies came from, and applies migrations. If any of that fails the service fails and no
+  sweep runs on stale code; the night shows in `status` as a nightly run that failed in
+  `moving the checkout`, `installing dependencies` or `applying migrations`, when the code reviewer
+  was in a state to record it.
+
+### Credentials
+
+The credentials reach the service only through its environment, from
+`/etc/code-reviewer/credentials.env`. Root alone can read the file; systemd reads it before the
+service drops to the `reviewer` user. The setup creates it when it is missing and never changes or
+prints one that exists. It holds one `NAME=value` per line, with no quotes:
+
+- `DATABASE_URL`: the code reviewer's own database. The setup fills it in.
+- `REVIEWER_TEST_DATABASES_URL`: where projects' test databases are created. The setup fills it in.
+- `CLAUDE_CODE_OAUTH_TOKEN`: the Claude subscription's token, from `claude setup-token`.
+- `REVIEWER_APP_CLIENT_ID`: the App's client id.
+- `REVIEWER_APP_PRIVATE_KEY`: the App's private key as one line of base64
+  (`base64 -w0 < key.pem`). The code reviewer takes the key as the PEM or as its base64; the file
+  needs the one-line form.
+
+The setup turns the timer on only once all five have a value: fill in the last three and run it
+again. Nothing is signed in to as the `reviewer` user, and nothing credential-like belongs in its
+home: a project's setup, test and check commands run as that user, without these values in their
+environment and with a home of their own under `workspaces/`.
+
+### The database
+
+The code reviewer's database is `code_reviewer`, owned by a Postgres role of the same name that
+takes a password and is no Linux user's name, so being a local user opens nothing. Nobody else may
+connect to it. A second role, `code_reviewer_tests`, may create databases and cannot connect to the
+code reviewer's: its address is `REVIEWER_TEST_DATABASES_URL`, and a project's commands are handed
+its password inside the addresses of their test databases. The setup generates both passwords,
+writes them only into the credentials file, and checks that the `reviewer` user cannot open the
+database without one.
+
 ## The PR loop
 
 ```
@@ -251,8 +313,10 @@ intake → audit (scout + 10 auditors) → synthesis ──┬─ clean → gate
 - `src/review-loop.ts` — PR state machine driver; `src/stages/*` — one module per stage (audit and synthesis are shared)
 - `src/sweep/*` — the nightly sweep: `loop.ts` driver, `judge.ts` (owner decisions: `wontfix`, hand closes, ticked minors), `tickets.ts` (`needs-judging` tickets, concerns included), `answers.ts`, `publish.ts`, `render.ts` (issue/digest/status text)
 - `src/projects.ts` — which projects there are and whether the machine handles each: asked of the App, never listed in the kit (ADR 0004)
-- `src/nightly.ts` — the nightly run: its order of work and what it does after a failure, as decisions; `src/runs.ts` — the record of runs on the machine (run ids, output files, how a run ended)
+- `src/nightly.ts` — the nightly run: its order of work and what it does after a failure, as decisions; `src/runs.ts` — the record of runs on the machine (run ids, output files, how a run ended) and the one place a command is run, given its time limit and told to stop
 - `src/failure-side.ts` — which side a failed run is on, from the type of its error; `src/failure-issue.ts` — what a failure issue says and when it is opened, commented on and closed; `src/failure-report.ts` — which places a finished run is reported to, and the reporting (`reportRun`)
+- `bin/update.mjs` — brings the code reviewer's own checkout up to date before a nightly run; `src/project-row.ts` — creates a project's row the first time it is met
+- `../vm/` — the machine setup and the systemd units it installs
 - `src/agents/run-agent.ts` — Agent SDK wrapper (structured output, session recording, resume)
 - `worker/` — the Cloudflare Worker that starts each repo's sweep on time, as the App (`worker/README.md`)
 - `prompts/` — auditor definitions (ISO 25010 verbatim) and pipeline role prompts; `prompts/sweep/` — the sweep's framing of scout, auditor, synthesis and the ticket judge
