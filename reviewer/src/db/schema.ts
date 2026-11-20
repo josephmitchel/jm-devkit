@@ -375,7 +375,9 @@ export const pollerEvents = pgTable(
     attemptedAt: timestamp('attempted_at', { withTimezone: true }),
     // The run of its last attempt.
     runId: text('run_id').references(() => runs.id),
-    // Set once its command has succeeded, and only then. Null: still to be handled.
+    // Set once the event needs nothing more done. For a command a pass runs, that is once it has
+    // succeeded, and only then; a review's event has its own rule (queue.ts afterReviewRun). Null:
+    // still to be handled.
     handledAt: timestamp('handled_at', { withTimezone: true }),
     foundAt: timestamp('found_at', { withTimezone: true }).notNull().defaultNow(),
   },

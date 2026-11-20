@@ -202,6 +202,10 @@ found. It needs the App's credentials and the database address in its environmen
 and `sweep` do. A handled project needs nothing registered: the nightly run makes its row in the
 code reviewer's database the first night it meets it (ADR 0004).
 
+A nightly run has the machine for the night. If a review is running when it starts, it waits for
+that review to finish and then goes; while it is going no review starts, and a second nightly run
+does not start beside it (see "The queue of reviews").
+
 A sweep has five and a half hours, as a run on GitHub Actions had. One that runs longer is stopped,
 with the agents and commands it started, and the run goes on to the next step. Told to stop
 (SIGTERM, as when its service is stopped), the nightly run stops the step it is on and takes no
@@ -313,7 +317,9 @@ Nothing on GitHub can reach the machine, so the code reviewer finds events by as
 `node bin/code-reviewer.mjs poll` is one pass, and a timer runs one every three minutes. For each
 project the machine handles, a pass finds the pull requests that have merged since the project's
 first pass and runs `landed` for each one once, so its tickets are labelled `needs-judging` and
-unblocked within one interval. A project that is not handled is left alone.
+unblocked within one interval. It also finds the reviews to start and to continue, and queues
+them: a pass does not run a review (see "The queue of reviews"). A project that is not handled is
+left alone.
 
 **The pass is a decision.** `passDecision` in `src/poller.ts` is a pure function from what a pass
 saw on GitHub (each project's state and its pull requests) and what the database has on record, to
@@ -327,10 +333,11 @@ project and the event's key, so a second record of the same event cannot be made
   From then on the record alone says what is still to be handled.
 - A pass takes an event by raising its count of attempts from the number it read. Of two passes
   that decided the same command, one finds nothing to take.
-- The event is recorded as handled only once its command has succeeded. A `landed` that failed,
+- A merge is recorded as handled only once its `landed` has succeeded. A `landed` that failed,
   or that was stopped with the service, stays on record and is tried again: on the next pass, then
   after 2, 4, 8 minutes and so on, and every six hours from the tenth attempt. It is never given
-  up on, and `status` shows it as not handled.
+  up on, and `status` shows it as not handled. A review's event has its own rule for when it is
+  handled ("The queue of reviews").
 - Passes do not overlap. The timer does not start a pass while one is going, and a pass holds a
   Postgres advisory lock, so one started by hand beside it does nothing.
 - A pass killed outright leaves its `landed` run recorded as `running`. The next pass records it
@@ -368,15 +375,91 @@ through `reportRun` like any other: a failure opens or comments on the failure i
 runs, and the next success closes it. A project whose pull requests could not be read is left
 alone for that pass and the others are still handled; the command then exits non-zero.
 
+## The queue of reviews (on the machine)
+
+The per-PR review runs on the machine without Actions. A pass of the poller finds the reviews to
+run and puts them on record; `node bin/code-reviewer.mjs queue` takes one turn of the queue, which
+starts at most one of them. A review can run for five and a half hours, and a pass must stay
+short and keep running so that `landed` is never held up, so a pass only decides and queues.
+
+**The events** are two more entries in the `EVENTS` table, both for the command
+`run <owner/repo> <pr#> --once`:
+
+- `labelled:<pr>`: an open pull request, not a draft, labelled `review-now`, with no review that
+  has started. A draft is not reviewed; when it leaves draft with the label on, it is. A label has
+  no time of its own, so a pull request labelled before the project's first pass is acted on only
+  once something else about it changes.
+- `replied:<pr>/<comment>`: a comment on the pull request of a review that waits on the owner,
+  written since it began to wait. A review waits on the owner when it is waiting for answers, and
+  when it has stopped: its notice on the pull request says a comment retries it. Whose comment
+  counts is the rule the review itself reads answers by (`countsAsReply` in
+  `src/reply-authority.ts`): the owner, a member or a collaborator, and never the code reviewer's
+  own comments. Several comments written before a pass are one event, the newest, so the review is
+  continued once for them. A pass reads a pull request's comments only when its review is waiting
+  and it has changed since the last pass.
+
+**One agent job at a time.** A review and a sweep run agents on the one subscription, so they
+never run together on the machine. Two Postgres advisory locks say who may run (`src/machine.ts`):
+
+- the machine's lock, held by whoever is running an agent job: the queue for the length of a
+  review, the nightly run for the length of the night;
+- the nightly run's lock, held by a nightly run from its start to its end.
+
+`machineFor` in `src/queue.ts` is the rule. A review starts only when neither is held. A nightly
+run that starts while a review is running waits for that review (at most its time limit) and then
+goes: the night is put back, never skipped. Once a nightly run is going no review starts until it
+is over, even between its sweeps, so a queue of reviews cannot put the night's sweeps back. A
+second nightly run beside one that is going does not start. `landed`, `carry-gate`, the summary
+and the nightly checks run no agents and take neither lock. Nor do `sweep` and `run` themselves:
+a project still on Actions runs them against the same database. The locks are taken by the
+`nightly` and `queue` commands, so a `sweep` or `run` started by hand is outside the rule.
+
+**The queue is the record.** A queued review is its event in `poller_events`, not yet handled.
+`queueDecision` in `src/queue.ts` says which starts next: the one found first, across projects.
+Events that ask for the same command are one job, so a label and two replies on one pull request
+are one run. A review found while an agent job is running stays queued and is looked at again on
+the next turn.
+
+**Handled does not mean exit 0.** `run --once` exits 0 when the review passed, when it now waits
+for answers, and when it was turned away because another review holds its project's review slot.
+`afterReviewRun` decides what the run leaves of the event, from how the run ended and the state
+the review is in afterwards:
+
+- passed, or waiting for answers: handled. The owner's reply is an event of its own.
+- stopped in one of its stages, or at its time limit: handled. The review has said so on the pull
+  request, and it is not started again until the owner comments there.
+- turned away from its project's slot: not handled, and not a failure. It starts when no other
+  review of the project holds the slot, which is how a finished review starts the next one queued
+  behind it. It is also tried after the same doubling wait as a failure, because a holder whose
+  pull request has closed never finishes and only a review claiming the slot retires it.
+- failed before the review did anything, or interrupted by the service stopping or by a restart:
+  tried again, after a minute, then two, four and so on up to six hours.
+
+This replaces the workflow dispatch hand-off (`REVIEWER_DISPATCH_WORKFLOW`), which a project still
+on Actions keeps.
+
+**Recorded and reported.** Each review the queue starts is a run of kind `review` in the `runs`
+table, started through `runCommand`: it has the five and a half hours an agent job has, and one
+that is stopped by that limit or with the service is recorded as stopped by `abandon`, on the pull
+request too, which frees its project's slot. It goes through `reportRun`, except a review that was
+turned away, which did no work. A turn killed outright leaves its run recorded as `running`; the
+next turn that has the machine records it as `interrupted`, runs `abandon` for it and tries the
+event again.
+
+`code-reviewer status` ends with the queue: the agent job that is running, the review that starts
+next, and each one that waits with the reason. `code-reviewer reset` forgets the events that asked
+for the review it deletes, so labelling the pull request again starts a new one.
+
 ## The service and its timers (on the machine)
 
 `vm/dev-vm-setup.sh` installs the code reviewer on the machine as a service of the unprivileged
 `reviewer` user. Run it from a checkout of the kit, as an admin: `sudo bash vm/dev-vm-setup.sh`. It
 is safe to run again.
 
-- **Units:** `code-reviewer-nightly.service` and `.timer` for the nightly run, and
-  `code-reviewer-poller.service` and `.timer` for the poller, from `vm/systemd/`. The setup
-  installs every `code-reviewer-*` service and timer in that directory.
+- **Units:** `code-reviewer-nightly.service` and `.timer` for the nightly run,
+  `code-reviewer-poller.service` and `.timer` for the poller, and `code-reviewer-queue.service`
+  for the queue of reviews, from `vm/systemd/`. The setup installs every `code-reviewer-*` service
+  and timer in that directory.
 - **When:** 02:00 local time, in the machine's time zone. To change it, run the setup with the
   time: `sudo NIGHTLY_AT=03:30 bash vm/dev-vm-setup.sh`. A night missed while the machine was off
   runs when it is next up. Moving the time to one already past today starts a run at once.
@@ -390,6 +473,15 @@ is safe to run again.
   A pass that has not finished in thirty minutes is stopped. By hand:
   `sudo systemctl start code-reviewer-poller.service`; the log is
   `journalctl -u code-reviewer-poller.service`.
+- **The queue:** it has no timer. The poller's service starts it each time a pass ends, however
+  the pass ended, so a review a pass has just found starts within that interval, and one that had
+  to wait is looked at again after the next pass. A turn runs at most one review and lasts as long
+  as it does; while it is going a second cannot start. The nightly unit is ordered after it, so a
+  nightly run that comes due during a review waits for that turn to end before its update step
+  replaces the code the review is running from. The queue's unit is in turn not started while the
+  nightly unit is active (`/run/code-reviewer-nightly` exists exactly that long). By hand:
+  `sudo systemctl start --no-block code-reviewer-queue.service`; the log is
+  `journalctl -u code-reviewer-queue.service`.
 - **Where things are:** all under `/var/lib/code-reviewer`, which only the `reviewer` user can
   read. `kit/` is the code reviewer's own checkout, `workspaces/` the projects' checkouts
   (`REVIEWER_WORKSPACE_ROOT`) and `state/` the runs' output (`REVIEWER_STATE_DIR`).
@@ -454,6 +546,7 @@ intake → audit (scout + 10 auditors) → synthesis ──┬─ clean → gate
 - `src/night-summary.ts` — whether a night's summary is posted, its title and text, and the discussion category it goes in, as decisions; `src/post-summary.ts` — the `summary` command, which posts it
 - `src/nightly-checks.ts` — a project's nightly checks: the order they run in and what happens after one fails, as a decision; the account a failed run ends with; the `checks` command
 - `src/poller.ts` — a pass of the poller as a decision: the events it acts on, what it runs and when it tries again; `src/poller-github.ts` — what a pass asks GitHub, conditionally, and the answers it keeps; `src/poller-pass.ts` — the pass itself: the record of events, the lock, and running each command
+- `src/queue.ts` — the queue of reviews as decisions: who has the machine, which review starts next, and what a review's run leaves of its event; `src/queue-run.ts` — one turn of the queue; `src/machine.ts` — the two locks that keep agent jobs to one at a time; `src/reply-authority.ts` — whose comment counts as the owner's word
 - `src/failure-side.ts` — which side a failed run is on, from the type of its error; `src/failure-issue.ts` — what a failure issue says and when it is opened, commented on and closed; `src/failure-report.ts` — which places a finished run is reported to, and the reporting (`reportRun`)
 - `bin/update.mjs` — brings the code reviewer's own checkout up to date before a nightly run; `src/project-row.ts` — creates a project's row the first time it is met
 - `../vm/` — the machine setup and the systemd units it installs

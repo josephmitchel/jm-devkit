@@ -1,8 +1,8 @@
 /**
  * Who may answer. An answer is not a comment: it decides which concerns get fixed, is written into
- * the fixer's prompt, and is saved as repo policy that every later audit reads. Anyone on the
- * internet can comment on a public PR, so the author's relationship to the repo is the gate, and
- * anything GitHub does not vouch for is read as ordinary conversation.
+ * the fixer's prompt, and is saved as a policy that every later audit of the project reads. Anyone
+ * on the internet can comment on a public PR, so the author's relationship to the project is the
+ * gate, and anything GitHub does not vouch for is read as ordinary conversation.
  */
 export const ANSWER_AUTHORITY = new Set(['OWNER', 'MEMBER', 'COLLABORATOR']);
 

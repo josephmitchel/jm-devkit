@@ -39,8 +39,8 @@ export const ACTIVE_WORK_STATES = new Set([
 const STALE_HOLDER_MS = 7 * 60 * 60 * 1000;
 
 /**
- * The states in which a review does not hold its repo's review slot: finished, stopped, or still
- * waiting for the slot. A review in any other state holds it.
+ * The states in which a review does not hold its project's review slot: finished, stopped, or
+ * still waiting for the slot. A review in any other state holds it.
  */
 export const OFF_THE_SLOT = ['passed', 'failed', 'pending'] as const;
 
