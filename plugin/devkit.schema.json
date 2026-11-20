@@ -72,13 +72,13 @@
           }
         },
         "env": {
-          "description": "Environment variables for the project's setup and test commands, and only for them. The same role as the action's `repo-env` input, which wins on a name both set: the input is where a secret can come from, and this file is committed. A name the code reviewer keeps for itself, `DATABASE_URL` say, may be set here; it reaches the project's commands without ever entering the code reviewer's own environment.",
+          "description": "Environment variables for the project's setup, test and nightly check commands, and only for them. The same role as the action's `repo-env` input, which wins on a name both set: the input is where a secret can come from, and this file is committed. A name the code reviewer keeps for itself, `DATABASE_URL` say, may be set here; it reaches the project's commands without ever entering the code reviewer's own environment.",
           "type": "object",
           "propertyNames": { "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
           "additionalProperties": { "type": "string" }
         },
         "databases": {
-          "description": "The environment variables that each need a database of their own. Before setup, the code reviewer creates one empty Postgres database per name on the machine it runs on, of that machine's Postgres version, and puts each one's address in its variable for the project's setup and test commands, over a value `env` gives the same name. The databases are dropped after the run. A machine that cannot create them fails the run, saying what is missing.",
+          "description": "The environment variables that each need a database of their own. Before setup, the code reviewer creates one empty Postgres database per name on the machine it runs on, of that machine's Postgres version, and puts each one's address in its variable for the project's setup, test and nightly check commands, over a value `env` gives the same name. The databases are dropped after the run. A machine that cannot create them fails the run, saying what is missing.",
           "type": "array",
           "uniqueItems": true,
           "items": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" }
@@ -145,6 +145,35 @@
           "type": "string"
         }
       }
+    },
+    "nightly": {
+      "description": "What the code reviewer does for the project each night besides its sweep. Read only by a code reviewer that runs on the owner's machine: a project whose sweep is still dispatched by GitHub Actions may set it, and nothing there runs it.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "checks": {
+          "description": "The project's nightly checks: commands too slow to run on every pull request, run once a night instead. They run after the project's sweep, in the order written, in a fresh checkout of the default branch at its head, after `reviewer.setup`, with `reviewer.env` and databases of their own for `reviewer.databases`, and without the code reviewer's own credentials. No agent runs. A check that fails does not stop the checks after it, and opens an issue in the project with the end of its output; the issue is closed when a later night's checks all pass. A project that lists none gets no checkout and no run.",
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "required": ["name", "command"],
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "description": "A short name for the check, shown in the log and in the failure issue.",
+                "type": "string",
+                "minLength": 1
+              },
+              "command": {
+                "description": "The shell command that runs the check, with `sh -c` from the project root. A non-zero exit is a failing check, and so is a check stopped for running longer than a project command may.",
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        }
+      }
     }
   },
   "examples": [
@@ -160,6 +189,12 @@
         "setup": "npm ci && npm run migrate",
         "tests": [{ "name": "db", "command": "npm run test:db" }],
         "databases": ["TEST_DATABASE_URL"]
+      },
+      "nightly": {
+        "checks": [
+          { "name": "canvas", "command": "npm run canvas:check" },
+          { "name": "links", "command": "npm run check:links" }
+        ]
       }
     },
     {

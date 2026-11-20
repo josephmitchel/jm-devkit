@@ -123,6 +123,7 @@ describe('withAddresses', () => {
     extraContext: null,
     env: { APP_DATABASE_URL: 'postgres://localhost:5432/app_test', LOG_LEVEL: 'error' },
     databases: ['APP_DATABASE_URL', 'DATABASE_URL'],
+    nightlyChecks: [],
   };
   const planned = planDatabases(project.databases, SERVER, RUN);
 
@@ -179,6 +180,7 @@ describe('on a machine with no way to create databases', () => {
     extraContext: null,
     env: { LOG_LEVEL: 'error' },
     databases: [],
+    nightlyChecks: [],
   };
 
   it('a project that names databases fails the run, saying what is missing', async () => {
