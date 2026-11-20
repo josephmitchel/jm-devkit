@@ -6,6 +6,7 @@ import {
   jsonb,
   pgEnum,
   pgTable,
+  primaryKey,
   serial,
   text,
   timestamp,
@@ -349,4 +350,53 @@ export const runs = pgTable('runs', {
   errorType: text('error_type'),
   startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),
   finishedAt: timestamp('finished_at', { withTimezone: true }),
+});
+
+/**
+ * An event a pass of the poller found in a project, such as a merged pull request, and what
+ * became of it. The primary key is the rule that an event is handled once: a second record of
+ * the same event cannot be made, whichever pass tries.
+ */
+export const pollerEvents = pgTable(
+  'poller_events',
+  {
+    // owner/name, as in `runs`.
+    project: text('project').notNull(),
+    // `<name>:<subject>`, such as `merged:12`. The same event always has the same key.
+    event: text('event').notNull(),
+    // How many times its command has been started. A pass takes an event by raising this from
+    // the number it read, so two passes cannot both take it.
+    attempts: integer('attempts').notNull().default(0),
+    attemptedAt: timestamp('attempted_at', { withTimezone: true }),
+    // The run of its last attempt.
+    runId: text('run_id').references(() => runs.id),
+    // Set once its command has succeeded, and only then. Null: still to be handled.
+    handledAt: timestamp('handled_at', { withTimezone: true }),
+    foundAt: timestamp('found_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.project, t.event] })],
+);
+
+/** Where the poller's last pass over a project got to. A project has a row from its first pass. */
+export const pollerProjects = pgTable('poller_projects', {
+  project: text('project').primaryKey(),
+  // GitHub's time at the first pass. Nothing that happened before it is acted on.
+  startedAt: timestamp('started_at', { withTimezone: true }).notNull(),
+  // The newest change to a pull request that a pass has read: the next reads no further back.
+  seenTo: timestamp('seen_to', { withTimezone: true }).notNull(),
+  // The ETag of the listing of pull requests that pass read, sent back to ask "anything since?".
+  pullsEtag: text('pulls_etag'),
+  lastPassAt: timestamp('last_pass_at', { withTimezone: true }).notNull(),
+});
+
+/**
+ * The last answer GitHub gave to a question the poller repeats every pass, with the ETag that
+ * lets it ask again for nothing: which installations, which repositories, what a default branch
+ * holds. Also each installation's token for the hour it lasts, sealed (see poller-github.ts).
+ */
+export const githubAnswers = pgTable('github_answers', {
+  question: text('question').primaryKey(),
+  etag: text('etag'),
+  answer: jsonb('answer').notNull(),
+  askedAt: timestamp('asked_at', { withTimezone: true }).notNull().defaultNow(),
 });

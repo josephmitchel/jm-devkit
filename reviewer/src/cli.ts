@@ -14,6 +14,8 @@ import { markGate, progressStep } from './stages/progress.js';
 import { postFailureNotice } from './stages/report.js';
 import { runMigrations } from './migrate.js';
 import { recordNightlyNotStarted, runNightly } from './nightly.js';
+import { pollerStatus } from './poller.js';
+import { pollerStatusRows, runPass } from './poller-pass.js';
 import { listProjects, projectLine } from './projects.js';
 import { runReview } from './review-loop.js';
 import { cloneUrl } from './project-row.js';
@@ -40,6 +42,10 @@ Usage:
   code-reviewer nightly-not-started <stage> <error type>
                                                 record a nightly run that could not start; the
                                                 machine's update step (bin/update.mjs) calls it
+  code-reviewer poll                            one pass of the poller: for every project the
+                                                machine handles, run landed for each pull request
+                                                merged since the last pass (a timer runs this
+                                                every few minutes)
   code-reviewer failure-issue <owner/repo>      open, comment on or close that repository's failure
                                                 issue, from the report of a finished run on its
                                                 input (the nightly run starts this; not for hand use)
@@ -60,14 +66,15 @@ Usage:
       --harness-notes-file <path>               per-repo notes for the testing auditor
       --redundancy <n>                          auditors per characteristic (default 1)
   code-reviewer repo set <owner/repo> [opts]    update repo config (same options)
-  code-reviewer status [owner/repo]             show reviews and their states, and the recent
-                                                nightly runs with each project's result
+  code-reviewer status [owner/repo]             show reviews and their states, the recent
+                                                nightly runs with each project's result, and
+                                                what the poller's last passes found
   code-reviewer reset <owner/repo> <pr#>        delete a review's state (concerns/policies kept)
 `;
 
 // The commands CI runs unattended. The admin ones print tables and confirmations for a person at
 // a terminal, where a timestamp on every line is only noise.
-const STAMPED = new Set(['run', 'sweep', 'nightly', 'nightly-not-started', 'landed', 'migrate', 'next', 'abandon', 'carry-gate']);
+const STAMPED = new Set(['run', 'sweep', 'nightly', 'nightly-not-started', 'poll', 'landed', 'migrate', 'next', 'abandon', 'carry-gate']);
 
 async function main() {
   const [cmd, ...rest] = process.argv.slice(2);
@@ -122,6 +129,13 @@ async function main() {
     case 'nightly-not-started': {
       const [stage, type, ...extra] = rest;
       if (!stage || !type || extra.length > 0 || !(await recordNightlyNotStarted(stage, type))) return usageExit();
+      break;
+    }
+    case 'poll': {
+      if (rest.length > 0) return usageExit();
+      // A pass told to stop stops the command it is on and records it, as the nightly run does.
+      stopCommandsOnSignal();
+      if ((await runPass()) === 'failed') process.exitCode = 1;
       break;
     }
     case 'failure-issue': {
@@ -463,6 +477,8 @@ async function showStatus(slug?: string): Promise<void> {
   const runs = await recentNightlyRuns(5);
   const shown = slug ? runs.filter((r) => r.project === null || r.project === slug) : runs;
   console.log(`\n${nightlyStatus(shown).join('\n')}`);
+  const poller = await pollerStatusRows(slug);
+  console.log(`\n${pollerStatus(poller.projects, poller.events).join('\n')}`);
 }
 
 async function resetReview(slug: string, prNumber: number): Promise<void> {

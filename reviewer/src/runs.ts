@@ -210,9 +210,10 @@ export function runLog(run: Run): (line: string) => void {
  * Record as interrupted what an earlier nightly run left as `running`: its process was killed, or
  * the machine went down, before it could record how it ended. For a nightly run that is starting,
  * before it records itself. The sweeps it left resume when tonight's run reaches their projects.
+ * `leftBehind` says which of the running runs the caller may call dead; the poller has its own.
  */
-export async function interruptRunsLeftRunning(): Promise<Run[]> {
-  const left = leftByNightlyRuns(await db.select().from(schema.runs).where(eq(schema.runs.state, 'running')));
+export async function interruptRunsLeftRunning(leftBehind: (running: Run[]) => Run[] = leftByNightlyRuns): Promise<Run[]> {
+  const left = leftBehind(await db.select().from(schema.runs).where(eq(schema.runs.state, 'running')));
   if (left.length === 0) return [];
   const reason: StopReason = 'found running';
   return db

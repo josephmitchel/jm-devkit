@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { passDecision, retryDelayMs, type EventRecord, type ProjectKnown, type ProjectSeen, type PullRequestSeen } from './poller.js';
+import { leftByPasses, passDecision, pollerStatus, retryDelayMs, type EventRecord, type ProjectKnown, type ProjectSeen, type PullRequestSeen } from './poller.js';
+import type { Run } from './runs.js';
 
 const at = (time: string) => new Date(`2026-11-20T${time}Z`);
 
@@ -154,5 +155,97 @@ describe('the order a pass works in', () => {
       NOW,
     );
     expect(decision.commands.map((c) => c.args.join(' '))).toEqual(['landed acme/anvils 3', 'landed acme/widgets 12']);
+  });
+});
+
+describe('the runs a starting pass finds still recorded as running', () => {
+  const running = (id: string, fields: Partial<Run>): Run => ({
+    id,
+    kind: 'landed',
+    project: 'acme/widgets',
+    parentId: null,
+    state: 'running',
+    stage: null,
+    errorType: null,
+    startedAt: at('11:57:00'),
+    finishedAt: null,
+    ...fields,
+  });
+
+  it('are the landed runs of an earlier pass, which died before it could record them', () => {
+    const rows = [running('run-20261120T115700Z-aaaaaa', {}), running('run-20261120T115400Z-bbbbbb', { state: 'succeeded', finishedAt: at('11:54:05') })];
+    expect(leftByPasses(rows).map((r) => r.id)).toEqual(['run-20261120T115700Z-aaaaaa']);
+  });
+
+  it('are not a nightly run or its parts, nor a run of a kind no pass waits for', () => {
+    const rows = [
+      running('run-20261120T020000Z-cccccc', { kind: 'nightly', project: null }),
+      running('run-20261120T020001Z-dddddd', { kind: 'sweep', parentId: 'run-20261120T020000Z-cccccc' }),
+      // Not a kind of run today. A review the poller starts would outlast the pass that started it.
+      running('run-20261120T110000Z-eeeeee', { kind: 'review' as Run['kind'] }),
+    ];
+    expect(leftByPasses(rows)).toEqual([]);
+  });
+});
+
+describe('what the last passes found, in status', () => {
+  const outputAt = (id: string) => `/var/lib/code-reviewer/state/runs/${id}.log`;
+  const position = (project: string, lastPassAt: string) => ({
+    project,
+    startedAt: at('09:00:00'),
+    seenTo: at('11:59:00'),
+    pullsEtag: 'W/"abc"',
+    lastPassAt: at(lastPassAt),
+  });
+  const landed = (id: string, fields: Partial<Run> = {}): Run => ({
+    id,
+    kind: 'landed',
+    project: 'acme/widgets',
+    parentId: null,
+    state: 'succeeded',
+    stage: null,
+    errorType: null,
+    startedAt: at('11:57:00'),
+    finishedAt: at('11:57:05'),
+    ...fields,
+  });
+  const event = (key: string, fields: object = {}) => ({
+    project: 'acme/widgets',
+    event: key,
+    attempts: 1,
+    attemptedAt: at('11:57:00'),
+    runId: null,
+    handledAt: null,
+    foundAt: at('11:57:00'),
+    run: null,
+    ...fields,
+  });
+
+  it("lists each project with when its last pass was, what was found, and each event's run", () => {
+    const lines = pollerStatus(
+      [position('acme/anvils', '12:00:02'), position('acme/widgets', '12:00:01')],
+      [
+        event('merged:12', { handledAt: at('11:57:05'), run: landed('run-20261120T115700Z-aaaaaa') }),
+        event('merged:14', {
+          attempts: 3,
+          run: landed('run-20261120T115900Z-bbbbbb', { state: 'failed', stage: 'starting', errorType: 'exit 1' }),
+        }),
+        event('merged:15', { attempts: 0, attemptedAt: null }),
+      ],
+      outputAt,
+    );
+    expect(lines).toEqual([
+      'the poller',
+      '  acme/anvils: last pass 2026-11-20T12:00:02Z, watched since 2026-11-20T09:00:00Z, nothing found yet',
+      '  acme/widgets: last pass 2026-11-20T12:00:01Z, watched since 2026-11-20T09:00:00Z',
+      '    merged:12 handled: acme/widgets landed [succeeded] run-20261120T115700Z-aaaaaa',
+      '    merged:14 not handled, tried 3 times: acme/widgets landed [failed in starting: exit 1] run-20261120T115900Z-bbbbbb' +
+        ', output: /var/lib/code-reviewer/state/runs/run-20261120T115900Z-bbbbbb.log',
+      '    merged:15 not handled, not tried yet',
+    ]);
+  });
+
+  it('says so when no pass has got as far as a project', () => {
+    expect(pollerStatus([], [], outputAt)).toEqual(['the poller: no pass yet']);
   });
 });

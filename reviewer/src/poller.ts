@@ -1,5 +1,6 @@
-import type { RunKind } from './db/schema.js';
+import type { RunKind, pollerEvents, pollerProjects } from './db/schema.js';
 import type { Project } from './projects.js';
+import { runLine, runOutputPath, type Run } from './runs.js';
 
 /**
  * The poller's pass as a decision: from what a pass saw on GitHub and what the database says was
@@ -157,4 +158,46 @@ export function passDecision(
     decision.projects.push({ project: project.slug, firstPass: false, startedAt: before.startedAt, seenTo: new Date(newest), found });
   }
   return decision;
+}
+
+/**
+ * Of the runs still recorded as `running`, those an earlier pass left behind: its process died
+ * before it could record how they ended. A pass waits for every command it starts and no two
+ * passes run at once, so a pass that is starting may call these dead. A kind of run that outlasts
+ * the pass that started it would need a rule of its own and must not be counted here.
+ */
+export function leftByPasses(rows: Run[]): Run[] {
+  const waitedFor = new Set<string>(Object.values(EVENTS).map((rule) => rule.kind));
+  return rows.filter((r) => r.state === 'running' && r.parentId === null && waitedFor.has(r.kind));
+}
+
+/** An event's row, with the run of its last attempt. */
+export type EventRow = typeof pollerEvents.$inferSelect & { run: Run | null };
+
+const time = (when: Date) => when.toISOString().replace(/\.\d+Z$/, 'Z');
+
+/**
+ * The `status` section for the poller: each project it has passed over, when its last pass was,
+ * and the events given, each with how its last run ended.
+ */
+export function pollerStatus(
+  projects: Array<typeof pollerProjects.$inferSelect>,
+  events: EventRow[],
+  outputPath: (runId: string) => string = runOutputPath,
+): string[] {
+  if (projects.length === 0) return ['the poller: no pass yet'];
+  return [
+    'the poller',
+    ...projects.flatMap((p) => {
+      const found = events.filter((e) => e.project === p.project);
+      return [
+        `  ${p.project}: last pass ${time(p.lastPassAt)}, watched since ${time(p.startedAt)}${found.length === 0 ? ', nothing found yet' : ''}`,
+        ...found.map((e) => {
+          const tried = e.attempts === 0 ? 'not tried yet' : `tried ${e.attempts} time${e.attempts === 1 ? '' : 's'}`;
+          const state = e.handledAt === null ? `not handled, ${tried}` : 'handled';
+          return `    ${e.event} ${state}${e.run ? `: ${runLine(e.run, outputPath)}` : ''}`;
+        }),
+      ];
+    }),
+  ];
 }
