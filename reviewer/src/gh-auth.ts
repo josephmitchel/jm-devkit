@@ -34,9 +34,16 @@ interface CachedToken {
 let cached: CachedToken | null = null;
 let configuredRepo: string | null = null;
 
+/** The App's credentials from the environment, or null on a run that has none. */
+export function appCredentials(): { clientId: string; privateKey: string } | null {
+  const clientId = process.env[CLIENT_ID_VAR];
+  const privateKey = process.env[PRIVATE_KEY_VAR];
+  return clientId && privateKey ? { clientId, privateKey } : null;
+}
+
 /** True when this process has App credentials and should mint its own tokens. */
 export function appAuthConfigured(): boolean {
-  return Boolean(process.env[CLIENT_ID_VAR] && process.env[PRIVATE_KEY_VAR]);
+  return appCredentials() !== null;
 }
 
 /**

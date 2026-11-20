@@ -12,6 +12,7 @@ import { ACTIVE_WORK_STATES, resolveSlot } from './stages/intake.js';
 import { markGate, progressStep } from './stages/progress.js';
 import { postFailureNotice } from './stages/report.js';
 import { runMigrations } from './migrate.js';
+import { listProjects, projectLine } from './projects.js';
 import { runReview } from './review-loop.js';
 import { runSweep } from './sweep/loop.js';
 import { runLanded } from './landed.js';
@@ -30,6 +31,8 @@ Usage:
                                                 needs-judging and lift their blocking edges
   code-reviewer labels <owner/repo>             bring the repo's labels in line with the ticket
                                                 label scheme: rename retired names, set colours
+  code-reviewer projects                        list every project the App is installed on and
+                                                whether the machine handles it
   code-reviewer migrate                        apply pending migrations (advisory-locked)
   code-reviewer next <owner/repo>               print the PR number of the next queued review
   code-reviewer abandon <owner/repo> <pr#> [why]  record that a run ended mid-stage (CI cleanup)
@@ -104,6 +107,11 @@ async function main() {
       configureAppAuth(slug);
       const { ops, leftBehind } = await syncLabels(slug);
       console.log(`${ops.length} label change(s)${leftBehind.length > 0 ? `, ${leftBehind.length} left to merge by hand` : ''}`);
+      break;
+    }
+    case 'projects': {
+      if (rest.length > 0) return usageExit();
+      for (const project of await listProjects()) console.log(projectLine(project));
       break;
     }
     case 'migrate':
