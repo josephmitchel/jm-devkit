@@ -306,6 +306,10 @@ The poller's passes start once the first nightly run has installed the code revi
 dependencies; until then each is skipped.
   By hand:  sudo systemctl start code-reviewer-poller.service
   Its log:  journalctl -u code-reviewer-poller.service
+A pass queues the reviews it finds, and the queue takes a turn after every pass: it starts the
+next review when no agent job is running, and never while the nightly run is going.
+  By hand:  sudo systemctl start --no-block code-reviewer-queue.service
+  Its log:  journalctl -u code-reviewer-queue.service
 EOF
 else
   cat <<EOF

@@ -279,13 +279,21 @@ function signalGroup(child: ChildProcess, signal: NodeJS.Signals): void {
  */
 export async function runCommand(run: Run, args: string[]): Promise<RunResult> {
   const result = runResult(run.id, await runChild(run, args, timeLimitMs(args), true));
-  const cleanup = result.state === 'interrupted' ? afterInterruption(args, result.errorType as StopReason) : null;
-  if (cleanup) {
-    // Not stopped with the rest: it is what a stopping service still has to get done.
-    const cleaned = await runChild(run, cleanup, CLEANUP_LIMIT_MS, false);
-    if (cleaned.exitCode !== 0) console.warn(`${run.id}: could not record the interrupted work as stopped (${cleanup[0]})`);
-  }
+  if (result.state === 'interrupted') await tidyAfterInterruption(run, args, result.errorType as StopReason);
   return result;
+}
+
+/**
+ * Do what an interrupted command's work needs before it can be taken up again
+ * ({@link afterInterruption}), as part of the same run. runCommand does it for a command it
+ * stopped; whoever finds a run dead, its process gone unrecorded, calls it for that run.
+ */
+export async function tidyAfterInterruption(run: Run, args: string[], reason: StopReason): Promise<void> {
+  const cleanup = afterInterruption(args, reason);
+  if (!cleanup) return;
+  // Not stopped with the rest: it is what a stopping service still has to get done.
+  const cleaned = await runChild(run, cleanup, CLEANUP_LIMIT_MS, false);
+  if (cleaned.exitCode !== 0) console.warn(`${run.id}: could not record the interrupted work as stopped (${cleanup[0]})`);
 }
 
 async function runChild(run: Run, args: string[], limitMs: number | null, stoppable: boolean): Promise<Ended> {
