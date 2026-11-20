@@ -26,6 +26,10 @@ export interface DevkitConfig {
     redundancy?: number;
     extraContext?: string;
   };
+  nightly?: {
+    /** Commands run once a night after the project's sweep, in the order written. */
+    checks?: Array<{ name: string; command: string }>;
+  };
 }
 
 /** One entry of `reviewer.services`: a GitHub Actions job service. */

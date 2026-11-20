@@ -55,6 +55,7 @@ function projectNaming(databases: string[]): ProjectSetup {
     extraContext: null,
     env: {},
     databases,
+    nightlyChecks: [],
   };
 }
 

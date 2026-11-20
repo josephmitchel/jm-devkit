@@ -11,7 +11,10 @@ export interface Observed {
   sweepWorkflow: boolean;
 }
 
-export type ProjectState = { state: 'handled' } | { state: 'still on Actions' | 'skipped'; reason: string };
+export type ProjectState =
+  /** `nightlyChecks`: how many nightly checks its project config names. */
+  | { state: 'handled'; nightlyChecks: number }
+  | { state: 'still on Actions' | 'skipped'; reason: string };
 
 /** Whether the machine handles a project, from what was seen on its default branch. */
 export function projectState(observed: Observed): ProjectState {
@@ -21,12 +24,12 @@ export function projectState(observed: Observed): ProjectState {
   }
   if (observed.config === null) return { state: 'skipped', reason: `its default branch has no ${CONFIG_FILE}` };
   try {
-    parseDevkitConfig(observed.config);
+    const config = parseDevkitConfig(observed.config);
+    return { state: 'handled', nightlyChecks: config.nightly?.checks?.length ?? 0 };
   } catch (err) {
     if (!(err instanceof DevkitConfigError)) throw err;
     return { state: 'skipped', reason: err.message };
   }
-  return { state: 'handled' };
 }
 
 /** A project the App is installed on, and whether the machine handles it. */

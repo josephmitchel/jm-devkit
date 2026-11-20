@@ -14,6 +14,17 @@ export class SetupCommandError extends Error {
 }
 
 /**
+ * One or more of a project's nightly checks failed. `account` says which, with the end of what
+ * each wrote; it is the message, so it is the last thing the run writes.
+ */
+export class NightlyCheckError extends Error {
+  constructor(account: string) {
+    super(account);
+    this.name = 'NightlyCheckError';
+  }
+}
+
+/**
  * The types of error that are a project's own fault, each with what went wrong in words that
  * finish "… failed for a reason on the project's side:". To put another failure on the project's
  * side, throw an error class of its own where it happens and add the class's name here. A type
@@ -23,6 +34,7 @@ const PROJECT_FAULTS = new Map<string, string>([
   ['DevkitConfigError', 'its project config (`devkit.json`) is invalid'],
   ['SetupCommandError', 'its setup command failed'],
   ['MissingDiscussionCategoryError', "it has discussions turned off, or no discussion category for the code reviewer's summaries"],
+  ['NightlyCheckError', 'one of its nightly checks failed'],
 ]);
 
 /** What went wrong on the project's side, or null when the type of error is not a project's fault. */

@@ -211,6 +211,16 @@ export async function getDefaultBranch(repoSlug: string): Promise<string> {
   return (await ghJson<{ default_branch: string }>(['api', `repos/${repoSlug}`])).default_branch;
 }
 
+/** The text of a file on the repo's default branch, read without a checkout, or null when it has none. */
+export async function getDefaultBranchFile(repoSlug: string, filePath: string): Promise<string | null> {
+  try {
+    return await gh(['api', `repos/${repoSlug}/contents/${filePath}`, '-H', 'Accept: application/vnd.github.raw+json']);
+  } catch (err) {
+    if (/HTTP 404/.test((err as { stderr?: string }).stderr ?? '')) return null;
+    throw err;
+  }
+}
+
 /**
  * Fire a `workflow_dispatch` so the next queued review starts at once instead of waiting for
  * the scheduled sweep. Dispatches are the one event type GitHub still delivers when the actor

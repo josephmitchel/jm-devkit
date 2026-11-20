@@ -16,6 +16,7 @@ Only through `devkit.json`, as `../devkit.schema.json` defines it. A hand edit t
 
 - `reviewer.services` is a GitHub Actions `services:` map. It is written onto the jobs that run the project's tests (`sweep` and `review-now`), never onto `landed`. It is retired: the workflow is the only thing that still reads it.
 - `reviewer.env` and `reviewer.databases` are not written into the workflow: the code reviewer applies them to the project's commands itself.
+- `nightly.checks` is not written into the workflow either: only a code reviewer that runs on the owner's machine runs a project's nightly checks.
 - `sweep` is optional and retired, and nothing is generated from it. A project still on GitHub Actions keeps its `sweep.hour` for install's search for a free hour.
 
 A variation `devkit.json` cannot express is a change to the schema and to this generator, made in the kit, never in a project.

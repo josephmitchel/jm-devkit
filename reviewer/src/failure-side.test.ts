@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { DevkitConfigError } from '../../plugin/devkit-config.mjs';
-import { failureSide, projectFault, SetupCommandError } from './failure-side.js';
+import { failureSide, NightlyCheckError, projectFault, SetupCommandError } from './failure-side.js';
 import { errorType } from './runs.js';
 
 describe('which side a failed run is on, from the type of its error', () => {
@@ -11,6 +11,13 @@ describe('which side a failed run is on, from the type of its error', () => {
 
   it("is the project's when its setup command failed", () => {
     expect(failureSide(errorType(new SetupCommandError('npm error code E404')))).toBe('project');
+  });
+
+  it("is the project's when one of its nightly checks failed", () => {
+    const failed = new NightlyCheckError('--- canvas: failed (exit 1)\n3 boards differ\n1 of 2 nightly checks failed: canvas');
+    expect(failureSide(errorType(failed))).toBe('project');
+    expect(projectFault(errorType(failed))).toBe('one of its nightly checks failed');
+    expect(failed.message).toBe('--- canvas: failed (exit 1)\n3 boards differ\n1 of 2 nightly checks failed: canvas');
   });
 
   it("is the code reviewer's for an error in its own code", () => {
