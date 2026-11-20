@@ -78,8 +78,9 @@ house standards hold in every project, including one with no `CODING_STANDARDS.m
 A project can say how it is set up and tested in a `devkit.json` at its root, instead of in its
 database row. The format is defined once, as a JSON Schema at `plugin/devkit.schema.json`, whose
 descriptions document each field; the kit's own `devkit.json` is an example. Its `reviewer`
-section holds `setup`, `tests` (`[{ "name", "command" }]`), `env`, `services`, `harnessNotes`,
-`redundancy` and `extraContext`.
+section holds `setup`, `tests` (`[{ "name", "command" }]`), `env`, `databases`, `harnessNotes`,
+`redundancy` and `extraContext`. `sweep.hour` and `reviewer.services` are retired: still accepted,
+for a project whose sweep still runs on GitHub Actions, and ignored by the code reviewer.
 
 On every run, in the PR loop and in the sweep, the code reviewer reads the file from the checkout
 it has just made (so a PR that changes it is set up and tested as it says):
@@ -89,7 +90,7 @@ it has just made (so a PR that changes it is set up and tested as it says):
   means none (redundancy 1). `harnessNotes` is a path to a doc in the project, which must exist.
   `env` is applied to the project's setup and test commands only; the action's `repo-env` input is
   applied over it and wins on a name both set, because the input is where a secret comes from.
-  `services` is for the workflow generator and ignored here.
+  `databases` names the variables that each get an empty database: see below.
 - **Without one**, everything comes from the database row, exactly as before.
 - **A malformed one** fails the run, with a message naming each field at fault
   (`reviewer.tests[0].command is required`). It never falls back to the row.
@@ -97,6 +98,35 @@ it has just made (so a PR that changes it is set up and tested as it says):
 The code reviewer validates the file with the kit's one small interpreter of the schema's keywords
 (`plugin/devkit-config.mjs`, which the workflow generator uses too), so the schema stays the one
 definition; its tests fail if the schema starts using a keyword the interpreter does not enforce.
+
+### Test databases
+
+A project whose tests need a database lists the variables that hold one in `reviewer.databases`
+(`["TEST_DATABASE_URL"]`). Each time a checkout is about to be set up, the code reviewer creates one
+empty Postgres database per variable and puts its address in that variable for the project's setup
+and test commands, over a value `env` gives the same name. The addresses travel with `env`, so they
+never enter the code reviewer's own environment. The databases are dropped when the run ends,
+whether it passed, failed or stopped to wait.
+
+The server they are created on is the setting `REVIEWER_TEST_DATABASES_URL`: a Postgres address
+(`postgres://role:password@host:5432/postgres`) as a role that may create databases. Give it a role
+of its own that cannot open the code reviewer's database, because the project's commands are handed
+that role's addresses. With `reviewer.databases` set and the setting absent the run fails, saying
+so; GitHub Actions has no such server, so a project adds `databases` when it moves to the machine.
+
+Every database is recorded in the `test_databases` table before it is created, and a run drops only
+what is recorded for it. A run that is killed leaves its record, and the same review or sweep drops
+what it left when it next runs.
+
+`npm test` needs no database. The suite that creates and drops databases on a real Postgres runs on
+its own, given a server:
+
+```sh
+REVIEWER_TEST_DATABASES_URL=postgres://role:password@host:5432/postgres npm run test:postgres
+```
+
+It keeps the code reviewer's own state in a scratch database it creates on that server and drops
+afterwards, and never opens `DATABASE_URL`.
 
 ## The nightly sweep (advisory mode)
 
@@ -196,4 +226,5 @@ intake → audit (scout + 10 auditors) → synthesis ──┬─ clean → gate
 - `src/agents/run-agent.ts` — Agent SDK wrapper (structured output, session recording, resume)
 - `worker/` — the Cloudflare Worker that starts each repo's sweep on time, as the App (`worker/README.md`)
 - `prompts/` — auditor definitions (ISO 25010 verbatim) and pipeline role prompts; `prompts/sweep/` — the sweep's framing of scout, auditor, synthesis and the ticket judge
-- `src/db/schema.ts` — repos, reviews, sweeps, rounds, concerns, findings, questions, policies, agent_sessions, github_artifacts, runs
+- `src/test-databases.ts` — the databases a project's tests are given: naming, the record of what to drop, creating and dropping
+- `src/db/schema.ts` — repos, reviews, sweeps, rounds, concerns, findings, questions, policies, agent_sessions, github_artifacts, test_databases, runs

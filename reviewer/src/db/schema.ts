@@ -312,6 +312,17 @@ export const githubArtifacts = pgTable('github_artifacts', {
   postedAt: timestamp('posted_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
+/**
+ * A database created for a project's tests (`reviewer.databases`). Recorded before it is created
+ * and forgotten once it is dropped, so a run that was killed leaves a note of what it left behind.
+ */
+export const testDatabases = pgTable('test_databases', {
+  name: text('name').primaryKey(),
+  // The run it was created for, `review:<id>` or `sweep:<id>`. The run resumed has the same owner.
+  owner: text('owner').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 export type RunKind = 'nightly' | 'sweep';
 export type RunState = 'running' | 'succeeded' | 'failed';
 

@@ -56,6 +56,7 @@ const valid = {
       { name: 'db', command: 'npm run test:db' },
     ],
     env: { TEST_DATABASE_URL: 'postgres://localhost:5432/example_test' },
+    databases: ['APP_DATABASE_URL', 'AUDIT_DATABASE_URL'],
     services: { postgres: { image: 'postgres:16', ports: ['5432:5432'] } },
     harnessNotes: 'docs/harness.md',
     redundancy: 2,
@@ -80,6 +81,7 @@ describe('readProjectSetup with a devkit.json', () => {
       harnessNotes: '# Harness\nVitest, one file per module.\n',
       extraContext: 'The example app has no UI.',
       env: { TEST_DATABASE_URL: 'postgres://localhost:5432/example_test' },
+      databases: ['APP_DATABASE_URL', 'AUDIT_DATABASE_URL'],
     });
   });
 
@@ -94,13 +96,31 @@ describe('readProjectSetup with a devkit.json', () => {
       harnessNotes: null,
       extraContext: null,
       env: {},
+      databases: [],
     });
+  });
+
+  it('accepts a file with no sweep section, now that there are no sweep slots', () => {
+    writeConfig({ modules: ['process'], reviewer: { tests: [{ name: 'unit', command: 'npm test' }] } });
+    expect(readProjectSetup(checkout, row).source).toBe('devkit.json');
+  });
+
+  it('accepts the retired sweep.hour and reviewer.services, and takes nothing from them', () => {
+    const tests = [{ name: 'unit', command: 'npm test' }];
+    writeConfig({ modules: ['process'], reviewer: { tests } });
+    const without = readProjectSetup(checkout, row);
+    writeConfig({
+      modules: ['process'],
+      sweep: { hour: 7 },
+      reviewer: { tests, services: { postgres: { image: 'postgres:16' } } },
+    });
+    expect(readProjectSetup(checkout, row)).toEqual(without);
   });
 });
 
 describe('readProjectSetup without a devkit.json', () => {
-  it('answers from the database row, as before', () => {
-    expect(readProjectSetup(checkout, row)).toEqual({ source: 'database', ...row, env: {} });
+  it('answers from the database row, with no databases', () => {
+    expect(readProjectSetup(checkout, row)).toEqual({ source: 'database', ...row, env: {}, databases: [] });
   });
 });
 
@@ -129,6 +149,14 @@ describe('readProjectSetup with a malformed devkit.json', () => {
     const message = setupError();
     expect(message).toContain('reviewer.tests must have at least 1 item');
     expect(message).toContain('reviewer.env.PORT must be a string');
+  });
+
+  it('names a database variable that is not a name, or is listed twice', () => {
+    writeConfig({ ...valid, reviewer: { tests: valid.reviewer.tests, databases: ['APP_DB', 'APP-DB', 'APP_DB', 7] } });
+    const message = setupError();
+    expect(message).toContain('reviewer.databases[1] must match');
+    expect(message).toContain('reviewer.databases lists "APP_DB" more than once');
+    expect(message).toContain('reviewer.databases[3] must be a string');
   });
 
   it('names a missing section and modules without the process module', () => {

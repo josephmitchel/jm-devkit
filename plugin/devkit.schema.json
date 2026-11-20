@@ -4,7 +4,7 @@
   "title": "devkit.json",
   "description": "A project's config: how it uses the kit, and the facts about itself the kit needs. It sits at the project root and is project-owned. The code reviewer reads it from the project's checkout on every run, and the generator turns it into the project's kit-owned files. Both validate against this file through one small interpreter (plugin/devkit-config.mjs), which understands only the keywords used here: a new keyword fails its tests until it learns it.",
   "type": "object",
-  "required": ["modules", "sweep", "reviewer"],
+  "required": ["modules", "reviewer"],
   "additionalProperties": false,
   "properties": {
     "$schema": {
@@ -25,13 +25,13 @@
       "pattern": "^[0-9a-f]{7,40}$"
     },
     "sweep": {
-      "description": "The nightly sweep.",
+      "description": "Retired, and ignored by a code reviewer that runs on the owner's machine, which sweeps every project in one nightly run. Still accepted so that a project whose sweep is still dispatched by GitHub Actions keeps validating.",
       "type": "object",
       "required": ["hour"],
       "additionalProperties": false,
       "properties": {
         "hour": {
-          "description": "The hour of the day, in UTC, at which the project's nightly sweep is dispatched. Each project has its own hour, so sweeps do not compete for the one subscription.",
+          "description": "Retired with `sweep`. The hour of the day, in UTC, at which a project still on GitHub Actions has its nightly sweep dispatched.",
           "type": "integer",
           "minimum": 0,
           "maximum": 23
@@ -77,8 +77,14 @@
           "propertyNames": { "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
           "additionalProperties": { "type": "string" }
         },
+        "databases": {
+          "description": "The environment variables that each need a database of their own. Before setup, the code reviewer creates one empty Postgres database per name on the machine it runs on, of that machine's Postgres version, and puts each one's address in its variable for the project's setup and test commands, over a value `env` gives the same name. The databases are dropped after the run. A machine that cannot create them fails the run, saying what is missing.",
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" }
+        },
         "services": {
-          "description": "Services the tests need, a database say, in the shape of a GitHub Actions job's `services:` map, keyed by the service's id. The generator writes them onto the jobs of the project's sweep workflow that run the tests (`sweep` and `review-now`); the code reviewer itself ignores them. Their connection details reach the tests through `env`.",
+          "description": "Retired, and ignored by the code reviewer: on the owner's machine the tests get their databases from `databases`. Still accepted for a project whose tests still run in GitHub Actions: services the tests need, in the shape of a GitHub Actions job's `services:` map, keyed by the service's id. The generator writes them onto the jobs of the project's sweep workflow that run the tests (`sweep` and `review-now`). Their connection details reach the tests through `env`.",
           "type": "object",
           "propertyNames": { "pattern": "^[A-Za-z_][A-Za-z0-9_-]*$" },
           "additionalProperties": {
@@ -144,9 +150,16 @@
   "examples": [
     {
       "modules": ["process"],
-      "sweep": { "hour": 3 },
       "reviewer": {
         "tests": [{ "name": "unit", "command": "npm test" }]
+      }
+    },
+    {
+      "modules": ["process"],
+      "reviewer": {
+        "setup": "npm ci && npm run migrate",
+        "tests": [{ "name": "db", "command": "npm run test:db" }],
+        "databases": ["TEST_DATABASE_URL"]
       }
     },
     {

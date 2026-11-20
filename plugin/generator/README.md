@@ -14,9 +14,9 @@ Each file starts with a comment saying it is generated and that changes go in `d
 
 Only through `devkit.json`, as `../devkit.schema.json` defines it. A hand edit to a kit-owned file is drift: `--check` reports it and the next sync replaces it.
 
-- `reviewer.services` is a GitHub Actions `services:` map. It is written onto the jobs that run the project's tests (`sweep` and `review-now`), never onto `landed`.
-- `reviewer.env` is not written into the workflow: the code reviewer applies it to the project's commands itself.
-- `sweep.hour` is read by the Worker, not written into the workflow, which has no `schedule:`.
+- `reviewer.services` is a GitHub Actions `services:` map. It is written onto the jobs that run the project's tests (`sweep` and `review-now`), never onto `landed`. It is retired: the workflow is the only thing that still reads it.
+- `reviewer.env` and `reviewer.databases` are not written into the workflow: the code reviewer applies them to the project's commands itself.
+- `sweep` is optional and retired, and nothing is generated from it. A project still on GitHub Actions keeps its `sweep.hour` for install's search for a free hour.
 
 A variation `devkit.json` cannot express is a change to the schema and to this generator, made in the kit, never in a project.
 

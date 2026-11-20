@@ -4,6 +4,7 @@ import { getPr } from '../github.js';
 import { prepareWorkspace, runRepoCommand } from '../workspace.js';
 import { MAX_ROUNDS, requireProject, requireWorkspace, type Ctx } from './context.js';
 import { readProjectSetup } from '../project-config.js';
+import { provideTestDatabases } from '../test-databases.js';
 
 export interface ReviewSlotConflict {
   reviewId: number;
@@ -169,12 +170,14 @@ export async function runSetup(ctx: Ctx): Promise<void> {
 }
 
 /**
- * Learn how to set up and test the project from the checkout just prepared. Read on every
- * checkout, not once per review: the PR under review can change its own `devkit.json`.
+ * Learn how to set up and test the project from the checkout just prepared, and create the
+ * databases it names. Read on every checkout, not once per review: the PR under review can change
+ * its own `devkit.json`.
  */
-export function readProject(ctx: Ctx): void {
-  ctx.project = readProjectSetup(requireWorkspace(ctx), ctx.repo);
-  console.log(`project setup read from ${ctx.project.source === 'devkit.json' ? 'devkit.json' : 'the database row'}`);
+export async function readProject(ctx: Ctx): Promise<void> {
+  const project = readProjectSetup(requireWorkspace(ctx), ctx.repo);
+  console.log(`project setup read from ${project.source === 'devkit.json' ? 'devkit.json' : 'the database row'}`);
+  ctx.project = await provideTestDatabases(`review:${ctx.review.id}`, project);
 }
 
 export async function runIntake(ctx: Ctx): Promise<void> {
@@ -242,7 +245,7 @@ export async function runIntake(ctx: Ctx): Promise<void> {
     pr.headSha,
   );
   console.log(`workspace ready at ${ctx.workspaceDir}`);
-  readProject(ctx);
+  await readProject(ctx);
 
   if (!round.testResults) {
     await runSetup(ctx);
