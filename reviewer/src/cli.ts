@@ -11,6 +11,7 @@ import { dispatchWorkflow, getDefaultBranch, getPr, listOpenPrNumbers } from './
 import { carryGate } from './stages/carry-gate.js';
 import { ACTIVE_WORK_STATES, resolveSlot } from './stages/intake.js';
 import { markGate, progressStep } from './stages/progress.js';
+import { postSummary } from './post-summary.js';
 import { postFailureNotice } from './stages/report.js';
 import { runMigrations } from './migrate.js';
 import { recordNightlyNotStarted, runNightly } from './nightly.js';
@@ -32,11 +33,14 @@ Usage:
   code-reviewer sweep <owner/repo>              run (or resume) tonight's sweep: judge closed
                                                 issues, audit what landed on the default branch,
                                                 file concerns as issues (never fixes, never gates)
-  code-reviewer nightly                         the whole nightly run: sweep every project the
-                                                machine handles, in name order, one at a time;
-                                                a sweep that fails does not stop the next, and
-                                                one that runs past five and a half hours is
-                                                stopped and resumed the next night
+  code-reviewer summary <owner/repo>            post the project's latest sweep as a dated
+                                                discussion in the project, once; a night on which
+                                                nothing happened posts nothing
+  code-reviewer nightly                         the whole nightly run: for every project the
+                                                machine handles, in name order, one at a time, its
+                                                sweep and then its summary; a step that fails does
+                                                not stop the next, and a sweep that runs past five
+                                                and a half hours is stopped and resumed the next night
   code-reviewer nightly-not-started <stage> <error type>
                                                 record a nightly run that could not start; the
                                                 machine's update step (bin/update.mjs) calls it
@@ -67,7 +71,7 @@ Usage:
 
 // The commands CI runs unattended. The admin ones print tables and confirmations for a person at
 // a terminal, where a timestamp on every line is only noise.
-const STAMPED = new Set(['run', 'sweep', 'nightly', 'nightly-not-started', 'landed', 'migrate', 'next', 'abandon', 'carry-gate']);
+const STAMPED = new Set(['run', 'sweep', 'summary', 'nightly', 'nightly-not-started', 'landed', 'migrate', 'next', 'abandon', 'carry-gate']);
 
 async function main() {
   const [cmd, ...rest] = process.argv.slice(2);
@@ -109,6 +113,13 @@ async function main() {
       } finally {
         stopHeartbeat();
       }
+      break;
+    }
+    case 'summary': {
+      const [slug, ...extra] = rest;
+      if (!slug || extra.length > 0) return usageExit();
+      configureAppAuth(slug);
+      printRaw(`outcome: ${await postSummary(slug)}`);
       break;
     }
     case 'nightly': {
@@ -451,6 +462,7 @@ async function showStatus(slug?: string): Promise<void> {
       console.log(
         `  sweep ${s.id} [${s.state}] ${s.branch} ${range}, ${s.createdAt.toISOString().slice(0, 10)}` +
           `${s.state === 'done' ? `, opened ${opened}, judged ${s.summary?.judged.length ?? 0}` : ''}` +
+          `${s.discussionUrl ? `, summary: ${s.discussionUrl}` : ''}` +
           `${s.error ? ` — error: ${s.error.slice(0, 120)}` : ''}`,
       );
     }

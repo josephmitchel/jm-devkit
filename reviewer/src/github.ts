@@ -2,6 +2,7 @@ import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { CommitFacts } from './fix-commit.js';
 import { appAuthConfigured, installationToken } from './gh-auth.js';
+import type { DiscussionSetup } from './night-summary.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -404,6 +405,33 @@ export async function swapBlockedByForRelatesTo(dependentNodeId: string, blocker
     'mutation($dep:ID!,$blocker:ID!){ removeBlockedBy(input:{issueId:$dep, blockingIssueId:$blocker}){ clientMutationId } addRelatesTo(input:{issueId:$dep, relatedIssueId:$blocker}){ clientMutationId } }',
     { dep: dependentNodeId, blocker: blockerNodeId },
   );
+}
+
+/** Whether a project has discussions on, and its categories: what creating a discussion needs to know first. */
+export async function getDiscussionSetup(repoSlug: string): Promise<DiscussionSetup> {
+  const [owner, name] = repoSlug.split('/');
+  const data = await ghGraphql<{
+    repository: { id: string; hasDiscussionsEnabled: boolean; discussionCategories: { nodes: Array<{ id: string; name: string }> } };
+  }>(
+    // A repository holds at most 25 categories.
+    'query($o:String!,$r:String!){ repository(owner:$o,name:$r){ id hasDiscussionsEnabled discussionCategories(first:100){ nodes { id name } } } }',
+    { o: owner, r: name },
+  );
+  const repo = data.repository;
+  return { repositoryId: repo.id, enabled: repo.hasDiscussionsEnabled, categories: repo.discussionCategories.nodes };
+}
+
+/** Discussions are created only through GraphQL, by the repository's and the category's ids. Returns the discussion's URL. */
+export async function createDiscussion(
+  target: { repositoryId: string; categoryId: string },
+  title: string,
+  body: string,
+): Promise<string> {
+  const data = await ghGraphql<{ createDiscussion: { discussion: { url: string } } }>(
+    'mutation($repo:ID!,$category:ID!,$title:String!,$body:String!){ createDiscussion(input:{repositoryId:$repo, categoryId:$category, title:$title, body:$body}){ discussion { url } } }',
+    { repo: target.repositoryId, category: target.categoryId, title, body },
+  );
+  return data.createDiscussion.discussion.url;
 }
 
 /**

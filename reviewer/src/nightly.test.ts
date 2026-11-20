@@ -10,7 +10,7 @@ const config = JSON.stringify({
 });
 
 describe("the nightly run's order of work", () => {
-  it('sweeps the handled projects in name order and says why it skips the others', () => {
+  it("sweeps the handled projects in name order, posting each one's summary after its sweep, and says why it skips the others", () => {
     const projects = classifyProjects([
       { slug: 'acme/widgets', config, sweepWorkflow: false },
       { slug: 'acme/gadgets', config, sweepWorkflow: true },
@@ -20,7 +20,9 @@ describe("the nightly run's order of work", () => {
     expect(nightlyWork(projects)).toEqual({
       steps: [
         { project: 'acme/anvils', kind: 'sweep' },
+        { project: 'acme/anvils', kind: 'summary' },
         { project: 'acme/widgets', kind: 'sweep' },
+        { project: 'acme/widgets', kind: 'summary' },
       ],
       skipped: [
         'Acme/bare skipped: its default branch has no devkit.json',

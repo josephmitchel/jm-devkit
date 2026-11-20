@@ -22,6 +22,7 @@ export class SetupCommandError extends Error {
 const PROJECT_FAULTS = new Map<string, string>([
   ['DevkitConfigError', 'its project config (`devkit.json`) is invalid'],
   ['SetupCommandError', 'its setup command failed'],
+  ['MissingDiscussionCategoryError', "it has discussions turned off, or no discussion category for the code reviewer's summaries"],
 ]);
 
 /** What went wrong on the project's side, or null when the type of error is not a project's fault. */

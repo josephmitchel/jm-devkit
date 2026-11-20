@@ -160,6 +160,8 @@ export const sweeps = pgTable('sweeps', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   finishedAt: timestamp('finished_at', { withTimezone: true }),
+  // The discussion this sweep's summary was posted as. Set once, so a sweep is posted once.
+  discussionUrl: text('discussion_url'),
 });
 
 export const reviews = pgTable(
@@ -323,14 +325,15 @@ export const testDatabases = pgTable('test_databases', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
-export type RunKind = 'nightly' | 'sweep';
+export type RunKind = 'nightly' | 'sweep' | 'summary';
 // `interrupted`: stopped before its command finished, by its time limit or by the service stopping,
 // or found still `running` by the next run. Its work is taken up again by the next run.
 export type RunState = 'running' | 'succeeded' | 'failed' | 'interrupted';
 
 /**
  * A run of one of the code reviewer's commands on the machine: a nightly run, or one project's
- * part in it. `kind` and `state` are text, so a new kind of run needs no migration.
+ * part in it (its sweep, then the posting of the night's summary). `kind` and `state` are text, so
+ * a new kind of run needs no migration.
  */
 export const runs = pgTable('runs', {
   // `run-<UTC start time>-<random>` (newRunId). The run's output is the file runOutputPath names.

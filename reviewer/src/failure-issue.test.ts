@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { failureIssuePlan, type IssueAction, type OpenIssue, type Report, type RunFacts } from './failure-issue.js';
+import { MissingDiscussionCategoryError } from './night-summary.js';
 
 const ID = 'run-20261120T031502Z-a1b2c3';
 const COMMIT = '0123456789abcdef0123456789abcdef01234567';
@@ -254,5 +255,23 @@ describe('the one open failure issue per place and kind of run', () => {
     const fences = open.body.split('\n').filter((line) => /^`{5,}$/.test(line));
     expect(fences).toHaveLength(2);
     expect(open.body).toContain('`````\nbefore\n```\n@acme please look\n````\nafter\n`````');
+  });
+
+  it("opens an issue in the project when the night's summary has no category to go in, and closes it once one is posted", () => {
+    const noCategory: Report = {
+      outcome: 'failed',
+      side: 'project',
+      facts: run(1, { kind: 'summary', stage: 'starting', errorType: 'MissingDiscussionCategoryError' }),
+      tail: new MissingDiscussionCategoryError('acme/widgets', 'Code reviewer', true).message,
+    };
+    const project = new Place();
+    project.told(setupFailed(1));
+    project.told(noCategory);
+    expect(project.states()).toEqual(['#1 open, 0 comment(s)', '#2 open, 0 comment(s)']);
+    expect(project.issues[1].title).toBe("The code reviewer's nightly summary failed");
+    expect(project.issues[1].body).toContain('no discussion category for the code reviewer');
+    expect(project.issues[1].body).toContain('Create a discussion category named "Code reviewer"');
+    project.told(succeeded('project', 2, { kind: 'summary' }));
+    expect(project.states()).toEqual(['#1 open, 0 comment(s)', '#2 closed, 1 comment(s)']);
   });
 });
