@@ -11,7 +11,7 @@ workers_dev = false
 
 [triggers]
 # UTC. One repo per slot, an hour apart, so two sweeps never share the Claude subscription.
-crons = ["17 7 * * *", "17 8 * * *", "17 9 * * *"]
+crons = ["17 7 * * *", "17 8 * * *"]
 
 [observability]
 enabled = true
