@@ -250,9 +250,11 @@ own calendar.
   skipped, as is a sweep that did not finish. The rule is `summaryPlan` in `src/night-summary.ts`.
 - **One discussion per sweep.** The discussion's address is recorded on the sweep's row
   (`sweeps.discussion_url`, shown by `status`), so a nightly run started again the same night, or
-  the command run by hand, posts nothing more. Only a project's latest sweep is ever posted: a
-  night that could not be posted is not caught up once a later sweep has run, so after creating a
-  missing category run `summary` by hand to post that night.
+  the command run by hand, posts nothing more.
+- **A night that could not be posted is caught up.** Each time it runs, the summary step posts
+  every sweep of the project that finished in the last seven days, has something to say and has
+  no discussion recorded, oldest first (`summaryPlans`). So the nights missed while a category
+  was missing are posted at the first summary after it exists, each under its own date.
 - **The category** is named by the setting `REVIEWER_DISCUSSION_CATEGORY`, `Code reviewer` when it
   is not set, and matched whatever its capitals. The name, the matching and the words the owner is
   told are in `plugin/discussion-category.mjs`, which install's check

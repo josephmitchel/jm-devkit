@@ -7,6 +7,7 @@ import {
   discussionTarget,
   MissingDiscussionCategoryError,
   summaryPlan,
+  summaryPlans,
   summaryTitle,
   type DiscussionSetup,
   type Night,
@@ -76,6 +77,51 @@ describe('whether a night is posted', () => {
   it('posts nothing for a sweep whose summary is already posted', () => {
     const url = 'https://github.com/acme/widgets/discussions/7';
     expect(summaryPlan(night({ ...landed, account: ACCOUNT, discussionUrl: url }))).toEqual({ action: 'skip', why: `already posted: ${url}` });
+  });
+});
+
+describe('which of a project\'s nights are posted when its summary step runs', () => {
+  const NOW = new Date('2026-11-20T09:20:00Z');
+  const landed = { headSha: 'b'.repeat(40), summary: { ...nothing, commits: 3 } };
+  const on = (day: string, over: Partial<Night> = {}) => night({ ...landed, finishedAt: new Date(`2026-11-${day}T09:15:02Z`), ...over });
+  const titles = (nights: Night[]) => {
+    const plan = summaryPlans(nights, NOW, 'UTC');
+    return plan.action === 'post' ? plan.posts.map((p) => p.title) : plan;
+  };
+
+  it('is the latest night, when the nights before it were posted', () => {
+    const posted = { discussionUrl: 'https://github.com/acme/widgets/discussions/7' };
+    expect(titles([on('18', posted), on('19', posted), on('20')])).toEqual(['Nightly summary, 2026-11-20']);
+  });
+
+  it('catches up every finished night of the last seven days that has results and no discussion, oldest first', () => {
+    const nights = [on('17'), on('18', { discussionUrl: 'https://github.com/acme/widgets/discussions/7' }), on('19'), on('20')];
+    expect(titles(nights)).toEqual(['Nightly summary, 2026-11-17', 'Nightly summary, 2026-11-19', 'Nightly summary, 2026-11-20']);
+    expect(titles([...nights].reverse())).toEqual(['Nightly summary, 2026-11-17', 'Nightly summary, 2026-11-19', 'Nightly summary, 2026-11-20']);
+  });
+
+  it('gives each post the night it is for, so the discussion is recorded on the right sweep', () => {
+    const nights = [on('19'), on('20')];
+    const plan = summaryPlans(nights, NOW, 'UTC');
+    expect(plan.action === 'post' && plan.posts.map((p) => p.night)).toEqual(nights);
+  });
+
+  it('catches up a night whose sweep is no longer the latest, though the latest has nothing to say', () => {
+    expect(titles([on('19'), on('20', { headSha: 'a'.repeat(40), summary: nothing })])).toEqual(['Nightly summary, 2026-11-19']);
+    expect(titles([on('19'), on('20', { state: 'failed', finishedAt: null })])).toEqual(['Nightly summary, 2026-11-19']);
+  });
+
+  it('does not go back further than seven days', () => {
+    expect(titles([on('12'), on('13', { finishedAt: new Date('2026-11-13T09:19:00Z') }), on('14')])).toEqual(['Nightly summary, 2026-11-14']);
+  });
+
+  it('posts nothing, saying why of the latest night, when no night is owed a discussion', () => {
+    expect(titles([])).toEqual({ action: 'skip', why: 'the project has no sweep yet' });
+    expect(titles([on('19', { discussionUrl: 'https://github.com/acme/widgets/discussions/7' }), on('20', { state: 'auditing', finishedAt: null })])).toEqual({
+      action: 'skip',
+      why: 'the latest sweep did not finish (it is auditing)',
+    });
+    expect(titles([on('12')])).toEqual({ action: 'skip', why: 'the latest sweep finished more than seven days ago' });
   });
 });
 

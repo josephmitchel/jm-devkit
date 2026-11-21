@@ -39,8 +39,9 @@ Usage:
                                                 issues, audit what landed on the default branch,
                                                 file concerns as issues (never fixes, never gates)
   code-reviewer summary <owner/repo>            post the project's latest sweep as a dated
-                                                discussion in the project, once; a night on which
-                                                nothing happened posts nothing
+                                                discussion in the project, once, and any from the
+                                                last seven days that could not be posted; a night
+                                                on which nothing happened posts nothing
   code-reviewer checks <owner/repo>             run the project's nightly checks (nightly.checks in
                                                 its devkit.json) now, in a fresh checkout of its
                                                 default branch; recorded and reported as the

@@ -2,11 +2,11 @@ import { discussionCategory, findDiscussionCategory, missingDiscussionCategory }
 import type { SweepSummary } from './db/schema.js';
 
 /**
- * A night's summary: whether a project's latest sweep is posted as a discussion in the project,
- * and what the discussion says. All of it is decided from what the sweep left in the database.
+ * A night's summary: whether a project's sweep is posted as a discussion in the project, and
+ * what the discussion says. All of it is decided from what the sweep left in the database.
  */
 
-/** A project's latest sweep, as its row and its round's hold it. */
+/** One of a project's sweeps, as its row and its round's hold it. */
 export interface Night {
   /** `owner/name`, for the link to what landed. */
   project: string;
@@ -70,8 +70,8 @@ function factLines(night: Night, landed: boolean): string[] {
 }
 
 /**
- * Whether a project's latest sweep is posted, and as what. One discussion per sweep, titled with
- * the date it finished; a night on which nothing happened posts nothing.
+ * Whether a sweep is posted, and as what. One discussion per sweep, titled with the date it
+ * finished; a night on which nothing happened posts nothing.
  */
 export function summaryPlan(night: Night | null, timeZone?: string): SummaryPlan {
   const skip = (why: string): SummaryPlan => ({ action: 'skip', why });
@@ -85,6 +85,33 @@ export function summaryPlan(night: Night | null, timeZone?: string): SummaryPlan
   const account = night.account?.trim() || (landed ? '' : 'Nothing landed since the last sweep, so nothing was audited.');
   const body = [...(account ? [account, ''] : []), '## What the sweep did', '', ...factLines(night, landed), ''].join('\n');
   return { action: 'post', title: summaryTitle(night.finishedAt, timeZone), body };
+}
+
+// A night that could not be posted (no category yet) is still owed its discussion for this long.
+const CAUGHT_UP_FOR_MS = 7 * 24 * 60 * 60 * 1000;
+
+export type SummaryPlans<N extends Night> =
+  | { action: 'skip'; why: string }
+  | { action: 'post'; posts: Array<{ night: N; title: string; body: string }> };
+
+/**
+ * Which of a project's nights are posted now: every sweep that finished in the last seven days,
+ * has something to say and has no discussion yet, oldest first, so a night that could not be
+ * posted is caught up once it can be. `nights` are the project's sweeps, the latest last; with
+ * nothing to post, the reason given is the latest one's.
+ */
+export function summaryPlans<N extends Night>(nights: N[], now: Date, timeZone?: string): SummaryPlans<N> {
+  const recent = (night: N) => night.finishedAt !== null && now.getTime() - night.finishedAt.getTime() <= CAUGHT_UP_FOR_MS;
+  const posts = nights
+    .filter(recent)
+    .sort((a, b) => a.finishedAt!.getTime() - b.finishedAt!.getTime())
+    .flatMap((night) => {
+      const plan = summaryPlan(night, timeZone);
+      return plan.action === 'post' ? [{ night, title: plan.title, body: plan.body }] : [];
+    });
+  if (posts.length > 0) return { action: 'post', posts };
+  const latest = summaryPlan(nights.at(-1) ?? null, timeZone);
+  return { action: 'skip', why: latest.action === 'skip' ? latest.why : 'the latest sweep finished more than seven days ago' };
 }
 
 // The category's name, the matching and the owner's instructions are in the plugin, where
