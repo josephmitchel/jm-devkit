@@ -2,15 +2,14 @@ import { DevkitConfigError } from '../../plugin/devkit-config.mjs';
 import { UPDATE_STAGES } from '../bin/update.mjs';
 import { reportRun } from './failure-report.js';
 import { lockFault, MACHINE_LOCK, MachineLockError, NIGHTLY_LOCK, tryLock, type Held } from './machine.js';
-import { ensureProjectRow } from './project-row.js';
 import { listProjects, projectLine, type Project } from './projects.js';
 import { machineFor } from './queue.js';
+import { takeRecordedStepOrSayWhy } from './recorded-step.js';
 import {
   errorType,
   finishRun,
   interruptRunsLeftRunning,
   NIGHTLY_STAGES,
-  runCommand,
   runLine,
   runLog,
   startRun,
@@ -220,26 +219,20 @@ export async function recordNightlyNotStarted(stage: string, errorType: string):
 }
 
 async function takeStep(nightly: Run, step: Step, say: (line: string) => void): Promise<Outcome> {
-  try {
-    // A project registers itself (ADR 0004): the first night it is met, its row is made here.
-    if (!step.invalidConfig) await ensureProjectRow(step.project);
-    const run = await startRun({ kind: step.kind, project: step.project, parentId: nightly.id });
-    say(`${step.project} ${step.kind} started as ${run.id}`);
-    let result = refusedResult(step);
-    // What the project's failure issue quotes is the end of the run's output.
-    if (result) runLog(run)(`${step.project} has a project config that is not valid: ${step.invalidConfig}`);
-    try {
-      result ??= await runCommand(run, [step.kind, step.project]);
-    } catch (err) {
-      result = { state: 'failed', stage: 'starting', errorType: errorType(err) };
-    }
-    const finished = await finishRun(run, result);
-    say(runLine(finished));
-    await reportRun(finished, say);
-    return finished.state === 'running' ? 'failed' : finished.state;
-  } catch (err) {
-    // The run could not be recorded at all (the database, the state directory): still only this step's failure.
-    say(`${step.project} ${step.kind} could not be run: ${err instanceof Error ? err.message : String(err)}`);
-    return 'failed';
-  }
+  const name = `${step.project} ${step.kind}`;
+  const refused = refusedResult(step);
+  const finished = await takeRecordedStepOrSayWhy(
+    {
+      kind: step.kind,
+      project: step.project,
+      parentId: nightly.id,
+      args: [step.kind, step.project],
+      name,
+      started: (run) => `${name} started as ${run.id}`,
+      needsProjectRow: !refused,
+      refused: refused && { why: `${step.project} has a project config that is not valid: ${step.invalidConfig}`, result: refused },
+    },
+    say,
+  );
+  return finished === null || finished.state === 'running' ? 'failed' : finished.state;
 }

@@ -3,14 +3,14 @@ import { eq } from 'drizzle-orm';
 import { CONFIG_FILE, parseDevkitConfig } from '../../plugin/devkit-config.mjs';
 import { db, schema } from './db/client.js';
 import type { TestCommand } from './db/schema.js';
-import { reportRun } from './failure-report.js';
 import { NightlyCheckError, SetupCommandError } from './failure-side.js';
 import { getBranchHead, getDefaultBranch, getDefaultBranchFile } from './github.js';
 import { markStage } from './heartbeat.js';
 import { CHECKS_LOCK_CLASS, checksLockKey, locksHeld, tryLock } from './machine.js';
 import { readProjectSetup, type ProjectRow, type ProjectSetup } from './project-config.js';
 import { cloneUrl } from './project-row.js';
-import { errorType, finishRun, runCommand, runLine, runLog, startRun, type CHECKS_STAGES, type Run, type RunResult } from './runs.js';
+import { takeRecordedStep } from './recorded-step.js';
+import type { CHECKS_STAGES, Run } from './runs.js';
 import { droppingTestDatabases, provideTestDatabases, type RunOwner } from './test-databases.js';
 import { checksWorkspacePath, prepareWorkspace, runRepoCommand, streamRepoCommand, type StreamedCommand } from './workspace.js';
 
@@ -208,17 +208,15 @@ export async function runChecksOnDemand(slug: string): Promise<'no checks' | 'al
     console.log(new ChecksRunningError(slug).message);
     return 'already running';
   }
-  const run = await startRun({ kind: 'checks', project: slug });
-  const say = runLog(run);
-  say(`${slug} checks started as ${run.id}`);
-  let result: RunResult;
-  try {
-    result = await runCommand(run, ['checks', slug]);
-  } catch (err) {
-    result = { state: 'failed', stage: 'starting', errorType: errorType(err) };
-  }
-  const finished = await finishRun(run, result);
-  say(runLine(finished));
-  await reportRun(finished, say);
+  const name = `${slug} checks`;
+  const finished = await takeRecordedStep({
+    kind: 'checks',
+    project: slug,
+    args: ['checks', slug],
+    name,
+    started: (run) => `${name} started as ${run.id}`,
+    // The checks need no row of the project's (runProjectChecks).
+    needsProjectRow: false,
+  });
   return finished.state;
 }

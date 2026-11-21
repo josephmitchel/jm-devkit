@@ -1,7 +1,6 @@
 import { and, asc, desc, eq, inArray, isNotNull, isNull } from 'drizzle-orm';
 
 import { db, pool, schema } from './db/client.js';
-import { reportRun } from './failure-report.js';
 import { appCredentials } from './gh-auth.js';
 import { LOCK_CLASS } from './migrate.js';
 import { commentsSeen, projectsSeen, pullRequestsSeen, type Asking, type Memory } from './poller-github.js';
@@ -18,10 +17,10 @@ import {
   type ProjectSeen,
   type ReviewKnown,
 } from './poller.js';
-import { ensureProjectRow } from './project-row.js';
 import { classifyProjects, projectLine } from './projects.js';
 import { OWN_COMMENT_KINDS } from './reply-authority.js';
-import { errorType, finishRun, interruptRunsLeftRunning, runCommand, runLine, startRun, stopping, type RunResult } from './runs.js';
+import { takeRecordedStepOrSayWhy } from './recorded-step.js';
+import { interruptRunsLeftRunning, runLine, stopping } from './runs.js';
 
 /**
  * One pass of the poller: ask GitHub what has happened in each handled project, let
@@ -289,30 +288,25 @@ async function handle(command: Command, say: (line: string) => void): Promise<'s
     say(`${command.project} ${command.event}: already taken by another pass`);
     return 'taken';
   }
-  try {
-    // A project registers itself (ADR 0004): a command needs its row, and this may be its first run.
-    await ensureProjectRow(command.project);
-    const run = await startRun({ kind: command.kind, project: command.project });
-    await db.update(schema.pollerEvents).set({ runId: run.id }).where(key);
-    say(`${command.project} ${command.event}: \`${command.args.join(' ')}\` started as ${run.id}`);
-    let result: RunResult;
-    try {
-      result = await runCommand(run, command.args);
-    } catch (err) {
-      result = { state: 'failed', stage: 'starting', errorType: errorType(err) };
-    }
-    // Before the run is recorded as over: if this process dies between the two writes, the event
-    // must not be left looking unhandled after a command that succeeded.
-    if (result.state === 'succeeded') await db.update(schema.pollerEvents).set({ handledAt: new Date() }).where(key);
-    const finished = await finishRun(run, result);
-    say(runLine(finished));
-    await reportRun(finished, say);
-    return finished.state === 'running' ? 'failed' : finished.state;
-  } catch (err) {
-    // The run could not be recorded at all (the database, the state directory).
-    say(`${command.project} ${command.event} could not be run: ${why(err)}`);
-    return 'failed';
-  }
+  const name = `${command.project} ${command.event}`;
+  const finished = await takeRecordedStepOrSayWhy(
+    {
+      kind: command.kind,
+      project: command.project,
+      args: command.args,
+      name,
+      started: (run) => `${name}: \`${command.args.join(' ')}\` started as ${run.id}`,
+      needsProjectRow: true,
+      onStart: async (run) => void (await db.update(schema.pollerEvents).set({ runId: run.id }).where(key)),
+      // Before the run is recorded as over: if this process dies between the two writes, the
+      // event must not be left looking unhandled after a command that succeeded.
+      beforeFinish: async (result) => {
+        if (result.state === 'succeeded') await db.update(schema.pollerEvents).set({ handledAt: new Date() }).where(key);
+      },
+    },
+    say,
+  );
+  return finished === null || finished.state === 'running' ? 'failed' : finished.state;
 }
 
 // How many handled events `status` shows for a project. Those still to be handled are all shown.

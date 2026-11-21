@@ -1,12 +1,10 @@
 import { and, eq, inArray, isNull, notInArray } from 'drizzle-orm';
 
 import { db, schema } from './db/client.js';
-import { reportRun } from './failure-report.js';
 import { lockFault, locksHeld, MACHINE_LOCK, NIGHTLY_LOCK, tryLock } from './machine.js';
 import { projectsLastSeen } from './poller-github.js';
 import { inDatabase, takeEvent } from './poller-pass.js';
 import { commandFor } from './poller.js';
-import { ensureProjectRow } from './project-row.js';
 import { classifyProjects } from './projects.js';
 import {
   afterReviewRun,
@@ -21,7 +19,8 @@ import {
   type QueuedEvent,
   type RunningJob,
 } from './queue.js';
-import { errorType, finishRun, interruptRunsLeftRunning, runCommand, runLine, runLog, startRun, stopping, tidyAfterInterruption, type RunResult } from './runs.js';
+import { takeRecordedStepOrSayWhy } from './recorded-step.js';
+import { errorType, interruptRunsLeftRunning, runLine, stopping, tidyAfterInterruption } from './runs.js';
 import { OFF_THE_SLOT } from './stages/intake.js';
 
 /**
@@ -32,8 +31,6 @@ import { OFF_THE_SLOT } from './stages/intake.js';
  */
 
 export type TurnOutcome = 'nothing started' | 'succeeded' | 'failed' | 'interrupted';
-
-const why = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
 /**
  * Take one turn: at most one review does any work, and the turn lasts as long as it does. A
@@ -159,43 +156,36 @@ async function runJob(job: Job, say: (line: string) => void, refused: Error | nu
     return { outcome: 'nothing started', verdict: null };
   }
   const events = and(eq(schema.pollerEvents.project, job.project), inArray(schema.pollerEvents.event, [job.event, ...job.covers]));
-  try {
-    // A project registers itself (ADR 0004): `run` needs its row, and this may be its first run.
-    await ensureProjectRow(job.project);
-    const run = await startRun({ kind: job.kind, project: job.project });
-    await db.update(schema.pollerEvents).set({ runId: run.id }).where(events);
-    say(
-      `${job.project} ${job.event}: \`${job.args.join(' ')}\` started as ${run.id}` +
-        (job.covers.length > 0 ? `, which also answers ${job.covers.join(', ')}` : ''),
-    );
-    let result: RunResult;
-    try {
-      if (refused) {
-        runLog(run)(refused.message);
-        throw refused;
-      }
-      result = await runCommand(run, job.args);
-    } catch (err) {
-      result = { state: 'failed', stage: 'starting', errorType: errorType(err) };
-    }
-    const review = await reviewOnRecord(job.project, Number(job.args[2]));
-    const stops = review?.timeLimitStops ?? 0;
-    const verdict = afterReviewRun(result, review?.state ?? null, stops);
-    const stopsNow = timeLimitStopsAfter(result, verdict, stops);
-    if (review && stopsNow !== stops) await db.update(schema.reviews).set({ timeLimitStops: stopsNow }).where(eq(schema.reviews.id, review.id));
-    // Before the run is recorded as over, as a pass does: an event must not be left looking
-    // unhandled after the run that handled it.
-    if (verdict === 'handled') await db.update(schema.pollerEvents).set({ handledAt: new Date() }).where(events);
-    const finished = await finishRun(run, result);
-    say(`${runLine(finished)}; ${job.event} ${VERDICT_WORDS[verdict]}`);
-    // A review turned away did no work: it is no success to close a failure issue on.
-    if (verdict !== 'waits for the slot') await reportRun(finished, say);
-    return { outcome: finished.state === 'running' ? 'failed' : finished.state, verdict };
-  } catch (err) {
-    // The run could not be recorded at all (the database, the state directory).
-    say(`${job.project} ${job.event} could not be run: ${why(err)}`);
-    return { outcome: 'failed', verdict: null };
-  }
+  const name = `${job.project} ${job.event}`;
+  let verdict: EventVerdict | null = null;
+  const finished = await takeRecordedStepOrSayWhy(
+    {
+      kind: job.kind,
+      project: job.project,
+      args: job.args,
+      name,
+      started: (run) =>
+        `${name}: \`${job.args.join(' ')}\` started as ${run.id}` + (job.covers.length > 0 ? `, which also answers ${job.covers.join(', ')}` : ''),
+      needsProjectRow: true,
+      refused: refused && { why: refused.message, result: { state: 'failed', stage: 'starting', errorType: errorType(refused) } },
+      onStart: async (run) => void (await db.update(schema.pollerEvents).set({ runId: run.id }).where(events)),
+      beforeFinish: async (result) => {
+        const review = await reviewOnRecord(job.project, Number(job.args[2]));
+        const stops = review?.timeLimitStops ?? 0;
+        verdict = afterReviewRun(result, review?.state ?? null, stops);
+        const stopsNow = timeLimitStopsAfter(result, verdict, stops);
+        if (review && stopsNow !== stops) await db.update(schema.reviews).set({ timeLimitStops: stopsNow }).where(eq(schema.reviews.id, review.id));
+        // Before the run is recorded as over, as a pass does: an event must not be left looking
+        // unhandled after the run that handled it.
+        if (verdict === 'handled') await db.update(schema.pollerEvents).set({ handledAt: new Date() }).where(events);
+        // A review turned away did no work: it is no success to close a failure issue on.
+        return { note: `; ${job.event} ${VERDICT_WORDS[verdict]}`, report: verdict !== 'waits for the slot' };
+      },
+    },
+    say,
+  );
+  if (finished === null) return { outcome: 'failed', verdict: null };
+  return { outcome: finished.state === 'running' ? 'failed' : finished.state, verdict };
 }
 
 /** What `status` shows of the queue: the decision as it stands, the agent jobs running, and the machine. */
