@@ -1,0 +1,40 @@
+# One turn of the code reviewer's queue: start the next queued review if no agent job is running,
+# and see it through. Installed by vm/dev-vm-setup.sh. No timer: the poller's service starts it
+# each time a pass ends. By hand: sudo systemctl start --no-block code-reviewer-queue.service
+[Unit]
+Description=Code reviewer: one turn of the queue of reviews
+Wants=network-online.target
+After=network-online.target postgresql.service
+# As for the poller: not before the nightly run's update step has installed the dependencies once.
+ConditionPathExists=/var/lib/code-reviewer/kit/reviewer/node_modules/.installed-from-lockfile
+# Not while the nightly unit is active (the directory is its RuntimeDirectory=): its update step
+# replaces the code a review runs from. A turn skipped this way is not a failure.
+ConditionPathExists=!/run/code-reviewer-nightly
+
+[Service]
+# One turn and out. While it is going a second cannot start, so there is one review at a time.
+Type=oneshot
+User=reviewer
+Group=reviewer
+
+# The same credentials as the nightly run, from the same file only root can read.
+EnvironmentFile=/etc/code-reviewer/credentials.env
+
+# The same places as the nightly run (see code-reviewer-nightly.service).
+StateDirectory=code-reviewer
+StateDirectoryMode=0700
+WorkingDirectory=/var/lib/code-reviewer/kit/reviewer
+Environment=REVIEWER_WORKSPACE_ROOT=/var/lib/code-reviewer/workspaces
+Environment=REVIEWER_STATE_DIR=/var/lib/code-reviewer/state
+Environment="REVIEWER_GIT_NAME=jm-code-reviewer[bot]"
+Environment="REVIEWER_GIT_EMAIL=338258166+jm-code-reviewer[bot]@users.noreply.github.com"
+
+# No update step: a review runs whatever is checked out. Only the nightly run moves the checkout.
+# Not through bin/code-reviewer.mjs: the process systemd signals must be the one that handles it.
+ExecStart=/usr/bin/node --import tsx/esm src/cli.ts queue
+
+# A review takes hours and has its own limit, kept by the code reviewer.
+TimeoutStartSec=infinity
+# On stop the turn records the review it was on as stopped, on the pull request too, which needs this long.
+KillMode=control-group
+TimeoutStopSec=3min

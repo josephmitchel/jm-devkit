@@ -4,28 +4,12 @@ import { getCommentCreatedAt, listRepliesSince, type IssueComment } from '../git
 import { loadPrompt, MODELS, runAgent } from '../agents/run-agent.js';
 import { answersOutputSchema } from '../agents/schemas.js';
 import { parseAnswers } from '../parse-answers.js';
+import { countsAsReply, OWN_COMMENT_KINDS } from '../reply-authority.js';
 import { pendingUserFacingQuestions, type QuestionRow } from './questions.js';
 import { reviewerRoot } from '../workspace.js';
 import { requireRound, type Ctx } from './context.js';
 
 const POLL_INTERVAL_MS = 30_000;
-
-/**
- * Who may answer. An answer is not a comment: it decides which concerns get fixed, is written into
- * the fixer's prompt, and is saved as repo policy that every later audit reads. Anyone on the
- * internet can comment on a public PR, so the author's relationship to the repo is the gate, and
- * anything GitHub does not vouch for is read as ordinary conversation.
- */
-export const ANSWER_AUTHORITY = new Set(['OWNER', 'MEMBER', 'COLLABORATOR']);
-
-const OWN_COMMENT_KINDS = new Set([
-  'report_comment',
-  'summary_comment',
-  'pr_summary_comment',
-  'progress_comment',
-  'failure_comment',
-  'carry_comment',
-]);
 
 /** Comment ids this reviewer posted itself — never parse our own reports as answers. */
 async function ownCommentIds(ctx: Ctx): Promise<Set<number>> {
@@ -82,7 +66,7 @@ async function pollAnswersOnce(ctx: Ctx, pending: QuestionRow[]): Promise<number
   let answered = 0;
   for (const comment of comments) {
     if (own.has(comment.id)) continue;
-    if (!ANSWER_AUTHORITY.has(comment.authorAssociation)) {
+    if (!countsAsReply(comment, own)) {
       console.log(
         `ignoring reply ${comment.id} from ${comment.authorLogin} (${comment.authorAssociation}) — ` +
           'only the owner, a member or a collaborator can answer',

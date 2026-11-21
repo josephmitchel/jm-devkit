@@ -50,6 +50,41 @@
       "when": 1794089073992,
       "tag": "0006_ticket_judging",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1795209440095,
+      "tag": "0007_test_databases",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1795210086337,
+      "tag": "0008_runs",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1795211973592,
+      "tag": "0009_sweep_discussion",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1795214278597,
+      "tag": "0010_poller",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1795219034592,
+      "tag": "0011_review_time_limit_stops",
+      "breakpoints": true
     }
   ]
 }

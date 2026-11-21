@@ -4,7 +4,7 @@
   "title": "devkit.json",
   "description": "A project's config: how it uses the kit, and the facts about itself the kit needs. It sits at the project root and is project-owned. The code reviewer reads it from the project's checkout on every run, and the generator turns it into the project's kit-owned files. Both validate against this file through one small interpreter (plugin/devkit-config.mjs), which understands only the keywords used here: a new keyword fails its tests until it learns it.",
   "type": "object",
-  "required": ["modules", "sweep", "reviewer"],
+  "required": ["modules", "reviewer"],
   "additionalProperties": false,
   "properties": {
     "$schema": {
@@ -25,13 +25,13 @@
       "pattern": "^[0-9a-f]{7,40}$"
     },
     "sweep": {
-      "description": "The nightly sweep.",
+      "description": "Retired, and ignored by a code reviewer that runs on the owner's machine, which sweeps every project in one nightly run. Still accepted so that a project whose sweep is still dispatched by GitHub Actions keeps validating.",
       "type": "object",
       "required": ["hour"],
       "additionalProperties": false,
       "properties": {
         "hour": {
-          "description": "The hour of the day, in UTC, at which the project's nightly sweep is dispatched. Each project has its own hour, so sweeps do not compete for the one subscription.",
+          "description": "Retired with `sweep`. The hour of the day, in UTC, at which a project still on GitHub Actions has its nightly sweep dispatched.",
           "type": "integer",
           "minimum": 0,
           "maximum": 23
@@ -72,13 +72,19 @@
           }
         },
         "env": {
-          "description": "Environment variables for the project's setup and test commands, and only for them. The same role as the action's `repo-env` input, which wins on a name both set: the input is where a secret can come from, and this file is committed. A name the code reviewer keeps for itself, `DATABASE_URL` say, may be set here; it reaches the project's commands without ever entering the code reviewer's own environment.",
+          "description": "Environment variables for the project's setup, test and nightly check commands, and only for them. The same role as the action's `repo-env` input, which wins on a name both set: the input is where a secret can come from, and this file is committed. A name the code reviewer keeps for itself, `DATABASE_URL` say, may be set here; it reaches the project's commands without ever entering the code reviewer's own environment.",
           "type": "object",
           "propertyNames": { "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
           "additionalProperties": { "type": "string" }
         },
+        "databases": {
+          "description": "The environment variables that each need a database of their own. Before setup, the code reviewer creates one empty Postgres database per name on the machine it runs on, of that machine's Postgres version, and puts each one's address in its variable for the project's setup, test and nightly check commands, over a value `env` gives the same name. The databases are dropped after the run. A machine that cannot create them fails the run, saying what is missing.",
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" }
+        },
         "services": {
-          "description": "Services the tests need, a database say, in the shape of a GitHub Actions job's `services:` map, keyed by the service's id. The generator writes them onto the jobs of the project's sweep workflow that run the tests (`sweep` and `review-now`); the code reviewer itself ignores them. Their connection details reach the tests through `env`.",
+          "description": "Retired, and ignored by the code reviewer: on the owner's machine the tests get their databases from `databases`. Still accepted for a project whose tests still run in GitHub Actions: services the tests need, in the shape of a GitHub Actions job's `services:` map, keyed by the service's id. The project's sweep workflow carries them on the jobs that run the tests (`sweep` and `review-now`), as the generator wrote them before that workflow was retired; changing them here no longer changes the workflow. Their connection details reach the tests through `env`.",
           "type": "object",
           "propertyNames": { "pattern": "^[A-Za-z_][A-Za-z0-9_-]*$" },
           "additionalProperties": {
@@ -139,14 +145,57 @@
           "type": "string"
         }
       }
+    },
+    "nightly": {
+      "description": "What the code reviewer does for the project each night besides its sweep. Read only by a code reviewer that runs on the owner's machine: a project whose sweep is still dispatched by GitHub Actions may set it, and nothing there runs it.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "checks": {
+          "description": "The project's nightly checks: commands too slow to run on every pull request, run once a night instead. They run after the project's sweep, in the order written, in a fresh checkout of the default branch at its head, after `reviewer.setup`, with `reviewer.env` and databases of their own for `reviewer.databases`, and without the code reviewer's own credentials. No agent runs. A check that fails does not stop the checks after it, and opens an issue in the project with the end of its output; the issue is closed when a later night's checks all pass. A project that lists none gets no checkout and no run. No two checks may have the same name: a check's result is reported by its name.",
+          "type": "array",
+          "uniqueItems": true,
+          "uniqueItemProperties": ["name"],
+          "items": {
+            "type": "object",
+            "required": ["name", "command"],
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "description": "A short name for the check, shown in the log and in the failure issue.",
+                "type": "string",
+                "minLength": 1
+              },
+              "command": {
+                "description": "The shell command that runs the check, with `sh -c` from the project root. A non-zero exit is a failing check, and so is a check stopped for running longer than a check may: thirty minutes, unless the machine is set otherwise.",
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        }
+      }
     }
   },
   "examples": [
     {
       "modules": ["process"],
-      "sweep": { "hour": 3 },
       "reviewer": {
         "tests": [{ "name": "unit", "command": "npm test" }]
+      }
+    },
+    {
+      "modules": ["process"],
+      "reviewer": {
+        "setup": "npm ci && npm run migrate",
+        "tests": [{ "name": "db", "command": "npm run test:db" }],
+        "databases": ["TEST_DATABASE_URL"]
+      },
+      "nightly": {
+        "checks": [
+          { "name": "canvas", "command": "npm run canvas:check" },
+          { "name": "links", "command": "npm run check:links" }
+        ]
       }
     },
     {

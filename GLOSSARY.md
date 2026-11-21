@@ -49,7 +49,7 @@ A project's own declaration of how it uses the kit: its modules, and the facts a
 _Avoid_: stamp, manifest, registration
 
 **Kit-owned file**:
-A file in a project that the kit generates from the project config and replaces on every sync. A project changes it only through its project config.
+A file in a project that the kit generates from the project config and replaces on every sync. A project changes it only through its project config. One the kit stops generating is **retired**: sync removes it from a project that still has it.
 _Avoid_: managed file, template, generated file
 
 **Project-owned file**:

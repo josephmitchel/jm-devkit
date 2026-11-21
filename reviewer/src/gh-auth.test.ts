@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
-import { appJwt, isFresh, isTransient, resetTokenCacheForTests } from './gh-auth.js';
+import { appCredentials, appJwt, isFresh, isTransient, resetTokenCacheForTests } from './gh-auth.js';
 
 /**
  * Two things here fail nowhere but in production. The refresh margin decides whether a two-hour
@@ -43,6 +43,21 @@ describe('isFresh', () => {
   });
 });
 
+describe('appCredentials', () => {
+  it('has none on a local run, and none with only half of them', () => {
+    expect(appCredentials()).toBeNull();
+    process.env.REVIEWER_APP_CLIENT_ID = 'Iv23liABCDEF';
+    expect(appCredentials()).toBeNull();
+  });
+
+  it("is the App's client id and private key from the environment", () => {
+    process.env.REVIEWER_APP_CLIENT_ID = 'Iv23liABCDEF';
+    const pem = '-----BEGIN RSA PRIVATE KEY-----\nMIIE\n-----END RSA PRIVATE KEY-----\n';
+    process.env.REVIEWER_APP_PRIVATE_KEY = pem;
+    expect(appCredentials()).toEqual({ clientId: 'Iv23liABCDEF', privateKey: pem });
+  });
+});
+
 describe('appJwt', () => {
   const { privateKey, publicKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
 
@@ -77,6 +92,15 @@ describe('appJwt', () => {
     // GitHub's downloaded .pem is "BEGIN RSA PRIVATE KEY" (PKCS#1), not PKCS#8.
     process.env.REVIEWER_APP_CLIENT_ID = 'Iv23liABCDEF';
     process.env.REVIEWER_APP_PRIVATE_KEY = privateKey.export({ type: 'pkcs1', format: 'pem' }).toString();
+    expect(parse(appJwt()).verified).toBe(true);
+  });
+
+  it('accepts the key as one line of base64, which is how an environment file on the machine carries it', () => {
+    const pem = privateKey.export({ type: 'pkcs1', format: 'pem' }).toString();
+    process.env.REVIEWER_APP_CLIENT_ID = 'Iv23liABCDEF';
+    process.env.REVIEWER_APP_PRIVATE_KEY = Buffer.from(pem).toString('base64');
+
+    expect(appCredentials()?.privateKey).toBe(pem);
     expect(parse(appJwt()).verified).toBe(true);
   });
 });

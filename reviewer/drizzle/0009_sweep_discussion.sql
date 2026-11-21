@@ -1,0 +1,1 @@
+ALTER TABLE "sweeps" ADD COLUMN "discussion_url" text;

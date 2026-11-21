@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ticketReferences } from './landed.js';
+import { landingRecorded, ticketReferences } from './landed.js';
 
 /**
  * The merge event reads the PR body to learn which tickets landed. `Addresses #N` is the
@@ -23,5 +23,34 @@ describe('ticketReferences', () => {
 
   it('dedupes', () => {
     expect(ticketReferences('Addresses #2\nAddresses #2')).toEqual({ addressed: [2], closed: [] });
+  });
+});
+
+describe('landingRecorded', () => {
+  const comment = (body: string, by: { authorLogin?: string; authorAssociation?: string } = {}) => ({
+    body,
+    authorLogin: 'the-code-reviewer[bot]',
+    authorAssociation: 'NONE',
+    ...by,
+  });
+  const landed = 'PR #12 landed. Labelled `needs-judging`: the nightly judge decides whether this ticket is solved.';
+
+  it("finds this pull request's landed comment on the ticket", () => {
+    expect(landingRecorded([comment('I will take this one'), comment(landed)], 12)).toBe(true);
+  });
+
+  it('is not recorded on a ticket with no such comment', () => {
+    expect(landingRecorded([], 12)).toBe(false);
+    expect(landingRecorded([comment('See PR #12, which landed.')], 12)).toBe(false);
+  });
+
+  it("does not take another pull request's landing for this one's", () => {
+    expect(landingRecorded([comment(landed)], 1)).toBe(false);
+    expect(landingRecorded([comment(landed)], 120)).toBe(false);
+  });
+
+  it('counts the same words from the owner, and from nobody GitHub does not vouch for', () => {
+    expect(landingRecorded([comment(landed, { authorLogin: 'the-owner', authorAssociation: 'OWNER' })], 12)).toBe(true);
+    expect(landingRecorded([comment(landed, { authorLogin: 'a-stranger', authorAssociation: 'NONE' })], 12)).toBe(false);
   });
 });

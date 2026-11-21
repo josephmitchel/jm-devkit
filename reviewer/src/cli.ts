@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import { parseArgs } from 'node:util';
 import { and, desc, eq, inArray, notInArray } from 'drizzle-orm';
 import { db, pool, schema } from './db/client.js';
+import { fileReport, parseReport } from './failure-report.js';
 import { configureAppAuth } from './gh-auth.js';
 import { gitCredential } from './git-credential.js';
 import { startHeartbeat } from './heartbeat.js';
@@ -10,11 +11,23 @@ import { dispatchWorkflow, getDefaultBranch, getPr, listOpenPrNumbers } from './
 import { carryGate } from './stages/carry-gate.js';
 import { ACTIVE_WORK_STATES, resolveSlot } from './stages/intake.js';
 import { markGate, progressStep } from './stages/progress.js';
+import { postSummary } from './post-summary.js';
 import { postFailureNotice } from './stages/report.js';
 import { runMigrations } from './migrate.js';
+import { recordNightlyNotStarted, runNightly } from './nightly.js';
+import { runChecksOnDemand, runProjectChecks } from './nightly-checks.js';
+import { EVENT_RUN_KINDS, pollerStatus } from './poller.js';
+import { forgetReviewEvents, pollerStatusRows, runPass } from './poller-pass.js';
+import { queueStatus } from './queue.js';
+import { queueStatusFacts, runQueueTurn } from './queue-run.js';
+import { listProjects, projectLine } from './projects.js';
 import { runReview } from './review-loop.js';
+import { cloneUrl } from './project-row.js';
+import { errorTypeLine } from './run-vocabulary.js';
+import { nightlyStatus, otherRunsStatus, recentNightlyRuns, recentRunsOnTheirOwn, stopCommandsOnSignal } from './runs.js';
 import { runSweep } from './sweep/loop.js';
 import { runLanded } from './landed.js';
+import { dropTestDatabases } from './test-databases.js';
 import { syncLabels } from './sweep/labels.js';
 
 const USAGE = `code-reviewer — standalone multi-agent PR review service
@@ -22,17 +35,56 @@ const USAGE = `code-reviewer — standalone multi-agent PR review service
 Usage:
   code-reviewer run <owner/repo> <pr#> [--once] run (or resume) the review loop for a PR
       --once                                    return instead of waiting for answers or the
-                                                review slot (for CI; prints the outcome)
+                                                review slot (for CI and the machine's queue;
+                                                prints the outcome)
   code-reviewer sweep <owner/repo>              run (or resume) tonight's sweep: judge closed
                                                 issues, audit what landed on the default branch,
                                                 file concerns as issues (never fixes, never gates)
+  code-reviewer summary <owner/repo>            post the project's latest sweep as a dated
+                                                discussion in the project, once, and any from the
+                                                last seven days that could not be posted; a night
+                                                on which nothing happened posts nothing
+  code-reviewer checks <owner/repo>             run the project's nightly checks (nightly.checks in
+                                                its devkit.json) now, in a fresh checkout of its
+                                                default branch; recorded and reported as the
+                                                nightly run's step is, and exits 1 when one fails
+                                                or when the project's checks are already running
+  code-reviewer nightly                         the whole nightly run: for every project the
+                                                machine handles, in name order, one at a time, its
+                                                sweep, its summary and then its nightly checks if
+                                                it names any; a step that fails does not stop the
+                                                next, and a sweep that runs past five and a half
+                                                hours is stopped and resumed the next night; it
+                                                waits for a review that is running, and no review
+                                                starts until it is over
+  code-reviewer nightly-not-started <stage> <error type>
+                                                record a nightly run that could not start; the
+                                                machine's update step (bin/update.mjs) calls it
+  code-reviewer poll                            one pass of the poller: for every project the
+                                                machine handles, run landed for each pull request
+                                                merged since the last pass and carry-gate for each
+                                                new head of one whose review passed, and queue
+                                                the review of each one labelled review-now or
+                                                answered by the owner (a timer runs this every
+                                                few minutes)
+  code-reviewer queue                           one turn of the queue: start the next queued
+                                                review if no agent job is running on the machine
+                                                and see it through (the machine runs this after
+                                                every pass of the poller)
+  code-reviewer failure-issue <owner/repo>      open, comment on or close that repository's failure
+                                                issue, from the report of a finished run on its
+                                                input (every recorded run's report starts this;
+                                                not for hand use)
   code-reviewer landed <owner/repo> <pr#>       a PR merged: label the tickets it addresses
                                                 needs-judging and lift their blocking edges
   code-reviewer labels <owner/repo>             bring the repo's labels in line with the ticket
                                                 label scheme: rename retired names, set colours
+  code-reviewer projects                        list every project the App is installed on and
+                                                whether the machine handles it
   code-reviewer migrate                        apply pending migrations (advisory-locked)
   code-reviewer next <owner/repo>               print the PR number of the next queued review
-  code-reviewer abandon <owner/repo> <pr#> [why]  record that a run ended mid-stage (CI cleanup)
+  code-reviewer abandon <owner/repo> <pr#> [why]  record that a run ended mid-stage (CI cleanup,
+                                                and the machine's after a run it stopped)
   code-reviewer carry-gate <owner/repo> <pr#>   gate a passed PR's new head if it holds reviewed code
   code-reviewer git-credential get              git credential helper (minted App token)
   code-reviewer repo add <owner/repo> [opts]    register a repo
@@ -41,13 +93,17 @@ Usage:
       --harness-notes-file <path>               per-repo notes for the testing auditor
       --redundancy <n>                          auditors per characteristic (default 1)
   code-reviewer repo set <owner/repo> [opts]    update repo config (same options)
-  code-reviewer status [owner/repo]             show reviews and their states
+  code-reviewer status [owner/repo]             show reviews and their states, the recent
+                                                nightly runs with each project's result, the
+                                                recent runs started by hand, what
+                                                the poller's last passes found, and the queue:
+                                                the agent job running and the reviews waiting
   code-reviewer reset <owner/repo> <pr#>        delete a review's state (concerns/policies kept)
 `;
 
-// The commands CI runs unattended. The admin ones print tables and confirmations for a person at
-// a terminal, where a timestamp on every line is only noise.
-const STAMPED = new Set(['run', 'sweep', 'landed', 'migrate', 'next', 'abandon', 'carry-gate']);
+// The commands that run unattended, on the machine or in CI. The admin ones print tables and
+// confirmations for a person at a terminal, where a timestamp on every line is only noise.
+const STAMPED = new Set(['run', 'sweep', 'summary', 'checks', 'nightly', 'nightly-not-started', 'poll', 'queue', 'landed', 'migrate', 'next', 'abandon', 'carry-gate']);
 
 async function main() {
   const [cmd, ...rest] = process.argv.slice(2);
@@ -91,6 +147,68 @@ async function main() {
       }
       break;
     }
+    case 'summary': {
+      const [slug, ...extra] = rest;
+      if (!slug || extra.length > 0) return usageExit();
+      configureAppAuth(slug);
+      printRaw(`outcome: ${await postSummary(slug)}`);
+      break;
+    }
+    case 'nightly': {
+      if (rest.length > 0) return usageExit();
+      stopCommandsOnSignal();
+      const outcome = await runNightly();
+      printRaw(`outcome: ${outcome}`);
+      if (outcome !== 'succeeded' && outcome !== 'not started') process.exitCode = 1;
+      break;
+    }
+    case 'nightly-not-started': {
+      const [stage, type, ...extra] = rest;
+      if (!stage || !type || extra.length > 0 || !(await recordNightlyNotStarted(stage, type))) return usageExit();
+      break;
+    }
+    case 'checks': {
+      const [slug, ...extra] = rest;
+      if (!slug || extra.length > 0) return usageExit();
+      configureAppAuth(slug);
+      // Under a run id this is the work of a run already recorded: the nightly run's step, or the
+      // one this command records for itself when a person runs it.
+      if (process.env.REVIEWER_RUN_ID) {
+        const stopHeartbeat = startHeartbeat();
+        try {
+          await runProjectChecks(slug);
+        } finally {
+          stopHeartbeat();
+        }
+        break;
+      }
+      stopCommandsOnSignal();
+      const outcome = await runChecksOnDemand(slug);
+      printRaw(`outcome: ${outcome}`);
+      if (outcome !== 'succeeded' && outcome !== 'no checks') process.exitCode = 1;
+      break;
+    }
+    case 'poll': {
+      if (rest.length > 0) return usageExit();
+      stopCommandsOnSignal();
+      if ((await runPass()) === 'failed') process.exitCode = 1;
+      break;
+    }
+    case 'queue': {
+      if (rest.length > 0) return usageExit();
+      stopCommandsOnSignal();
+      const outcome = await runQueueTurn();
+      if (outcome === 'failed' || outcome === 'interrupted') process.exitCode = 1;
+      break;
+    }
+    case 'failure-issue': {
+      const [slug, ...extra] = rest;
+      if (!slug || extra.length > 0) return usageExit();
+      const report = parseReport(fs.readFileSync(0, 'utf8'));
+      configureAppAuth(slug);
+      for (const line of await fileReport(slug, report)) console.log(line);
+      break;
+    }
     case 'landed': {
       const [slug, pr] = rest;
       if (!slug || !/^\d+$/.test(pr ?? '')) return usageExit();
@@ -104,6 +222,11 @@ async function main() {
       configureAppAuth(slug);
       const { ops, leftBehind } = await syncLabels(slug);
       console.log(`${ops.length} label change(s)${leftBehind.length > 0 ? `, ${leftBehind.length} left to merge by hand` : ''}`);
+      break;
+    }
+    case 'projects': {
+      if (rest.length > 0) return usageExit();
+      for (const project of await listProjects()) console.log(projectLine(project));
       break;
     }
     case 'migrate':
@@ -193,7 +316,7 @@ async function repoUpsert(mode: 'add' | 'set', slug: string, argv: string[]): Pr
     if (existing) throw new Error(`repo ${slug} already registered — use repo set`);
     await db.insert(schema.repos).values({
       slug,
-      cloneUrl: `https://github.com/${slug}.git`,
+      cloneUrl: cloneUrl(slug),
       ...patch,
     });
     console.log(`registered ${slug}`);
@@ -205,9 +328,10 @@ async function repoUpsert(mode: 'add' | 'set', slug: string, argv: string[]): Pr
 }
 
 /**
- * Record that a run ended without finishing its stage — a cancelled or timed-out CI job, which never
- * gets to record anything itself. Without this a killed run's review keeps whatever stage it was in
- * and holds the repo's only review slot until the staleness bound expires hours later.
+ * Record that a run ended without finishing its stage — a cancelled or timed-out CI job, or a run
+ * the machine stopped or found dead, none of which gets to record anything itself. Without this a
+ * killed run's review keeps whatever stage it was in and holds the project's only review slot until
+ * the staleness bound expires hours later.
  *
  * `failed` rather than `pending`, so the next run resumes the stage through inferRetryState instead
  * of restarting at intake and auditing an empty diff. A review in `awaiting_answers` is untouched:
@@ -405,6 +529,7 @@ async function showStatus(slug?: string): Promise<void> {
       console.log(
         `  sweep ${s.id} [${s.state}] ${s.branch} ${range}, ${s.createdAt.toISOString().slice(0, 10)}` +
           `${s.state === 'done' ? `, opened ${opened}, judged ${s.summary?.judged.length ?? 0}` : ''}` +
+          `${s.discussionUrl ? `, summary: ${s.discussionUrl}` : ''}` +
           `${s.error ? ` — error: ${s.error.slice(0, 120)}` : ''}`,
       );
     }
@@ -414,6 +539,16 @@ async function showStatus(slug?: string): Promise<void> {
     const withIssue = open.filter((c) => c.status === 'open' && c.issueNumber !== null).length;
     console.log(`  concerns: ${openCount} open (${withIssue} as issues), ${open.length - openCount} resolved`);
   }
+  const runs = await recentNightlyRuns(5);
+  const shown = slug ? runs.filter((r) => r.project === null || r.project === slug) : runs;
+  console.log(`\n${nightlyStatus(shown).join('\n')}`);
+  const byHand = await recentRunsOnTheirOwn(['nightly', ...EVENT_RUN_KINDS], 5, slug);
+  console.log(`\n${otherRunsStatus(byHand, EVENT_RUN_KINDS).join('\n')}`);
+  const poller = await pollerStatusRows(slug);
+  console.log(`\n${pollerStatus(poller.projects, poller.events).join('\n')}`);
+  // The whole machine's, whichever project was asked for: one queue serves them all.
+  const queue = await queueStatusFacts();
+  console.log(`\n${queueStatus(queue.decision, queue.running, queue.machine).join('\n')}`);
 }
 
 async function resetReview(slug: string, prNumber: number): Promise<void> {
@@ -425,6 +560,8 @@ async function resetReview(slug: string, prNumber: number): Promise<void> {
     .where(and(eq(schema.reviews.repoId, repo.id), eq(schema.reviews.prNumber, prNumber)));
   if (!review) throw new Error(`no review for ${slug}#${prNumber}`);
 
+  // A killed run's databases are recorded under this review's id, which is about to be forgotten.
+  await dropTestDatabases(`review:${review.id}`);
   const rounds = await db.select().from(schema.rounds).where(eq(schema.rounds.reviewId, review.id));
   const roundIds = rounds.map((r) => r.id);
   await db.transaction(async (tx) => {
@@ -453,12 +590,17 @@ async function resetReview(slug: string, prNumber: number): Promise<void> {
     await tx.delete(schema.rounds).where(eq(schema.rounds.reviewId, review.id));
     await tx.delete(schema.reviews).where(eq(schema.reviews.id, review.id));
   });
+  // With the review gone, so is the record that it was asked for: the label starts a new one.
+  await forgetReviewEvents(slug, prNumber);
   console.log(`review for ${slug}#${prNumber} deleted (concerns and policies preserved)`);
 }
 
 main()
   .catch((err) => {
     console.error(err instanceof Error ? err.message : err);
+    // A command started as a recorded run tells the run that started it what kind of error ended it.
+    const runId = process.env.REVIEWER_RUN_ID;
+    if (runId) process.stderr.write(`${errorTypeLine(runId, err)}\n`);
     process.exitCode = 1;
   })
   .finally(() => pool.end());

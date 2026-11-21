@@ -1,6 +1,7 @@
 import { desc, eq } from 'drizzle-orm';
 import { db, schema } from '../db/client.js';
 import type { SweepSummary } from '../db/schema.js';
+import { SetupCommandError } from '../failure-side.js';
 import { compareCommitCount, getBranchHead, getDefaultBranch } from '../github.js';
 import { markStage } from '../heartbeat.js';
 import { changedFilePaths, prepareWorkspace, runRepoCommand } from '../workspace.js';
@@ -8,6 +9,7 @@ import { auditRound } from '../stages/audit.js';
 import { synthesizeRound } from '../stages/synthesis.js';
 import { requireProject, requireRound, type RepoRow, type SweepCtx, type SweepRow } from '../stages/context.js';
 import { readProjectSetup } from '../project-config.js';
+import { droppingTestDatabases, provideTestDatabases } from '../test-databases.js';
 import { settleOwnerDecisions } from './judge.js';
 import { collectIssueAnswers } from './answers.js';
 import { publishIssues } from './publish.js';
@@ -42,6 +44,11 @@ export async function runSweep(repoSlug: string): Promise<'swept' | 'failed'> {
   if (ctx.sweep.currentRoundId) {
     [ctx.round] = await db.select().from(schema.rounds).where(eq(schema.rounds.id, ctx.sweep.currentRoundId));
   }
+  // However the sweep ends, the databases it made for the project's tests go with it.
+  return droppingTestDatabases(`sweep:${ctx.sweep.id}`, () => advanceSweep(ctx));
+}
+
+async function advanceSweep(ctx: SweepCtx): Promise<'swept'> {
   markStage(ctx.sweep.state);
 
   if (ctx.sweep.state === 'failed') {
@@ -138,7 +145,7 @@ export async function runSweep(repoSlug: string): Promise<'swept' | 'failed'> {
       throw err;
     }
   }
-  console.log(`\nsweep ${ctx.sweep.id} done for ${repoSlug}`);
+  console.log(`\nsweep ${ctx.sweep.id} done for ${ctx.repo.slug}`);
   return 'swept';
 }
 
@@ -258,13 +265,14 @@ async function prepareSweepWorkspace(ctx: SweepCtx): Promise<void> {
   if (!headSha) throw new Error(`sweep ${ctx.sweep.id} in state ${ctx.sweep.state} has no head`);
   ctx.workspaceDir = await prepareWorkspace(ctx.repo.slug, ctx.repo.cloneUrl, ctx.sweep.branch, headSha);
   console.log(`workspace ready at ${ctx.workspaceDir}`);
-  const project = readProjectSetup(ctx.workspaceDir, ctx.repo);
+  const read = readProjectSetup(ctx.workspaceDir, ctx.repo);
+  console.log(`project setup read from ${read.source === 'devkit.json' ? 'devkit.json' : 'the database row'}`);
+  const project = await provideTestDatabases(`sweep:${ctx.sweep.id}`, read);
   ctx.project = project;
-  console.log(`project setup read from ${project.source === 'devkit.json' ? 'devkit.json' : 'the database row'}`);
   if (project.setupCommand) {
     console.log(`running setup: ${project.setupCommand}`);
     const setup = await runRepoCommand(ctx.workspaceDir, project.setupCommand, project.env);
-    if (!setup.passed) throw new Error(`setup command failed:\n${setup.trimmedOutput}`);
+    if (!setup.passed) throw new SetupCommandError(setup.trimmedOutput);
   }
 }
 

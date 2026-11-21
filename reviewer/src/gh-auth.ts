@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 
 /**
- * GitHub App authentication for CI runs.
+ * GitHub App authentication for unattended runs, in CI and on the machine.
  *
  * A round can take two hours and an installation token lives one, so a token handed to the
  * job at startup is dead by the time the fixer pushes — the one operation whose failure wastes
@@ -34,15 +34,28 @@ interface CachedToken {
 let cached: CachedToken | null = null;
 let configuredRepo: string | null = null;
 
+/**
+ * The App's credentials from the environment, or null on a run that has none. The key is the PEM
+ * itself, or the PEM as one line of base64: a systemd environment file holds one line per value.
+ */
+export function appCredentials(): { clientId: string; privateKey: string } | null {
+  const clientId = process.env[CLIENT_ID_VAR];
+  const key = process.env[PRIVATE_KEY_VAR];
+  if (!clientId || !key) return null;
+  // Every PEM has this marker, and base64 has no hyphen, so the two cannot be mistaken.
+  const privateKey = key.includes('-----BEGIN') ? key : Buffer.from(key, 'base64').toString('utf8');
+  return { clientId, privateKey };
+}
+
 /** True when this process has App credentials and should mint its own tokens. */
 export function appAuthConfigured(): boolean {
-  return Boolean(process.env[CLIENT_ID_VAR] && process.env[PRIVATE_KEY_VAR]);
+  return appCredentials() !== null;
 }
 
 /**
  * Name the repo whose installation to use. The CLI knows it from its arguments; the git
  * credential helper is invoked by git with no arguments at all, so it falls back to the
- * environment variable the workflow exports.
+ * environment variable set for it: by the workflow in CI, by `runCommand` on the machine.
  */
 export function configureAppAuth(repoSlug: string): void {
   configuredRepo = repoSlug;
@@ -70,8 +83,7 @@ export function isFresh(token: CachedToken | null, now: number, margin = REFRESH
  * algorithm here fails nowhere but against GitHub.
  */
 export function appJwt(): string {
-  const clientId = process.env[CLIENT_ID_VAR]!;
-  const privateKey = process.env[PRIVATE_KEY_VAR]!;
+  const { clientId, privateKey } = appCredentials()!;
   const now = Math.floor(Date.now() / 1000);
   const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url');
   // Backdated `iat` absorbs clock skew between the runner and GitHub.

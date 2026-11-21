@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 
-import { FIRST_HOUR, WORKER_LIST_URL, appJwt, chooseHour, main, parseWorkerList } from './app.mjs';
+import { FIRST_HOUR, GitHubError, WORKER_LIST_URL, appJwt, chooseHour, defaultBranchFile, main, parseWorkerList } from './app.mjs';
 import { PRIVATE_KEY, PUBLIC_KEY, VALUES, configDir, sink } from './test-helpers.mjs';
 
 const credentials = { clientId: VALUES.REVIEWER_APP_CLIENT_ID, privateKey: PRIVATE_KEY };
@@ -94,7 +94,7 @@ test('hour: every other installed repository and the Worker list are taken; the 
       'taken 8 owner/second (the Worker list)',
       'taken 9 owner/kit (devkit.json)',
       'skipped owner/first: no devkit.json',
-      'skipped owner/broken: devkit.json is malformed: sweep is required; reviewer is required; modules must have at least 1 item; modules must include "process"',
+      'skipped owner/broken: devkit.json is malformed: reviewer is required; modules must have at least 1 item; modules must include "process"',
       'skipped owner/bare: no devkit.json',
       '',
     ].join('\n'),
@@ -108,11 +108,31 @@ test('hour: the current hour is kept when it is free, and moved when another rep
   assert.match((await run(['hour', 'owner/project', '--current', '9'], fleet().fetch)).out, /^hour 10\n/);
 });
 
+test('hour: a repository whose devkit.json has no sweep section takes no hour', async () => {
+  const moved = JSON.stringify({ modules: ['process'], reviewer: { tests: [{ name: 't', command: 'true' }] } });
+  const result = await run(['hour', 'owner/project'], fleet({ 'GET /repos/owner/kit/contents/devkit.json': [200, moved] }).fetch);
+  assert.equal(result.code, 0);
+  assert.match(result.out, /^hour 9\n/);
+  assert.doesNotMatch(result.out, /owner\/kit/);
+});
+
 test("hour: a repository in the Worker list keeps that hour, and the list is not needed once it is gone", async () => {
   assert.match((await run(['hour', 'owner/first'], fleet().fetch)).out, /^hour 7\n/);
   const gone = fleet({ [`GET ${WORKER_LIST_URL}`]: [404, 'Not Found'] });
   const result = await run(['hour', 'owner/project'], gone.fetch);
   assert.match(result.out, /^hour 7\ntaken 9 owner\/kit \(devkit\.json\)\n/);
+});
+
+test("defaultBranchFile gives a file's text, null when it is not there, and GitHub's refusal otherwise", async () => {
+  const { fetch, requests } = github({
+    'GET /repos/owner/project/contents/devkit.json': [200, config(9)],
+    'GET /repos/owner/project/contents/docs/private.md': [403, 'Resource not accessible by integration'],
+  });
+  const read = (path) => defaultBranchFile({ fetch, slug: 'owner/project', token: 'ghs_install', path });
+  assert.equal(await read('devkit.json'), config(9));
+  assert.equal(await read('.github/workflows/nightly-sweep.yml'), null);
+  await assert.rejects(read('docs/private.md'), (e) => e instanceof GitHubError && e.status === 403);
+  assert.ok(requests.every((r) => r.auth === 'Bearer ghs_install'));
 });
 
 test('chooseHour wraps past midnight and gives up only when the day is full', () => {
