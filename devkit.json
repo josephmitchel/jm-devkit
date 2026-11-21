@@ -1,6 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/josephmitchel/jm-devkit/main/plugin/devkit.schema.json",
   "modules": ["process"],
+  "kit": "5322554396d8",
   "sweep": { "hour": 9 },
   "reviewer": {
     "setup": "cd reviewer && npm ci",
