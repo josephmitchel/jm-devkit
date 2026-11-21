@@ -4,6 +4,7 @@ import { DevkitConfigError } from '../../plugin/devkit-config.mjs';
 import { errorType, errorTypeLine } from './run-vocabulary.js';
 import {
   afterInterruption,
+  commandArgs,
   leftByNightlyRuns,
   newRunId,
   nightlyStatus,
@@ -155,40 +156,60 @@ describe('a run that was stopped before its command finished', () => {
   });
 });
 
+describe("a command's arguments", () => {
+  const of = (command: Parameters<typeof commandArgs>[0]['command'], pr: number | null = null) =>
+    commandArgs({ command, project: 'acme/widgets', pr }).join(' ');
+
+  it('are the command and its project, for a command that is the whole project\'s', () => {
+    expect(of('sweep')).toBe('sweep acme/widgets');
+    expect(of('summary')).toBe('summary acme/widgets');
+    expect(of('checks')).toBe('checks acme/widgets');
+  });
+
+  it('name the pull request, for a command that is one pull request\'s', () => {
+    expect(of('landed', 12)).toBe('landed acme/widgets 12');
+    expect(of('carry-gate', 12)).toBe('carry-gate acme/widgets 12');
+  });
+
+  it('run a review to return, not to wait', () => {
+    expect(of('run', 12)).toBe('run acme/widgets 12 --once');
+  });
+});
+
 describe("a command's time limit", () => {
   it('is five and a half hours for a job that runs agents: a sweep or a review', () => {
-    expect(timeLimitMs(['sweep', 'acme/widgets'], {})).toBe(19_800_000);
-    expect(timeLimitMs(['run', 'acme/widgets', '42', '--once'], {})).toBe(19_800_000);
+    expect(timeLimitMs({ command: 'sweep' }, {})).toBe(19_800_000);
+    expect(timeLimitMs({ command: 'run' }, {})).toBe(19_800_000);
   });
 
   it('is ten minutes for a step that runs no agents and only talks to GitHub, so one call that hangs cannot hold a pass or the night', () => {
-    expect(timeLimitMs(['landed', 'acme/widgets', '42'], {})).toBe(600_000);
-    expect(timeLimitMs(['carry-gate', 'acme/widgets', '42'], {})).toBe(600_000);
-    expect(timeLimitMs(['summary', 'acme/widgets'], {})).toBe(600_000);
+    expect(timeLimitMs({ command: 'landed' }, {})).toBe(600_000);
+    expect(timeLimitMs({ command: 'carry-gate' }, {})).toBe(600_000);
+    expect(timeLimitMs({ command: 'summary' }, {})).toBe(600_000);
   });
 
   it("is none for a project's nightly checks as a whole: each check has a limit of its own", () => {
-    expect(timeLimitMs(['checks', 'acme/widgets'], {})).toBeNull();
+    expect(timeLimitMs({ command: 'checks' }, {})).toBeNull();
   });
 
   it('is not the agent jobs\' setting for a step that runs no agents', () => {
-    expect(timeLimitMs(['landed', 'acme/widgets', '42'], { REVIEWER_AGENT_JOB_LIMIT_MS: '2000' })).toBe(600_000);
+    expect(timeLimitMs({ command: 'landed' }, { REVIEWER_AGENT_JOB_LIMIT_MS: '2000' })).toBe(600_000);
   });
 
   it('can be set for the machine, and a setting that is no number of milliseconds is ignored', () => {
-    expect(timeLimitMs(['sweep', 'acme/widgets'], { REVIEWER_AGENT_JOB_LIMIT_MS: '2000' })).toBe(2000);
-    expect(timeLimitMs(['sweep', 'acme/widgets'], { REVIEWER_AGENT_JOB_LIMIT_MS: 'soon' })).toBe(19_800_000);
-    expect(timeLimitMs(['sweep', 'acme/widgets'], { REVIEWER_AGENT_JOB_LIMIT_MS: '0' })).toBe(19_800_000);
+    expect(timeLimitMs({ command: 'sweep' }, { REVIEWER_AGENT_JOB_LIMIT_MS: '2000' })).toBe(2000);
+    expect(timeLimitMs({ command: 'sweep' }, { REVIEWER_AGENT_JOB_LIMIT_MS: 'soon' })).toBe(19_800_000);
+    expect(timeLimitMs({ command: 'sweep' }, { REVIEWER_AGENT_JOB_LIMIT_MS: '0' })).toBe(19_800_000);
   });
 });
 
 describe('what an interrupted command needs before its work can be taken up again', () => {
   it('is nothing for a sweep, which resumes from its own recorded state when it is next run', () => {
-    expect(afterInterruption(['sweep', 'acme/widgets'], 'time limit')).toBeNull();
+    expect(afterInterruption({ command: 'sweep', project: 'acme/widgets', pr: null }, 'time limit')).toBeNull();
   });
 
   it("is the review recorded as stopped mid-stage, so the next run retries the stage and the project's slot is free", () => {
-    expect(afterInterruption(['run', 'acme/widgets', '42', '--once'], 'service stopped')).toEqual([
+    expect(afterInterruption({ command: 'run', project: 'acme/widgets', pr: 42 }, 'service stopped')).toEqual([
       'abandon',
       'acme/widgets',
       '42',

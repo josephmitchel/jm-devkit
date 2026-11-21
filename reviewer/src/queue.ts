@@ -1,7 +1,7 @@
-import type { RunKind, RunState } from './db/schema.js';
-import { commandFor, retryDelayMs } from './poller.js';
+import type { RunState } from './db/schema.js';
+import { commandFor, retryDelayMs, type Command } from './poller.js';
 import type { Project } from './projects.js';
-import { AGENT_KINDS, type Run, type RunResult } from './runs.js';
+import { AGENT_KINDS, commandArgs, type ProjectCommand, type Run, type RunResult } from './runs.js';
 
 /**
  * The queue of agent jobs as decisions: who has the machine, which queued review starts next, and
@@ -65,17 +65,13 @@ export interface QueuedEvent {
   lastRun: RunState | null;
 }
 
-/** One agent job: a command for the machine, and every event on record that it answers. */
-export interface Job {
-  project: string;
-  /** The first event found that asks for it: the one its attempts are counted on. */
-  event: string;
+/**
+ * One agent job: a command for the machine, and every event on record that it answers. `event` is
+ * the first found that asks for it, the one its attempts are counted on.
+ */
+export interface Job extends Command {
   /** The later events still on record that the same command answers. One run handles them all. */
   covers: string[];
-  kind: RunKind;
-  /** The code reviewer's command line. */
-  args: string[];
-  attempts: number;
   foundAt: Date;
 }
 
@@ -88,9 +84,6 @@ export interface QueueDecision {
 
 const time = (when: Date) => when.toISOString().replace(/\.\d+Z$/, 'Z');
 
-/** The pull request a review's command line names. */
-const pullRequestOf = (args: string[]) => Number(args[2]);
-
 /**
  * Why a job cannot be started yet, whatever the machine is doing, or null when it can.
  *
@@ -99,13 +92,13 @@ const pullRequestOf = (args: string[]) => Number(args[2]);
  * next one queued behind it. It is also tried after the same wait as a failure, because a holder
  * whose pull request closed never finishes, and only a review claiming the slot retires it.
  */
-function notYet(first: QueuedEvent, args: string[], holders: number[], now: Date): string | null {
+function notYet(first: QueuedEvent, job: Job, holders: number[], now: Date): string | null {
   if (first.lastRun === 'running') return 'its last run is still going';
   if (first.attemptedAt === null) return null;
   const tryAgainAt = new Date(first.attemptedAt.getTime() + retryDelayMs(first.attempts));
   const waited = now >= tryAgainAt;
   if (first.lastRun === 'succeeded') {
-    const ahead = holders.filter((pr) => pr !== pullRequestOf(args));
+    const ahead = holders.filter((pr) => pr !== job.pr);
     return ahead.length === 0 || waited ? null : `waits for its project's review slot, held by the review of #${ahead[0]}`;
   }
   return waited ? null : `tried ${first.attempts} time${first.attempts === 1 ? '' : 's'}: tried again after ${time(tryAgainAt)}`;
@@ -131,7 +124,7 @@ export function queueDecision(
   for (const event of oldestFirst) {
     const command = commandFor(event.project, event.event, event.attempts);
     if (!command || !AGENT_KINDS.has(command.kind)) continue;
-    const key = [event.project, ...command.args].join(' ');
+    const key = commandArgs(command).join(' ');
     const same = jobs.get(key);
     if (same) same.job.covers.push(event.event);
     else jobs.set(key, { job: { ...command, covers: [], foundAt: event.foundAt }, first: event });
@@ -141,7 +134,7 @@ export function queueDecision(
   const turn = machineFor('review', machine);
   for (const { job, first } of jobs.values()) {
     const left = notHandled.get(job.project);
-    const why = left === undefined ? notYet(first, job.args, slots.get(job.project) ?? [], now) : `the machine no longer handles its project (${left})`;
+    const why = left === undefined ? notYet(first, job, slots.get(job.project) ?? [], now) : `the machine no longer handles its project (${left})`;
     if (why !== null) decision.waiting.push({ job, why });
     else if (!turn.take) decision.waiting.push({ job, why: turn.why });
     else if (decision.start !== null) decision.waiting.push({ job, why: 'its turn comes after the job ahead of it' });
@@ -198,21 +191,22 @@ export function leftByQueue(rows: Run[]): Run[] {
   return rows.filter((r) => r.state === 'running' && r.parentId === null && AGENT_KINDS.has(r.kind));
 }
 
-/** An agent job that is running, with its command line when the record of events has it. */
+/** An agent job that is running, with its command when the record of events has it. */
 export interface RunningJob {
   run: Run;
-  args: string[] | null;
+  command: ProjectCommand | null;
 }
 
 const jobLine = (job: Job) =>
-  `${job.project} \`${job.args.join(' ')}\` (${[job.event, ...job.covers].join(', ')}), found ${time(job.foundAt)}`;
+  `${job.project} \`${commandArgs(job).join(' ')}\` (${[job.event, ...job.covers].join(', ')}), found ${time(job.foundAt)}`;
 
 /** The `status` section for the queue: what is running, what starts next, and what waits and why. */
 export function queueStatus(decision: QueueDecision, running: RunningJob[], machine: Machine): string[] {
   const lines = [
     ...(machine.nightlyGoing ? ['  a nightly run is going: reviews wait until it is over'] : []),
     ...running.map(
-      ({ run, args }) => `  running: ${run.project} ${run.kind}${args ? ` \`${args.join(' ')}\`` : ''} since ${time(run.startedAt)}, ${run.id}`,
+      ({ run, command }) =>
+        `  running: ${run.project} ${run.kind}${command ? ` \`${commandArgs(command).join(' ')}\`` : ''} since ${time(run.startedAt)}, ${run.id}`,
     ),
     ...(decision.start ? [`  next: ${jobLine(decision.start)}`] : []),
     ...decision.waiting.map(({ job, why }) => `  waiting: ${jobLine(job)}: ${why}`),

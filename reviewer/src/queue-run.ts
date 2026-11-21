@@ -21,7 +21,7 @@ import {
 } from './queue.js';
 import { takeRecordedStepOrSayWhy } from './recorded-step.js';
 import { errorType } from './run-vocabulary.js';
-import { AGENT_KINDS, interruptRunsLeftRunning, runLine, stopping, tidyAfterInterruption } from './runs.js';
+import { AGENT_KINDS, commandArgs, interruptRunsLeftRunning, runLine, stopping, tidyAfterInterruption } from './runs.js';
 import { OFF_THE_SLOT } from './stages/intake.js';
 
 /**
@@ -134,7 +134,7 @@ async function recordDeadRuns(say: (line: string) => void): Promise<void> {
     say(`an earlier turn of the queue never recorded how this ended: ${runLine(run)}`);
     const [event] = await db.select().from(schema.pollerEvents).where(eq(schema.pollerEvents.runId, run.id));
     const command = event ? commandFor(event.project, event.event, event.attempts) : null;
-    if (command) await tidyAfterInterruption(run, command.args, 'found running');
+    if (command) await tidyAfterInterruption(run, command, 'found running');
     else say(`${run.id}: no event on record names it, so nothing more is done for it`);
   }
 }
@@ -161,17 +161,15 @@ async function runJob(job: Job, say: (line: string) => void, refused: Error | nu
   let verdict: EventVerdict | null = null;
   const finished = await takeRecordedStepOrSayWhy(
     {
-      kind: job.kind,
-      project: job.project,
-      args: job.args,
+      command: job,
       name,
       started: (run) =>
-        `${name}: \`${job.args.join(' ')}\` started as ${run.id}` + (job.covers.length > 0 ? `, which also answers ${job.covers.join(', ')}` : ''),
+        `${name}: \`${commandArgs(job).join(' ')}\` started as ${run.id}` + (job.covers.length > 0 ? `, which also answers ${job.covers.join(', ')}` : ''),
       needsProjectRow: true,
       refused: refused && { why: refused.message, result: { state: 'failed', stage: 'starting', errorType: errorType(refused) } },
       onStart: async (run) => void (await db.update(schema.pollerEvents).set({ runId: run.id }).where(events)),
       beforeFinish: async (result) => {
-        const review = await reviewOnRecord(job.project, Number(job.args[2]));
+        const review = job.pr === null ? null : await reviewOnRecord(job.project, job.pr);
         const stops = review?.timeLimitStops ?? 0;
         verdict = afterReviewRun(result, review?.state ?? null, stops);
         const stopsNow = timeLimitStopsAfter(result, verdict, stops);
@@ -201,7 +199,7 @@ export async function queueStatusFacts(): Promise<{ decision: QueueDecision; run
     .orderBy(schema.runs.startedAt);
   const running = new Map<string, RunningJob>();
   for (const { run, event } of rows) {
-    running.set(run.id, { run, args: event ? (commandFor(event.project, event.event, event.attempts)?.args ?? null) : null });
+    running.set(run.id, { run, command: event ? commandFor(event.project, event.event, event.attempts) : null });
   }
   return { decision: await decide(machine), running: [...running.values()], machine };
 }

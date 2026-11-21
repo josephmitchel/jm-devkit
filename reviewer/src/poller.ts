@@ -1,7 +1,7 @@
 import type { RunKind, pollerEvents, pollerProjects } from './db/schema.js';
 import type { Project } from './projects.js';
 import { countsAsReply } from './reply-authority.js';
-import { AGENT_KINDS, runLine, runOutputPath, type Run } from './runs.js';
+import { AGENT_KINDS, commandKind, runLine, runOutputPath, type ProjectCommand, type Run } from './runs.js';
 
 /**
  * The poller's pass as a decision: from what a pass saw on GitHub and what the database says was
@@ -104,13 +104,10 @@ export function gatesOfPassedReviews(rows: Array<{ prNumber: number; sha: string
 }
 
 /** One command for a pass to run, for one event. */
-export interface Command {
-  project: string;
+export interface Command extends ProjectCommand {
   event: string;
   /** The kind of run it is recorded as. */
   kind: RunKind;
-  /** The code reviewer's command line. */
-  args: string[];
   /** How many times it has been tried before. */
   attempts: number;
 }
@@ -131,15 +128,15 @@ export interface PassDecision {
  * event's key is the rule's name and the subject the rule gives, `<name>:<subject>`.
  */
 interface EventRule {
-  /** The kind of run its command is recorded as. */
-  kind: RunKind;
+  /** The command that handles it, run for the event's pull request. */
+  command: ProjectCommand['command'];
   /**
    * What identifies the event on this pull request, or null when the pull request shows none. The
-   * same event must always give the same subject, and a new one a new subject.
+   * same event must always give the same subject, and a new one a new subject. It starts with the
+   * pull request's number, which is all its command is built from, so that the command can be
+   * tried again from the record ({@link commandFor}).
    */
   subject(pr: PullRequestSeen, known: ProjectKnown): string | null;
-  /** The code reviewer's command line for it, from the subject alone, so it can be tried again from the record. */
-  command(project: string, subject: string): string[];
 }
 
 // The label that asks for a pull request's review (plugin/install/label.mjs creates it).
@@ -147,8 +144,6 @@ const REVIEW_LABEL = 'review-now';
 // The states in which a review does nothing until the owner says something on its pull request:
 // waiting for answers, or stopped with a notice that says a comment retries it.
 const WAITS_ON_OWNER = new Set(['awaiting_answers', 'failed']);
-// One command starts a review, continues it and retries it: the review's own state says which.
-const review = (project: string, pr: string) => ['run', project, pr, '--once'];
 
 /** The review that waits for the owner's word on this pull request, or null when none does. */
 function waitingOn(pr: PullRequestSeen, reviews: ReviewKnown[]): ReviewKnown | null {
@@ -172,13 +167,12 @@ export function repliesToRead(pullRequests: PullRequestSeen[], known: ProjectKno
 /** Every event the poller acts on. A new event is a new entry here. */
 const EVENTS: Record<string, EventRule> = {
   merged: {
-    kind: 'landed',
+    command: 'landed',
     subject: (pr, known) => (pr.mergedAt !== null && pr.mergedAt > known.startedAt ? String(pr.number) : null),
-    command: (project, pr) => ['landed', project, pr],
   },
   // `carry-gate` decides whether the new head holds only reviewed code; this only notices the head.
   'head-moved': {
-    kind: 'carry-gate',
+    command: 'carry-gate',
     subject: (pr, known) => {
       // The listing has no time for a head. A push changes the pull request, so one not changed
       // since the first pass still has the head it had then.
@@ -186,24 +180,23 @@ const EVENTS: Record<string, EventRule> = {
       const gated = known.passedGates.get(pr.number);
       return gated && !gated.includes(pr.headSha) ? `${pr.number}@${pr.headSha}` : null;
     },
-    command: (project, subject) => ['carry-gate', project, subject.split('@')[0]],
   },
   // An open pull request labelled for review that has no review. A label has no time of its own,
   // so "since the first pass" is the pull request having changed since. A review that never left
-  // `pending` has not started: it counts as none.
+  // `pending` has not started: it counts as none. One command starts a review, continues it and
+  // retries it: the review's own state says which.
   labelled: {
-    kind: 'review',
+    command: 'run',
     subject: (pr, known) => {
       const asked = pr.open && !pr.draft && pr.labels.includes(REVIEW_LABEL) && pr.updatedAt > known.startedAt;
       const started = known.reviews.some((r) => r.pr === pr.number && r.state !== 'pending');
       return asked && !started ? String(pr.number) : null;
     },
-    command: review,
   },
   // The owner's word on a review that waits for it. The event is the newest such comment, so
   // several written before a pass are one event and the review is continued once for them.
   replied: {
-    kind: 'review',
+    command: 'run',
     subject: (pr, known) => {
       const waiting = waitingOn(pr, known.reviews);
       if (!waiting) return null;
@@ -214,19 +207,21 @@ const EVENTS: Record<string, EventRule> = {
         .reduce<CommentSeen | null>((last, c) => (last === null || c.at >= last.at ? c : last), null);
       return newest === null ? null : `${pr.number}/${newest.id}`;
     },
-    command: (project, subject) => review(project, subject.split('/')[0]),
   },
 };
 
 /** The kinds of run that are started for an event, by a pass or by the queue. */
-export const EVENT_RUN_KINDS: ReadonlySet<RunKind> = new Set(Object.values(EVENTS).map((rule) => rule.kind));
+export const EVENT_RUN_KINDS: ReadonlySet<RunKind> = new Set(Object.values(EVENTS).map((rule) => commandKind(rule.command)));
+
+// The one place an event's key is read back: its rule's name, then its pull request's number.
+const EVENT_KEY = /^([^:]+):(\d+)/;
 
 /** The command for a recorded event, or null when no rule knows its key. */
 export function commandFor(project: string, event: string, attempts: number): Command | null {
-  const [name, ...subject] = event.split(':');
-  if (!Object.hasOwn(EVENTS, name)) return null;
-  const rule = EVENTS[name];
-  return { project, event, kind: rule.kind, args: rule.command(project, subject.join(':')), attempts };
+  const [, name, pr] = EVENT_KEY.exec(event) ?? [];
+  if (name === undefined || !Object.hasOwn(EVENTS, name)) return null;
+  const { command } = EVENTS[name];
+  return { project, event, kind: commandKind(command), command, pr: Number(pr), attempts };
 }
 
 const MINUTE_MS = 60_000;
@@ -303,7 +298,7 @@ export function passDecision(
  * pass that found it and is not counted here: the queue has the rule for those (leftByQueue).
  */
 export function leftByPasses(rows: Run[]): Run[] {
-  const waitedFor = new Set<string>(Object.values(EVENTS).map((rule) => rule.kind).filter((kind) => !AGENT_KINDS.has(kind)));
+  const waitedFor = new Set<string>([...EVENT_RUN_KINDS].filter((kind) => !AGENT_KINDS.has(kind)));
   return rows.filter((r) => r.state === 'running' && r.parentId === null && waitedFor.has(r.kind));
 }
 

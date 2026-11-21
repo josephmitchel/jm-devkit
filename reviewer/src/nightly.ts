@@ -221,10 +221,8 @@ async function takeStep(nightly: Run, step: Step, say: (line: string) => void): 
   const refused = refusedResult(step);
   const finished = await takeRecordedStepOrSayWhy(
     {
-      kind: step.kind,
-      project: step.project,
+      command: { command: step.kind, project: step.project, pr: null },
       parentId: nightly.id,
-      args: [step.kind, step.project],
       name,
       started: (run) => `${name} started as ${run.id}`,
       needsProjectRow: !refused,

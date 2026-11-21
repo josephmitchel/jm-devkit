@@ -48,22 +48,39 @@ export function runResult(runId: string, ended: Ended): RunResult {
  * time limit.
  */
 export const AGENT_KINDS: ReadonlySet<RunKind> = new Set<RunKind>(['sweep', 'review']);
-// A command is recorded as a run of the kind it is named for, but for a review's.
-const kindOfCommand = (command: string) => (command === 'run' ? 'review' : command) as RunKind;
+
+/** One of the code reviewer's commands for a project: what a recorded run runs. */
+export interface ProjectCommand {
+  command: 'sweep' | 'summary' | 'checks' | 'landed' | 'carry-gate' | 'run';
+  project: string;
+  /** The pull request it is for. Null for a command that is the whole project's. */
+  pr: number | null;
+}
+
+/** The one place a command becomes arguments. A review is run to return, not to wait (`--once`). */
+export function commandArgs({ command, project, pr }: ProjectCommand): string[] {
+  const args = [command, project, ...(pr === null ? [] : [String(pr)])];
+  return command === 'run' ? [...args, '--once'] : args;
+}
+
+/** The kind of run a command is recorded as: the kind it is named for, but for a review's. */
+export function commandKind(command: ProjectCommand['command']): RunKind {
+  return command === 'run' ? 'review' : command;
+}
 // What a run on GitHub Actions was given (`timeout-minutes: 330`).
 const AGENT_JOB_LIMIT_MS = 5.5 * 60 * 60 * 1000;
 // The commands that run no agents and only talk to GitHub and the database. They finish in
 // seconds; the limit is for a call that hangs.
-const SHORT_STEPS = new Set(['landed', 'carry-gate', 'summary']);
+const SHORT_STEPS: ReadonlySet<ProjectCommand['command']> = new Set(['landed', 'carry-gate', 'summary'] as const);
 const SHORT_STEP_LIMIT_MS = 10 * 60 * 1000;
 
 /**
  * How long one of the code reviewer's commands may run before it is stopped, or null for no
  * limit: a project's nightly checks have none as a whole, since each check has its own.
  */
-export function timeLimitMs(args: string[], env: NodeJS.ProcessEnv = process.env): number | null {
-  if (SHORT_STEPS.has(args[0])) return SHORT_STEP_LIMIT_MS;
-  if (!AGENT_KINDS.has(kindOfCommand(args[0]))) return null;
+export function timeLimitMs({ command }: Pick<ProjectCommand, 'command'>, env: NodeJS.ProcessEnv = process.env): number | null {
+  if (SHORT_STEPS.has(command)) return SHORT_STEP_LIMIT_MS;
+  if (!AGENT_KINDS.has(commandKind(command))) return null;
   const set = Number(env.REVIEWER_AGENT_JOB_LIMIT_MS);
   return Number.isInteger(set) && set > 0 ? set : AGENT_JOB_LIMIT_MS;
 }
@@ -74,10 +91,9 @@ export function timeLimitMs(args: string[], env: NodeJS.ProcessEnv = process.env
  * mid-stage would hold its project's review slot and restart from the wrong place, so it is
  * recorded as stopped, the way a cancelled run on GitHub Actions is.
  */
-export function afterInterruption(args: string[], reason: StopReason): string[] | null {
-  const [command, slug, pr] = args;
+export function afterInterruption({ command, project, pr }: ProjectCommand, reason: StopReason): string[] | null {
   if (command !== 'run') return null;
-  return ['abandon', slug, pr, `the run on the machine was interrupted (${reason})`];
+  return ['abandon', project, String(pr), `the run on the machine was interrupted (${reason})`];
 }
 
 /**
@@ -258,9 +274,9 @@ function signalGroup(child: ChildProcess, signal: NodeJS.Signals): void {
  * its limit, or because this process was told to stop, ends the run `interrupted`, and whatever
  * its kind of work needs before it can be taken up again is done here ({@link afterInterruption}).
  */
-export async function runCommand(run: Run, args: string[]): Promise<RunResult> {
-  const result = runResult(run.id, await runChild(run, args, timeLimitMs(args), true));
-  if (result.state === 'interrupted') await tidyAfterInterruption(run, args, result.errorType as StopReason);
+export async function runCommand(run: Run, command: ProjectCommand): Promise<RunResult> {
+  const result = runResult(run.id, await runChild(run, commandArgs(command), timeLimitMs(command), true));
+  if (result.state === 'interrupted') await tidyAfterInterruption(run, command, result.errorType as StopReason);
   return result;
 }
 
@@ -269,8 +285,8 @@ export async function runCommand(run: Run, args: string[]): Promise<RunResult> {
  * ({@link afterInterruption}), as part of the same run. runCommand does it for a command it
  * stopped; whoever finds a run dead, its process gone unrecorded, calls it for that run.
  */
-export async function tidyAfterInterruption(run: Run, args: string[], reason: StopReason): Promise<void> {
-  const cleanup = afterInterruption(args, reason);
+export async function tidyAfterInterruption(run: Run, command: ProjectCommand, reason: StopReason): Promise<void> {
+  const cleanup = afterInterruption(command, reason);
   if (!cleanup) return;
   // Not stopped with the rest: it is what a stopping service still has to get done.
   const cleaned = await runChild(run, cleanup, CLEANUP_LIMIT_MS, false);

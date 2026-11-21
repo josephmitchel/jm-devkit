@@ -205,9 +205,7 @@ export async function runChecksOnDemand(slug: string): Promise<'no checks' | 'al
   }
   const name = `${slug} checks`;
   const finished = await takeRecordedStep({
-    kind: 'checks',
-    project: slug,
-    args: ['checks', slug],
+    command: { command: 'checks', project: slug, pr: null },
     name,
     started: (run) => `${name} started as ${run.id}`,
     // The checks need no row of the project's (runProjectChecks).

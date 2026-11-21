@@ -111,7 +111,8 @@ describe('the next review the machine starts', () => {
       event: 'labelled:12',
       covers: [],
       kind: 'review',
-      args: ['run', 'acme/widgets', '12', '--once'],
+      command: 'run',
+      pr: 12,
       attempts: 0,
       foundAt: at('11:58:00'),
     });
@@ -151,7 +152,7 @@ describe('the next review the machine starts', () => {
 
   it('is one run for every queued event that asks for the same review', () => {
     const decision = decide([queued('replied:12/905', '11:59:00'), queued('labelled:12', '11:57:00'), queued('replied:12/900', '11:58:00')]);
-    expect(decision.start).toMatchObject({ event: 'labelled:12', covers: ['replied:12/900', 'replied:12/905'], args: ['run', 'acme/widgets', '12', '--once'] });
+    expect(decision.start).toMatchObject({ event: 'labelled:12', covers: ['replied:12/900', 'replied:12/905'], command: 'run', pr: 12 });
     expect(decision.waiting).toEqual([]);
   });
 
@@ -328,7 +329,7 @@ describe('the queue, in status', () => {
       { agentJobRunning: true, nightlyGoing: false },
       new Map([['acme/widgets', [12]]]),
     );
-    const running = [{ run: run('run-20261120T115700Z-aaaaaa'), args: ['run', 'acme/widgets', '12', '--once'] }];
+    const running = [{ run: run('run-20261120T115700Z-aaaaaa'), command: { command: 'run' as const, project: 'acme/widgets', pr: 12 } }];
     expect(queueStatus(decision, running, { agentJobRunning: true, nightlyGoing: false })).toEqual([
       'the queue: agent jobs, one at a time on this machine',
       '  running: acme/widgets review `run acme/widgets 12 --once` since 2026-11-20T11:57:00Z, run-20261120T115700Z-aaaaaa',
@@ -348,7 +349,7 @@ describe('the queue, in status', () => {
   it("shows a sweep of the nightly run as what is running, and that reviews wait for the night", () => {
     const sweep = run('run-20261120T020001Z-eeeeee', { kind: 'sweep', parentId: 'run-20261120T020000Z-dddddd', startedAt: at('02:00:01') });
     const machine = { agentJobRunning: true, nightlyGoing: true };
-    expect(queueStatus(decide([queued('labelled:12', '02:10:00')], machine), [{ run: sweep, args: null }], machine)).toEqual([
+    expect(queueStatus(decide([queued('labelled:12', '02:10:00')], machine), [{ run: sweep, command: null }], machine)).toEqual([
       'the queue: agent jobs, one at a time on this machine',
       '  a nightly run is going: reviews wait until it is over',
       '  running: acme/widgets sweep since 2026-11-20T02:00:01Z, run-20261120T020001Z-eeeeee',
@@ -358,7 +359,7 @@ describe('the queue, in status', () => {
 
   it('says so when a nightly run is waiting for a review to finish', () => {
     const machine = { agentJobRunning: true, nightlyGoing: true };
-    const running = [{ run: run('run-20261120T015000Z-aaaaaa', { startedAt: at('01:50:00') }), args: ['run', 'acme/widgets', '12', '--once'] }];
+    const running = [{ run: run('run-20261120T015000Z-aaaaaa', { startedAt: at('01:50:00') }), command: { command: 'run' as const, project: 'acme/widgets', pr: 12 } }];
     expect(queueStatus(decide([], machine), running, machine).slice(1)).toEqual([
       '  a nightly run is going: reviews wait until it is over',
       '  running: acme/widgets review `run acme/widgets 12 --once` since 2026-11-20T01:50:00Z, run-20261120T015000Z-aaaaaa',

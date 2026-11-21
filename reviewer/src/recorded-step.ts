@@ -1,16 +1,13 @@
-import type { RunKind } from './db/schema.js';
 import { reportRun } from './failure-report.js';
 import { ensureProjectRow } from './project-row.js';
 import { errorType } from './run-vocabulary.js';
-import { finishRun, runCommand, runLine, runLog, startRun, type Run, type RunResult } from './runs.js';
+import { commandKind, finishRun, runCommand, runLine, runLog, startRun, type ProjectCommand, type Run, type RunResult } from './runs.js';
 
 /** One of the code reviewer's commands, to be run for a project as a recorded run. */
 export interface RecordedStep {
-  kind: RunKind;
-  project: string;
+  command: ProjectCommand;
   /** The nightly run it is a step of. */
   parentId?: string;
-  args: string[];
   /** What the log calls it: `acme/widgets sweep`, `acme/widgets merged:12`. */
   name: string;
   /** The line that says it started. */
@@ -35,8 +32,9 @@ export interface RecordedStep {
  * not be recorded (the database, the state directory).
  */
 export async function takeRecordedStep(step: RecordedStep, say?: (line: string) => void): Promise<Run> {
-  if (step.needsProjectRow) await ensureProjectRow(step.project);
-  const run = await startRun({ kind: step.kind, project: step.project, parentId: step.parentId });
+  const { command, project } = step.command;
+  if (step.needsProjectRow) await ensureProjectRow(project);
+  const run = await startRun({ kind: commandKind(command), project, parentId: step.parentId });
   const log = say ?? runLog(run);
   await step.onStart?.(run);
   log(step.started(run));
@@ -47,7 +45,7 @@ export async function takeRecordedStep(step: RecordedStep, say?: (line: string) 
     result = step.refused.result;
   } else {
     try {
-      result = await runCommand(run, step.args);
+      result = await runCommand(run, step.command);
     } catch (err) {
       result = { state: 'failed', stage: 'starting', errorType: errorType(err) };
     }

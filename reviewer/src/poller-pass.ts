@@ -20,7 +20,7 @@ import {
 import { classifyProjects, projectLine } from './projects.js';
 import { OWN_COMMENT_KINDS } from './reply-authority.js';
 import { takeRecordedStepOrSayWhy } from './recorded-step.js';
-import { interruptRunsLeftRunning, runLine, stopping } from './runs.js';
+import { commandArgs, interruptRunsLeftRunning, runLine, stopping } from './runs.js';
 
 /**
  * One pass of the poller: ask GitHub what has happened in each handled project, let
@@ -140,7 +140,7 @@ async function pass(say: (line: string) => void): Promise<PassOutcome> {
     if (p.firstPass) say(`${p.project}: first pass. Watched from ${p.startedAt.toISOString()}; nothing before that is acted on`);
   }
   // On record now, and not this pass's to run: the queue starts it when the machine is free.
-  for (const job of decision.queued) say(`${job.project} ${job.event}: \`${job.args.join(' ')}\` queued`);
+  for (const job of decision.queued) say(`${job.project} ${job.event}: \`${commandArgs(job).join(' ')}\` queued`);
 
   const ended: string[] = [];
   for (const command of decision.commands) {
@@ -232,7 +232,7 @@ export async function forgetReviewEvents(project: string, pr: number): Promise<v
   const rows = await db.select().from(schema.pollerEvents).where(eq(schema.pollerEvents.project, project));
   const asked = rows.filter((row) => {
     const command = commandFor(project, row.event, row.attempts);
-    return command?.kind === 'review' && Number(command.args[2]) === pr;
+    return command?.kind === 'review' && command.pr === pr;
   });
   if (asked.length === 0) return;
   await db
@@ -284,11 +284,9 @@ async function handle(command: Command, say: (line: string) => void): Promise<'s
   const name = `${command.project} ${command.event}`;
   const finished = await takeRecordedStepOrSayWhy(
     {
-      kind: command.kind,
-      project: command.project,
-      args: command.args,
+      command,
       name,
-      started: (run) => `${name}: \`${command.args.join(' ')}\` started as ${run.id}`,
+      started: (run) => `${name}: \`${commandArgs(command).join(' ')}\` started as ${run.id}`,
       needsProjectRow: true,
       onStart: async (run) => void (await db.update(schema.pollerEvents).set({ runId: run.id }).where(key)),
       // Before the run is recorded as over: if this process dies between the two writes, the
