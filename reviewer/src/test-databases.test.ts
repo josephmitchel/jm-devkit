@@ -22,20 +22,25 @@ describe('planDatabases', () => {
     expect(planDatabases(['APP_DATABASE_URL', 'AUDIT_DATABASE_URL'], SERVER, RUN)).toEqual([
       {
         variable: 'APP_DATABASE_URL',
-        name: 'reviewer_test_0123456789abcdef_0',
-        address: 'postgres://tests:s3cret@db.example:5433/reviewer_test_0123456789abcdef_0?sslmode=require',
+        name: 'reviewer_test_0123456789abcdef_0_test',
+        address: 'postgres://tests:s3cret@db.example:5433/reviewer_test_0123456789abcdef_0_test?sslmode=require',
       },
       {
         variable: 'AUDIT_DATABASE_URL',
-        name: 'reviewer_test_0123456789abcdef_1',
-        address: 'postgres://tests:s3cret@db.example:5433/reviewer_test_0123456789abcdef_1?sslmode=require',
+        name: 'reviewer_test_0123456789abcdef_1_test',
+        address: 'postgres://tests:s3cret@db.example:5433/reviewer_test_0123456789abcdef_1_test?sslmode=require',
       },
     ]);
   });
 
   it('socket-style server addresses keep their host option', () => {
     const [planned] = planDatabases(['APP_DATABASE_URL'], 'postgresql:///postgres?host=/var/run/postgresql', RUN);
-    expect(planned.address).toBe('postgresql:///reviewer_test_0123456789abcdef_0?host=/var/run/postgresql');
+    expect(planned.address).toBe('postgresql:///reviewer_test_0123456789abcdef_0_test?host=/var/run/postgresql');
+  });
+
+  it('ends every name in _test, which a suite that truncates its tables asks of a database before it runs', () => {
+    const guard = /^[A-Za-z0-9_]+_test$/;
+    for (const { name } of planDatabases(['APP_DATABASE_URL', 'AUDIT_DATABASE_URL'], SERVER, RUN)) expect(name).toMatch(guard);
   });
 
   it('refuses a project that names databases when the machine has no server to create them on', () => {
@@ -61,9 +66,15 @@ describe('planDatabases', () => {
 
 describe('the statements that create and drop a database', () => {
   it('quote the name, start from the empty template, and drop past a connection left open', () => {
-    expect(createStatement('reviewer_test_0123456789abcdef_0')).toBe(
-      'CREATE DATABASE "reviewer_test_0123456789abcdef_0" TEMPLATE template0',
+    expect(createStatement('reviewer_test_0123456789abcdef_0_test')).toBe(
+      'CREATE DATABASE "reviewer_test_0123456789abcdef_0_test" TEMPLATE template0',
     );
+    expect(dropStatement('reviewer_test_0123456789abcdef_12_test')).toBe(
+      'DROP DATABASE IF EXISTS "reviewer_test_0123456789abcdef_12_test" WITH (FORCE)',
+    );
+  });
+
+  it('still drop a database recorded before names ended in _test', () => {
     expect(dropStatement('reviewer_test_0123456789abcdef_12')).toBe(
       'DROP DATABASE IF EXISTS "reviewer_test_0123456789abcdef_12" WITH (FORCE)',
     );
@@ -80,6 +91,9 @@ describe('the statements that create and drop a database', () => {
       'reviewer_test_0123456789abcdef_0"; DROP DATABASE reviewer; --',
       'x_reviewer_test_0123456789abcdef_0',
       'reviewer_test_0123456789abcdef_0\nreviewer',
+      'reviewer_test_0123456789abcdef_0_TEST',
+      'reviewer_test_0123456789abcdef_0_test2',
+      'reviewer_test_0123456789abcdef_0_test_test',
     ]) {
       expect(() => dropStatement(name), name).toThrow('is not a database the code reviewer created');
       expect(() => createStatement(name), name).toThrow('is not a database the code reviewer created');
@@ -168,8 +182,8 @@ describe('withAddresses', () => {
     expect(withAddresses(project, planned)).toEqual({
       ...project,
       env: {
-        APP_DATABASE_URL: 'postgres://tests:s3cret@db.example:5433/reviewer_test_0123456789abcdef_0?sslmode=require',
-        DATABASE_URL: 'postgres://tests:s3cret@db.example:5433/reviewer_test_0123456789abcdef_1?sslmode=require',
+        APP_DATABASE_URL: 'postgres://tests:s3cret@db.example:5433/reviewer_test_0123456789abcdef_0_test?sslmode=require',
+        DATABASE_URL: 'postgres://tests:s3cret@db.example:5433/reviewer_test_0123456789abcdef_1_test?sslmode=require',
         LOG_LEVEL: 'error',
       },
     });
@@ -183,12 +197,12 @@ describe('withAddresses', () => {
       REVIEWER_TEST_DATABASES_URL: SERVER,
     };
     const env = repoCommandEnv(reviewerEnv, withAddresses(project, planned).env);
-    expect(env.DATABASE_URL).toBe('postgres://tests:s3cret@db.example:5433/reviewer_test_0123456789abcdef_1?sslmode=require');
+    expect(env.DATABASE_URL).toBe('postgres://tests:s3cret@db.example:5433/reviewer_test_0123456789abcdef_1_test?sslmode=require');
     expect(env).not.toHaveProperty('REVIEWER_TEST_DATABASES_URL');
     expect(reviewerEnv.DATABASE_URL).toBe('postgres://reviewer:pw@db.example/reviewer');
 
     const before = process.env.APP_DATABASE_URL;
-    const command = 'test "$APP_DATABASE_URL" = "postgres://tests:s3cret@db.example:5433/reviewer_test_0123456789abcdef_0?sslmode=require"';
+    const command = 'test "$APP_DATABASE_URL" = "postgres://tests:s3cret@db.example:5433/reviewer_test_0123456789abcdef_0_test?sslmode=require"';
     expect((await runRepoCommand('/tmp', command, withAddresses(project, planned).env, 10_000)).passed).toBe(true);
     expect(process.env.APP_DATABASE_URL).toBe(before);
   });
@@ -215,8 +229,10 @@ describe("keeping a test database's address out of what is posted to GitHub", ()
   });
 
   it('replaces the address of a database the code reviewer made, however the server is spelled', () => {
-    const output = 'DATABASE_URL=postgres://tests@127.0.0.1/reviewer_test_0123456789abcdef_1';
-    expect(withoutTestDatabaseAddresses(output, SERVER)).toBe('DATABASE_URL=[test database address]');
+    for (const name of ['reviewer_test_0123456789abcdef_1_test', 'reviewer_test_0123456789abcdef_1']) {
+      const output = `DATABASE_URL=postgres://tests@127.0.0.1/${name}`;
+      expect(withoutTestDatabaseAddresses(output, SERVER), name).toBe('DATABASE_URL=[test database address]');
+    }
   });
 
   it("removes the role's password where it stands alone, as the setting spells it and as a driver decodes it", () => {
