@@ -18,6 +18,7 @@ import {
   type Run,
   type RunResult,
 } from './runs.js';
+import { dropDatabasesLeftBehind } from './test-databases.js';
 
 /** One piece of a nightly run's work: a run of `kind` for one project. */
 export interface Step {
@@ -145,6 +146,8 @@ async function theNight(night: Held): Promise<Outcome> {
     return 'interrupted';
   }
   try {
+    // With the machine in hand no review or sweep is running, so what one left is nobody's.
+    for (const line of await dropDatabasesLeftBehind().catch((err) => [`could not look for test databases left behind (${String(err).split('\n')[0]})`])) say(line);
     return await takeSteps(nightly, say, () => machine.lost() || night.lost());
   } finally {
     await machine.release();

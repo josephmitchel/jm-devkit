@@ -126,9 +126,15 @@ of its own that cannot open the code reviewer's database, because the project's 
 that role's addresses. With `reviewer.databases` set and the setting absent the run fails, saying
 so; GitHub Actions has no such server, so a project adds `databases` when it moves to the machine.
 
-Every database is recorded in the `test_databases` table before it is created, and a run drops only
-what is recorded for it. A run that is killed leaves its record, and the same review or sweep drops
-what it left when it next runs.
+Every database is recorded in the `test_databases` table before it is created, under the review,
+the sweep or the project's nightly checks it is for, and only a recorded database is ever dropped.
+A run that is killed leaves its record, and the same review or sweep, or the project's next run of
+its checks, drops what it left when it next runs. What a run that never comes back left (a review
+whose pull request closed after a kill) is dropped by the next nightly run: once it holds the
+machine no review or sweep is running, so it drops every database recorded for one, and a
+project's checks' databases unless that project's checks are running at that moment. A `sweep` or
+`run` started by hand outside the queue is not covered by the machine's lock, so do not leave one
+running into the night on a project that names databases.
 
 `npm test` needs no database. The suite that creates and drops databases on a real Postgres runs on
 its own, given a server:
