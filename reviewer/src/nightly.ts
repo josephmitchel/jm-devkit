@@ -1,7 +1,7 @@
 import { DevkitConfigError } from '../../plugin/devkit-config.mjs';
 import { UPDATE_STAGES } from '../bin/update.mjs';
 import { reportRun } from './failure-report.js';
-import { lockFault, MACHINE_LOCK, MachineLockError, NIGHTLY_LOCK, tryLock, type Held } from './machine.js';
+import { lockFault, MACHINE_LOCK, MachineLockError, NIGHTLY_LOCK, tryLock, type Held } from './locks.js';
 import { listProjects, projectLine, type Project } from './projects.js';
 import { machineFor } from './queue.js';
 import { takeRecordedStepOrSayWhy } from './recorded-step.js';

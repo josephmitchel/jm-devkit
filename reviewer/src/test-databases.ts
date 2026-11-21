@@ -14,7 +14,7 @@ import { eq } from 'drizzle-orm';
 import pg from 'pg';
 
 import { db, schema } from './db/client.js';
-import { CHECKS_LOCK_CLASS, checksLockKey, tryLock } from './machine.js';
+import { CHECKS_LOCK_CLASS, checksLockKey, tryLock } from './locks.js';
 import type { ProjectSetup } from './project-config.js';
 
 /** One database a run is to create, and the variable its address goes in. */

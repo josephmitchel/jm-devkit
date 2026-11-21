@@ -6,7 +6,7 @@ import type { TestCommand } from './db/schema.js';
 import { NightlyCheckError, SetupCommandError } from './failure-side.js';
 import { getBranchHead, getDefaultBranch, getDefaultBranchFile } from './github.js';
 import { markStage } from './heartbeat.js';
-import { CHECKS_LOCK_CLASS, checksLockKey, locksHeld, tryLock } from './machine.js';
+import { CHECKS_LOCK_CLASS, checksLockKey, locksHeld, tryLock } from './locks.js';
 import { readProjectSetup, type ProjectRow, type ProjectSetup } from './project-config.js';
 import { cloneUrl } from './project-row.js';
 import { takeRecordedStep } from './recorded-step.js';

@@ -1,7 +1,7 @@
 import { and, eq, inArray, isNull, notInArray } from 'drizzle-orm';
 
 import { db, schema } from './db/client.js';
-import { lockFault, locksHeld, MACHINE_LOCK, NIGHTLY_LOCK, tryLock } from './machine.js';
+import { lockFault, locksHeld, MACHINE_LOCK, NIGHTLY_LOCK, tryLock } from './locks.js';
 import { projectsLastSeen } from './poller-github.js';
 import { inDatabase, takeEvent } from './poller-pass.js';
 import { commandFor } from './poller.js';

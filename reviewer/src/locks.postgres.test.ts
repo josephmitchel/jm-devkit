@@ -28,7 +28,7 @@ async function onServer(sql: string): Promise<void> {
 }
 
 // Imported once the scratch database exists: the code reviewer's client reads DATABASE_URL on import.
-let machine: typeof import('./machine.js');
+let locks: typeof import('./locks.js');
 let queue: typeof import('./queue-run.js');
 let state: typeof import('./db/client.js');
 
@@ -39,7 +39,7 @@ beforeAll(async () => {
   process.env.DATABASE_URL = address.href;
   state = await import('./db/client.js');
   await (await import('./migrate.js')).runMigrations();
-  machine = await import('./machine.js');
+  locks = await import('./locks.js');
   queue = await import('./queue-run.js');
 }, 60_000);
 
@@ -54,32 +54,48 @@ beforeEach(async () => {
 
 describe("the machine's lock", () => {
   it('is held by one taker at a time, and can be taken again once it is let go', async () => {
-    const first = await machine.tryLock(machine.MACHINE_LOCK);
+    const first = await locks.tryLock(locks.MACHINE_LOCK);
     expect(first).not.toBeNull();
-    expect(await machine.tryLock(machine.MACHINE_LOCK)).toBeNull();
+    expect(await locks.tryLock(locks.MACHINE_LOCK)).toBeNull();
     await first!.release();
-    const next = await machine.tryLock(machine.MACHINE_LOCK);
+    const next = await locks.tryLock(locks.MACHINE_LOCK);
     expect(next).not.toBeNull();
     await next!.release();
   });
 
   it('is shown to hold on a direct address: tried from a second connection while it is held, it is refused', async () => {
-    const held = await machine.tryLock(machine.MACHINE_LOCK);
+    const held = await locks.tryLock(locks.MACHINE_LOCK);
     const probe = await held!.probe();
     expect(probe.secondTook).toBe(false);
     expect(probe.secondSession).not.toBe(probe.holderSession);
     expect(probe.holderSessionAfter).toBe(probe.holderSession);
-    expect(await machine.lockFault(held!)).toBeNull();
+    expect(await locks.lockFault(held!)).toBeNull();
     // The proof took nothing and let go of nothing.
-    expect(await machine.locksHeld()).toEqual(new Set([machine.MACHINE_LOCK]));
+    expect(await locks.locksHeld()).toEqual(new Set([locks.MACHINE_LOCK]));
     expect(held!.lost()).toBe(false);
     await held!.release();
-    expect(await machine.locksHeld()).toEqual(new Set());
+    expect(await locks.locksHeld()).toEqual(new Set());
+  });
+
+  it('can be waited for: a taker that waits has the lock once its holder lets go, and not before', async () => {
+    const first = await locks.tryLock(locks.MIGRATE_LOCK);
+    let got = false;
+    const waiting = locks.takeLock(locks.MIGRATE_LOCK).then((held) => {
+      got = true;
+      return held;
+    });
+    await new Promise((later) => setTimeout(later, 300));
+    expect(got).toBe(false);
+    await first!.release();
+    const second = await waiting;
+    expect(got).toBe(true);
+    await second.release();
+    expect(await locks.locksHeld()).toEqual(new Set());
   });
 
   it("is apart from the nightly run's: holding one does not take the other", async () => {
-    const night = await machine.tryLock(machine.NIGHTLY_LOCK);
-    const job = await machine.tryLock(machine.MACHINE_LOCK);
+    const night = await locks.tryLock(locks.NIGHTLY_LOCK);
+    const job = await locks.tryLock(locks.MACHINE_LOCK);
     expect(night).not.toBeNull();
     expect(job).not.toBeNull();
     await job!.release();
@@ -87,45 +103,45 @@ describe("the machine's lock", () => {
   });
 
   it("is apart from a project's checks lock, which is held by one run at a time and stands in no other project's way", async () => {
-    const widgets = machine.checksLockKey('acme/widgets');
-    const first = await machine.tryLock(widgets, machine.CHECKS_LOCK_CLASS);
+    const widgets = locks.checksLockKey('acme/widgets');
+    const first = await locks.tryLock(widgets, locks.CHECKS_LOCK_CLASS);
     expect(first).not.toBeNull();
-    expect(await machine.tryLock(widgets, machine.CHECKS_LOCK_CLASS)).toBeNull();
-    expect(await machine.locksHeld(machine.CHECKS_LOCK_CLASS)).toEqual(new Set([widgets]));
-    expect(await machine.locksHeld()).toEqual(new Set());
-    const gadgets = await machine.tryLock(machine.checksLockKey('acme/gadgets'), machine.CHECKS_LOCK_CLASS);
-    const job = await machine.tryLock(machine.MACHINE_LOCK);
+    expect(await locks.tryLock(widgets, locks.CHECKS_LOCK_CLASS)).toBeNull();
+    expect(await locks.locksHeld(locks.CHECKS_LOCK_CLASS)).toEqual(new Set([widgets]));
+    expect(await locks.locksHeld()).toEqual(new Set());
+    const gadgets = await locks.tryLock(locks.checksLockKey('acme/gadgets'), locks.CHECKS_LOCK_CLASS);
+    const job = await locks.tryLock(locks.MACHINE_LOCK);
     expect(gadgets).not.toBeNull();
     expect(job).not.toBeNull();
     await job!.release();
     await gadgets!.release();
     await first!.release();
-    expect(await machine.locksHeld(machine.CHECKS_LOCK_CLASS)).toEqual(new Set());
+    expect(await locks.locksHeld(locks.CHECKS_LOCK_CLASS)).toEqual(new Set());
   });
 
   it('can be seen to be held without being taken, and is seen free once it is let go', async () => {
-    expect(await machine.locksHeld()).toEqual(new Set());
-    const night = await machine.tryLock(machine.NIGHTLY_LOCK);
-    expect(await machine.locksHeld()).toEqual(new Set([machine.NIGHTLY_LOCK]));
-    const job = await machine.tryLock(machine.MACHINE_LOCK);
-    expect(await machine.locksHeld()).toEqual(new Set([machine.NIGHTLY_LOCK, machine.MACHINE_LOCK]));
+    expect(await locks.locksHeld()).toEqual(new Set());
+    const night = await locks.tryLock(locks.NIGHTLY_LOCK);
+    expect(await locks.locksHeld()).toEqual(new Set([locks.NIGHTLY_LOCK]));
+    const job = await locks.tryLock(locks.MACHINE_LOCK);
+    expect(await locks.locksHeld()).toEqual(new Set([locks.NIGHTLY_LOCK, locks.MACHINE_LOCK]));
     // Looking took nothing: both are still refused to a second taker, and both come free.
-    expect(await machine.tryLock(machine.NIGHTLY_LOCK)).toBeNull();
+    expect(await locks.tryLock(locks.NIGHTLY_LOCK)).toBeNull();
     await job!.release();
     await night!.release();
-    expect(await machine.locksHeld()).toEqual(new Set());
+    expect(await locks.locksHeld()).toEqual(new Set());
   });
 
   it('is let go when the connection holding it is lost, as when its process dies', async () => {
     const dying = new pg.Client({ connectionString: process.env.DATABASE_URL });
     await dying.connect();
-    await dying.query('select pg_advisory_lock($1, $2)', [0x636f6465, machine.MACHINE_LOCK]);
-    expect(await machine.tryLock(machine.MACHINE_LOCK)).toBeNull();
+    await dying.query('select pg_advisory_lock($1, $2)', [locks.LOCK_CLASS, locks.MACHINE_LOCK]);
+    expect(await locks.tryLock(locks.MACHINE_LOCK)).toBeNull();
     await dying.end();
     // The server lets go as it closes the session, a moment after the client has gone.
     let taken = null;
     for (let tries = 0; taken === null && tries < 50; tries++) {
-      taken = await machine.tryLock(machine.MACHINE_LOCK);
+      taken = await locks.tryLock(locks.MACHINE_LOCK);
       if (taken === null) await new Promise((again) => setTimeout(again, 100));
     }
     expect(taken).not.toBeNull();
@@ -164,7 +180,7 @@ describe('a turn of the queue with a review on record', () => {
   });
 
   it('starts nothing while another agent job has the machine, and leaves the review queued as it was', async () => {
-    const other = await machine.tryLock(machine.MACHINE_LOCK);
+    const other = await locks.tryLock(locks.MACHINE_LOCK);
     try {
       expect(await queue.runQueueTurn(say)).toBe('nothing started');
     } finally {
@@ -175,11 +191,11 @@ describe('a turn of the queue with a review on record', () => {
   });
 
   it('starts nothing while a nightly run is going, though nothing is running at that moment, and does not touch the machine', async () => {
-    const night = await machine.tryLock(machine.NIGHTLY_LOCK);
+    const night = await locks.tryLock(locks.NIGHTLY_LOCK);
     try {
       expect(await queue.runQueueTurn(say)).toBe('nothing started');
       // The nightly run, waiting, finds the machine free: the turn did not take it.
-      expect(await machine.locksHeld()).toEqual(new Set([machine.NIGHTLY_LOCK]));
+      expect(await locks.locksHeld()).toEqual(new Set([locks.NIGHTLY_LOCK]));
     } finally {
       await night!.release();
     }
@@ -188,8 +204,8 @@ describe('a turn of the queue with a review on record', () => {
   });
 
   it('shows the same in status: what holds the machine, and the review waiting for it', async () => {
-    const night = await machine.tryLock(machine.NIGHTLY_LOCK);
-    const job = await machine.tryLock(machine.MACHINE_LOCK);
+    const night = await locks.tryLock(locks.NIGHTLY_LOCK);
+    const job = await locks.tryLock(locks.MACHINE_LOCK);
     try {
       const facts = await queue.queueStatusFacts();
       expect(facts.machine).toEqual({ agentJobRunning: true, nightlyGoing: true });

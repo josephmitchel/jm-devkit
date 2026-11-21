@@ -1,8 +1,8 @@
 import { and, asc, desc, eq, inArray, isNotNull, isNull } from 'drizzle-orm';
 
-import { db, pool, schema } from './db/client.js';
+import { db, schema } from './db/client.js';
 import { appCredentials } from './gh-auth.js';
-import { LOCK_CLASS } from './migrate.js';
+import { PASS_LOCK, tryLock } from './locks.js';
 import { commentsSeen, projectsSeen, pullRequestsSeen, type Asking, type Memory } from './poller-github.js';
 import {
   commandFor,
@@ -30,8 +30,6 @@ import { interruptRunsLeftRunning, runLine, stopping } from './runs.js';
  * around them, in an order that keeps an event from being handled twice or lost.
  */
 
-// Held for the whole of a pass, on a connection of its own, so it is let go when the process dies.
-const PASS_LOCK_KEY = 2;
 // Longer than GitHub ever takes to answer; a request that hangs must not hold every later pass.
 const ANSWER_WITHIN_MS = 30_000;
 
@@ -43,17 +41,12 @@ export type PassOutcome = 'succeeded' | 'failed' | 'not started';
  * pass started by hand beside it.
  */
 export async function underPassLock<T>(work: () => Promise<T>): Promise<T | 'not started'> {
-  const lock = await pool.connect();
+  const lock = await tryLock(PASS_LOCK);
+  if (!lock) return 'not started';
   try {
-    const held = await lock.query('select pg_try_advisory_lock($1, $2) as held', [LOCK_CLASS, PASS_LOCK_KEY]);
-    if (!held.rows[0].held) return 'not started';
-    try {
-      return await work();
-    } finally {
-      await lock.query('select pg_advisory_unlock($1, $2)', [LOCK_CLASS, PASS_LOCK_KEY]);
-    }
+    return await work();
   } finally {
-    lock.release();
+    await lock.release();
   }
 }
 

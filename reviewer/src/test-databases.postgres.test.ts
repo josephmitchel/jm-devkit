@@ -185,8 +185,8 @@ describe("a project's test databases, on a real Postgres", () => {
     const sweep = await databases.provideTestDatabases(run('sweep:8'), naming);
     const idle = await databases.provideTestDatabases(run('checks:acme/gadgets'), naming);
     const busy = await databases.provideTestDatabases(run('checks:acme/widgets'), naming);
-    const machine = await import('./machine.js');
-    const running = await machine.tryLock(machine.checksLockKey('acme/widgets'), machine.CHECKS_LOCK_CLASS);
+    const locks = await import('./locks.js');
+    const running = await locks.tryLock(locks.checksLockKey('acme/widgets'), locks.CHECKS_LOCK_CLASS);
     expect(running).not.toBeNull();
 
     let lines: string[];
@@ -202,7 +202,7 @@ describe("a project's test databases, on a real Postgres", () => {
     expect(await exists(nameOf(busy.env.APP_DATABASE_URL))).toBe(true);
     expect(lines).toContain("acme/widgets's nightly checks are running: their test databases are left to that run");
     // Its lock was let go again: the project's checks can run.
-    expect(await machine.locksHeld(machine.CHECKS_LOCK_CLASS)).toEqual(new Set());
+    expect(await locks.locksHeld(locks.CHECKS_LOCK_CLASS)).toEqual(new Set());
   });
 
   it('drops a database a project command left a connection open to', async () => {

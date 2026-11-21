@@ -1,22 +1,27 @@
 import { createHash } from 'node:crypto';
 
 import { pool } from './db/client.js';
-import { LOCK_CLASS } from './migrate.js';
 
 /**
- * The machine's locks. Jobs that run agents run one at a time on the machine, and these are how a
- * job knows whether it may: Postgres advisory locks, each held on a connection of its own, so a
- * holder that dies lets go. Who may take which, and when, is decided in queue.ts (`machineFor`).
- *
- * Only the commands that start agent jobs on the machine take them: the nightly run and the
- * queue. `sweep` and `run` themselves do not, because a project still on GitHub Actions runs them
- * against the same database and must not wait for this machine.
+ * Every Postgres advisory lock the code reviewer takes: the keys, and the one way a lock is taken,
+ * tried, seen and let go. Each is held on a connection of its own, so a holder that dies lets go.
  *
  * They are session locks: they do not hold through a pooler that shares sessions, so whoever takes
  * one to start agent jobs under it first shows that it holds ({@link lockFault}).
  */
 
-/** Held by whoever is running an agent job on the machine: a review, or the nightly run for its sweeps. */
+// 'code': arbitrary but stable, so every process picks the same locks.
+export const LOCK_CLASS = 0x636f6465;
+/** Held while migrations are applied, so two processes that start together do not both apply one. */
+export const MIGRATE_LOCK = 1;
+/** Held for the whole of a pass of the poller: passes do not overlap. */
+export const PASS_LOCK = 2;
+/**
+ * Held by whoever is running an agent job on the machine: a review, or the nightly run for its
+ * sweeps. With the next, it keeps agent jobs to one at a time; `machineFor` in queue.ts says who
+ * may take which. Only the `nightly` and `queue` commands take them. `sweep` and `run` do not: a
+ * project still on GitHub Actions runs them against the same database and must not wait.
+ */
 export const MACHINE_LOCK = 3;
 /** Held by a nightly run from its start to its end, its wait for the machine included. */
 export const NIGHTLY_LOCK = 4;
@@ -81,7 +86,16 @@ export async function lockFault(held: Held): Promise<MachineLockError | null> {
 const KEPT_ALIVE_EVERY_MS = 60_000;
 
 /** Take a lock if nobody holds it. It is held until released, or until this process ends. */
-export async function tryLock(key: number, lockClass: number = LOCK_CLASS): Promise<Held | null> {
+export function tryLock(key: number, lockClass: number = LOCK_CLASS): Promise<Held | null> {
+  return hold(key, lockClass, false);
+}
+
+/** Take a lock, waiting for whoever holds it to let go. */
+export async function takeLock(key: number, lockClass: number = LOCK_CLASS): Promise<Held> {
+  return (await hold(key, lockClass, true))!;
+}
+
+async function hold(key: number, lockClass: number, wait: boolean): Promise<Held | null> {
   const client = await pool.connect();
   let isLost = false;
   const lost = (err: unknown) => {
@@ -97,7 +111,10 @@ export async function tryLock(key: number, lockClass: number = LOCK_CLASS): Prom
   const session = async () => Number((await client.query('select pg_backend_pid() as session')).rows[0].session);
   let holderSession: number;
   try {
-    const { rows } = await client.query('select pg_try_advisory_lock($1, $2) as held', [lockClass, key]);
+    const { rows } = await client.query(
+      wait ? 'select pg_advisory_lock($1, $2), true as held' : 'select pg_try_advisory_lock($1, $2) as held',
+      [lockClass, key],
+    );
     if (!rows[0].held) {
       letGo(false);
       return null;

@@ -301,7 +301,7 @@ and reported the same way, and exits 1 when a check failed.
   as a whole has no time limit: the setup command and each check have their own.
 - **One run per project at a time.** The nightly step and a run by hand share the checkout and
   the project's test databases, so a run of the checks holds a lock of the project's own (a
-  Postgres advisory lock, `checksLockKey` in `src/machine.ts`). A second run by hand while one is
+  Postgres advisory lock, `checksLockKey` in `src/locks.ts`). A second run by hand while one is
   going says so, records nothing and exits 1. A nightly step that meets a run by hand fails
   before it touches anything, with the error type `ChecksRunningError`, on the code reviewer's
   side.
@@ -448,7 +448,7 @@ queues.
   and it has changed since the last pass.
 
 **One agent job at a time.** A review and a sweep run agents on the one subscription, so they
-never run together on the machine. Two Postgres advisory locks say who may run (`src/machine.ts`):
+never run together on the machine. Two Postgres advisory locks say who may run (`src/locks.ts`):
 
 - the machine's lock, held by whoever is running an agent job: the queue for the length of a
   review, the nightly run for the length of the night;
@@ -465,7 +465,7 @@ a project still on Actions runs them against the same database. The locks are ta
 
 The locks belong to a database session, so they hold only on a direct address. Before the nightly
 run or a turn of the queue starts any agent job it tries the lock it holds from a second
-connection (`lockFault` in `src/machine.ts`). If the second is given the lock, or the two
+connection (`lockFault` in `src/locks.ts`). If the second is given the lock, or the two
 connections turn out to share a session, no agent job is started: the nightly run, or the review
 that was next, is recorded as failed with the error type `MachineLockError`, which opens the
 failure issue in the kit's repository. If the connection holding the lock is lost while a run is
@@ -614,7 +614,7 @@ intake → audit (scout + 10 auditors) → synthesis ──┬─ clean → gate
 - `src/night-summary.ts` — whether a night's summary is posted, its title and text, and the discussion category it goes in, as decisions; `src/post-summary.ts` — the `summary` command, which posts it
 - `src/nightly-checks.ts` — a project's nightly checks: the order they run in and what happens after one fails, as a decision; the account a failed run ends with; the `checks` command
 - `src/poller.ts` — a pass of the poller as a decision: the events it acts on, what it runs and when it tries again; `src/poller-github.ts` — what a pass asks GitHub, conditionally, and the answers it keeps; `src/poller-pass.ts` — the pass itself: the record of events, the lock, and running each command
-- `src/queue.ts` — the queue of reviews as decisions: who has the machine, which review starts next, and what a review's run leaves of its event; `src/queue-run.ts` — one turn of the queue; `src/machine.ts` — the two locks that keep agent jobs to one at a time; `src/reply-authority.ts` — whose comment counts as the owner's word
+- `src/queue.ts` — the queue of reviews as decisions: who has the machine, which review starts next, and what a review's run leaves of its event; `src/queue-run.ts` — one turn of the queue; `src/locks.ts` — every advisory lock the code reviewer takes (migrations, a pass, the two that keep agent jobs to one at a time, a project's nightly checks) and the proof that a lock holds; `src/reply-authority.ts` — whose comment counts as the owner's word
 - `src/failure-side.ts` — which side a failed run is on, from the type of its error; `src/failure-issue.ts` — what a failure issue says and when it is opened, commented on and closed; `src/failure-report.ts` — which places a finished run is reported to, and the reporting (`reportRun`)
 - `bin/update.mjs` — brings the code reviewer's own checkout up to date before a nightly run; `src/project-row.ts` — creates a project's row the first time it is met
 - `../vm/` — the machine setup and the systemd units it installs

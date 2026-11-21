@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { checksLockKey, lockHolds, type LockProbe } from './machine.js';
+import { checksLockKey, lockHolds, type LockProbe } from './locks.js';
 
 /** A held lock tried from a second connection on a direct address: its own session, and refused. */
 const direct: LockProbe = { holderSession: 4101, holderSessionAfter: 4101, secondSession: 4102, secondTook: false };
