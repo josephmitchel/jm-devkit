@@ -119,13 +119,13 @@ export async function runNightly(): Promise<Outcome | 'not started'> {
     return 'not started';
   }
   try {
-    return await theNight(night);
+    return await runWithNightlyLock(night);
   } finally {
     await night.release();
   }
 }
 
-async function theNight(night: Held): Promise<Outcome> {
+async function runWithNightlyLock(night: Held): Promise<Outcome> {
   // Before anything trusts the lock: what follows calls other runs dead on its word.
   const fault = await lockFault(night);
   if (fault) return notStarted(fault);

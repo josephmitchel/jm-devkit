@@ -4,7 +4,7 @@ import { db, schema } from './db/client.js';
 import { appCredentials } from './gh-auth.js';
 import { PASS_LOCK, tryLock } from './locks.js';
 import { why } from './log.js';
-import { commentsSeen, projectsSeen, pullRequestsSeen, type Asking, type Memory } from './poller-github.js';
+import { commentsSeen, projectsSeen, pullRequestsSeen, type GitHubAccess, type Memory } from './poller-github.js';
 import {
   commandFor,
   gatesOfPassedReviews,
@@ -79,7 +79,7 @@ async function pass(say: (line: string) => void): Promise<PassOutcome> {
 
   const credentials = appCredentials();
   if (!credentials) throw new Error("a pass needs the code reviewer's App: set REVIEWER_APP_CLIENT_ID and REVIEWER_APP_PRIVATE_KEY");
-  const asking: Asking = {
+  const github: GitHubAccess = {
     fetch: (input, init) => fetch(input, { ...init, signal: AbortSignal.timeout(ANSWER_WITHIN_MS) }),
     credentials,
     memory: inDatabase,
@@ -89,7 +89,7 @@ async function pass(say: (line: string) => void): Promise<PassOutcome> {
   // Projects GitHub did not answer about. They are left alone this pass and the pass ends failed.
   let unanswered = 0;
 
-  const { projects: read, unread } = await projectsSeen(asking);
+  const { projects: read, unread } = await projectsSeen(github);
   for (const { slug, why: reason } of unread) {
     say(`${slug} left alone this pass: its default branch could not be read (${reason})`);
     unanswered++;
@@ -104,12 +104,12 @@ async function pass(say: (line: string) => void): Promise<PassOutcome> {
     if (project.state !== 'handled') {
       // Said when it is learnt, not every few minutes.
       if (fresh) say(projectLine(project));
-      seen.push({ project, at: asking.now(), pullRequests: null });
+      seen.push({ project, at: github.now(), pullRequests: null });
       continue;
     }
     try {
       const [position] = await db.select().from(schema.pollerProjects).where(eq(schema.pollerProjects.project, project.slug));
-      const listing = await pullRequestsSeen(asking, project.slug, token, { etag: position?.pullsEtag ?? null, seenTo: position?.seenTo ?? null });
+      const listing = await pullRequestsSeen(github, project.slug, token, { etag: position?.pullsEtag ?? null, seenTo: position?.seenTo ?? null });
       if (position) {
         // Every event on record when the listing is read; otherwise only those still to be handled.
         const events = await eventsOnRecord(project.slug, listing.pullRequests === null);
@@ -120,7 +120,7 @@ async function pass(say: (line: string) => void): Promise<PassOutcome> {
         const reviews = listing.pullRequests === null ? [] : await reviewsKnown(project.slug);
         const before: ProjectKnown = { startedAt: position.startedAt, seenTo: position.seenTo, events, passedGates, reviews };
         for (const { pr, since } of repliesToRead(listing.pullRequests ?? [], before)) {
-          pr.comments = await commentsSeen(asking, project.slug, token, pr.number, since);
+          pr.comments = await commentsSeen(github, project.slug, token, pr.number, since);
         }
         known.set(project.slug, before);
       }
@@ -132,10 +132,10 @@ async function pass(say: (line: string) => void): Promise<PassOutcome> {
     }
   }
 
-  const decision = passDecision({ projects: seen }, { projects: known }, asking.now());
+  const decision = passDecision({ projects: seen }, { projects: known }, github.now());
 
   for (const p of decision.projects) {
-    await recordPass(p.project, p.found, { startedAt: p.startedAt, seenTo: p.seenTo, pullsEtag: etags.get(p.project) ?? null, lastPassAt: asking.now() });
+    await recordPass(p.project, p.found, { startedAt: p.startedAt, seenTo: p.seenTo, pullsEtag: etags.get(p.project) ?? null, lastPassAt: github.now() });
     if (p.firstPass) say(`${p.project}: first pass. Watched from ${p.startedAt.toISOString()}; nothing before that is acted on`);
   }
   // On record now, and not this pass's to run: the queue starts it when the machine is free.
@@ -157,7 +157,7 @@ async function pass(say: (line: string) => void): Promise<PassOutcome> {
       `, ${ended.length} command(s) run` +
       (ended.length > 0 ? ` (${count('succeeded')} succeeded, ${count('failed')} failed, ${count('interrupted')} interrupted)` : '') +
       (left > 0 ? `, ${left} left for the next pass` : '') +
-      `. GitHub was asked ${asking.tally.asked} time(s) and answered "unchanged" to ${asking.tally.unchanged}`,
+      `. GitHub was asked ${github.tally.asked} time(s) and answered "unchanged" to ${github.tally.unchanged}`,
   );
   return unanswered > 0 || ended.some((e) => e !== 'succeeded' && e !== 'taken') || left > 0 ? 'failed' : 'succeeded';
 }

@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 
-import { commentsSeen, projectsLastSeen, projectsSeen, pullRequestsSeen, type Asking, type Remembered } from './poller-github.js';
+import { commentsSeen, projectsLastSeen, projectsSeen, pullRequestsSeen, type GitHubAccess, type Remembered } from './poller-github.js';
 
 const { privateKey } = crypto.generateKeyPairSync('rsa', {
   modulusLength: 2048,
@@ -102,7 +102,7 @@ function github(world: World) {
 function setUp(world: World) {
   const { fetch, requests, tokens } = github(world);
   const kept = new Map<string, Remembered>();
-  const asking: Asking = {
+  const asking: GitHubAccess = {
     fetch,
     credentials: { clientId: 'Iv1.standin', privateKey },
     memory: {

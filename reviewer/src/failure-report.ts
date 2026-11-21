@@ -19,13 +19,13 @@ import { reviewerRoot } from './workspace.js';
  */
 
 /** A report and the place it is for: a project, or the kit's repository, as `owner/name`. */
-export interface Told {
+export interface ReportForPlace {
   place: string;
   report: Report;
 }
 
-/** What is seen on the machine about a run that is being reported. */
-export interface Seen {
+/** What the machine knows about a run that is being reported, beyond its row. */
+export interface RunContext {
   /** The kit's own repository, where failures on the code reviewer's side go. */
   kitRepository: string;
   kitCommit: string | null;
@@ -82,25 +82,25 @@ function ownOutcome(run: Run): 'succeeded' | 'failed' | null {
  * kind of run succeeded only when one did and none failed on the code reviewer's side. Otherwise
  * one project's success would close the issue another project's failure had just commented on.
  */
-export function reportsFor(run: Run, seen: Seen): Told[] {
+export function reportsFor(run: Run, context: RunContext): ReportForPlace[] {
   const outcome = ownOutcome(run);
   if (outcome === null) return [];
   const facts = (kind: string): RunFacts => ({
     kind,
     stage: run.stage,
     errorType: run.errorType,
-    kitCommit: seen.kitCommit,
+    kitCommit: context.kitCommit,
     time: (run.finishedAt ?? run.startedAt).toISOString(),
     runId: run.id,
   });
   if (outcome === 'failed') {
     return run.project !== null && failureSide(run.errorType) === 'project'
-      ? [{ place: run.project, report: { outcome, side: 'project', facts: facts(run.kind), tail: seen.tail } }]
-      : [{ place: seen.kitRepository, report: { outcome, side: 'kit', facts: facts(run.kind) } }];
+      ? [{ place: run.project, report: { outcome, side: 'project', facts: facts(run.kind), tail: context.tail } }]
+      : [{ place: context.kitRepository, report: { outcome, side: 'kit', facts: facts(run.kind) } }];
   }
-  const succeededOnKitSide = (kind: string): Told => ({ place: seen.kitRepository, report: { outcome, side: 'kit', facts: facts(kind) } });
-  const settled = [...new Set(seen.parts.map((p) => p.kind))].filter((kind) => {
-    const ofKind = seen.parts.filter((p) => p.kind === kind);
+  const succeededOnKitSide = (kind: string): ReportForPlace => ({ place: context.kitRepository, report: { outcome, side: 'kit', facts: facts(kind) } });
+  const settled = [...new Set(context.parts.map((p) => p.kind))].filter((kind) => {
+    const ofKind = context.parts.filter((p) => p.kind === kind);
     const failedOnKitSide = ofKind.some((p) => ownOutcome(p) === 'failed' && failureSide(p.errorType) === 'kit');
     return !failedOnKitSide && ofKind.some((p) => p.state === 'succeeded');
   });
@@ -229,9 +229,9 @@ export async function reportRun(run: Run, say?: (line: string) => void, reporter
   };
   const outcome = ownOutcome(run);
   if (outcome === null) return;
-  let told: Told[];
+  let reports: ReportForPlace[];
   try {
-    told = reportsFor(run, {
+    reports = reportsFor(run, {
       kitRepository: reporter.kitRepository(),
       kitCommit: reporter.kitCommit(),
       tail: outcome === 'failed' ? reporter.tail(run) : '',
@@ -241,7 +241,7 @@ export async function reportRun(run: Run, say?: (line: string) => void, reporter
     note(`could not report that it ${outcome}: ${why(err)}`);
     return;
   }
-  for (const { place, report } of told) {
+  for (const { place, report } of reports) {
     try {
       for (const line of await reporter.send(place, report)) note(line);
     } catch (err) {

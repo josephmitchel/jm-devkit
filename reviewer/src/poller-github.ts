@@ -31,7 +31,7 @@ export interface Memory {
 }
 
 /** How a pass reaches GitHub, and what it has to do it with. */
-export interface Asking {
+export interface GitHubAccess {
   fetch: typeof fetch;
   credentials: { clientId: string; privateKey: string };
   memory: Memory;
@@ -55,9 +55,9 @@ interface Request {
   etag?: string | null;
 }
 
-async function ask(asking: Asking, request: Request): Promise<Answer> {
+async function ask(github: GitHubAccess, request: Request): Promise<Answer> {
   const method = request.method ?? 'GET';
-  const res = await asking.fetch(`${API}${request.path}`, {
+  const res = await github.fetch(`${API}${request.path}`, {
     method,
     headers: {
       authorization: `Bearer ${request.auth}`,
@@ -67,12 +67,12 @@ async function ask(asking: Asking, request: Request): Promise<Answer> {
       ...(request.etag ? { 'if-none-match': request.etag } : {}),
     },
   });
-  asking.tally.asked++;
+  github.tally.asked++;
   // GitHub's clock, so a time compared with one of GitHub's is not thrown by the machine's.
   const stamped = Date.parse(res.headers.get('date') ?? '');
-  const at = Number.isNaN(stamped) ? asking.now() : new Date(stamped);
+  const at = Number.isNaN(stamped) ? github.now() : new Date(stamped);
   if (res.status === 304) {
-    asking.tally.unchanged++;
+    github.tally.unchanged++;
     return { status: 'unchanged', at };
   }
   if (res.status === 404) return { status: 'missing', at };
@@ -85,18 +85,18 @@ async function ask(asking: Asking, request: Request): Promise<Answer> {
  * `read` makes the answer from what GitHub sent, and it is kept with its ETag for the next pass.
  */
 async function remembered<T>(
-  asking: Asking,
+  github: GitHubAccess,
   question: string,
   request: Request,
   read: (body: string) => T | Promise<T>,
 ): Promise<{ answer: T; fresh: boolean } | null> {
-  const kept = await asking.memory.recall(question);
-  const answer = await ask(asking, { ...request, etag: kept?.etag });
+  const kept = await github.memory.recall(question);
+  const answer = await ask(github, { ...request, etag: kept?.etag });
   if (answer.status === 'missing') return null;
   if (answer.status === 'unchanged' && kept) return { answer: kept.answer as T, fresh: false };
   if (answer.status === 'unchanged') throw new GitHubError(`GitHub GET ${request.path}: 304 to a question asked without an ETag`, 304);
   const fresh = await read(answer.body);
-  await asking.memory.keep(question, { etag: answer.etag, answer: fresh });
+  await github.memory.keep(question, { etag: answer.etag, answer: fresh });
   return { answer: fresh, fresh: true };
 }
 
@@ -120,10 +120,10 @@ async function allPages<T>(page: (n: number) => Promise<{ items: T[]; full: bool
 }
 
 /** A list GitHub serves a hundred at a time, each page a question of its own. */
-function rememberedPages<T>(asking: Asking, question: string, request: Request, items: (body: string) => T[]): Promise<T[]> {
+function rememberedPages<T>(github: GitHubAccess, question: string, request: Request, items: (body: string) => T[]): Promise<T[]> {
   return allPages(async (n) => {
     const path = pagePath(request.path, n);
-    const got = await remembered(asking, pageOf(question, n), { ...request, path }, (body) => {
+    const got = await remembered(github, pageOf(question, n), { ...request, path }, (body) => {
       const list = items(body);
       return { list, full: list.length === 100 };
     });
@@ -148,24 +148,24 @@ export interface ProjectRead {
  * only when its default branch has moved. A project whose default branch could not be read is
  * returned apart: it is neither handled nor skipped on an answer that did not come.
  */
-export async function projectsSeen(asking: Asking): Promise<{ projects: ProjectRead[]; unread: Array<{ slug: string; why: string }> }> {
-  const jwt = appJwt(asking.credentials, asking.now().getTime());
-  const installations = await rememberedPages(asking, INSTALLATIONS, { path: '/app/installations', auth: jwt }, (body) =>
+export async function projectsSeen(github: GitHubAccess): Promise<{ projects: ProjectRead[]; unread: Array<{ slug: string; why: string }> }> {
+  const jwt = appJwt(github.credentials, github.now().getTime());
+  const installations = await rememberedPages(github, INSTALLATIONS, { path: '/app/installations', auth: jwt }, (body) =>
     (JSON.parse(body) as Array<{ id: number }>).map((i) => i.id),
   );
   const projects: ProjectRead[] = [];
   const unread: Array<{ slug: string; why: string }> = [];
   for (const id of installations) {
-    const token = await mintToken(asking, id, jwt);
+    const token = await mintToken(github, id, jwt);
     const slugs = await rememberedPages(
-      asking,
+      github,
       repositoriesOf(id),
       { path: '/installation/repositories', auth: token },
       (body) => (JSON.parse(body) as { repositories: Array<{ full_name: string }> }).repositories.map((r) => r.full_name),
     );
     for (const slug of slugs) {
       try {
-        projects.push({ slug, token, ...(await defaultBranch(asking, slug, token)) });
+        projects.push({ slug, token, ...(await defaultBranch(github, slug, token)) });
       } catch (err) {
         if (!(err instanceof GitHubError)) throw err;
         unread.push({ slug, why: err.message });
@@ -202,12 +202,12 @@ export async function projectsLastSeen(memory: Memory): Promise<Array<{ slug: st
  * its head", whose ETag is the commit itself, whatever credential asks. The two files are read
  * again only when that commit is not the one they were last read at, however GitHub answered.
  */
-async function defaultBranch(asking: Asking, slug: string, token: string): Promise<{ observed: Observed; fresh: boolean }> {
+async function defaultBranch(github: GitHubAccess, slug: string, token: string): Promise<{ observed: Observed; fresh: boolean }> {
   const question = defaultBranchOf(slug);
-  const kept = (await asking.memory.recall(question)) as { etag: string | null; answer: { head: string; observed: Observed } } | null;
+  const kept = (await github.memory.recall(question)) as { etag: string | null; answer: { head: string; observed: Observed } } | null;
   let head;
   try {
-    head = await ask(asking, { path: `/repos/${slug}/commits/HEAD`, auth: token, accept: 'application/vnd.github.sha', etag: kept?.etag });
+    head = await ask(github, { path: `/repos/${slug}/commits/HEAD`, auth: token, accept: 'application/vnd.github.sha', etag: kept?.etag });
   } catch (err) {
     // A repository with no commits yet.
     if (!(err instanceof GitHubError && err.status === 409)) throw err;
@@ -217,19 +217,19 @@ async function defaultBranch(asking: Asking, slug: string, token: string): Promi
   if (kept && (head.status === 'unchanged' || head.body.trim() === kept.answer.head)) return { observed: kept.answer.observed, fresh: false };
   if (head.status === 'unchanged') throw new GitHubError(`GitHub GET /repos/${slug}/commits/HEAD: 304 to a question asked without an ETag`, 304);
   const read = (path: string) => {
-    asking.tally.asked++;
-    return defaultBranchFile({ fetch: asking.fetch, slug, token, path });
+    github.tally.asked++;
+    return defaultBranchFile({ fetch: github.fetch, slug, token, path });
   };
   const config = await read(CONFIG_FILE);
   const observed: Observed = { config, sweepWorkflow: (await read(SWEEP_WORKFLOW)) !== null };
-  await asking.memory.keep(question, { etag: head.etag, answer: { head: head.body.trim(), observed } });
+  await github.memory.keep(question, { etag: head.etag, answer: { head: head.body.trim(), observed } });
   return { observed, fresh: true };
 }
 
 /** A new token for an installation. It is this pass's alone and is never written anywhere. */
-async function mintToken(asking: Asking, installation: number, jwt: string): Promise<string> {
+async function mintToken(github: GitHubAccess, installation: number, jwt: string): Promise<string> {
   const path = `/app/installations/${installation}/access_tokens`;
-  const answer = await ask(asking, { path, auth: jwt, method: 'POST' });
+  const answer = await ask(github, { path, auth: jwt, method: 'POST' });
   if (answer.status !== 'changed') throw new GitHubError(`GitHub POST ${path}: no token`, 404);
   return (JSON.parse(answer.body) as { token: string }).token;
 }
@@ -248,19 +248,19 @@ export interface ListingPosition {
  * merge, a label, a new head and a comment all change it.
  */
 export async function pullRequestsSeen(
-  asking: Asking,
+  github: GitHubAccess,
   slug: string,
   token: string,
   position: ListingPosition,
 ): Promise<{ at: Date; etag: string | null; pullRequests: PullRequestSeen[] | null }> {
   const page = (n: number) => `/repos/${slug}/pulls?state=all&sort=updated&direction=desc&per_page=100&page=${n}`;
-  const first = await ask(asking, { path: page(1), auth: token, etag: position.etag });
+  const first = await ask(github, { path: page(1), auth: token, etag: position.etag });
   if (first.status === 'unchanged') return { at: first.at, etag: position.etag, pullRequests: null };
   if (first.status === 'missing') throw new GitHubError(`GitHub GET ${page(1)}: 404`, 404);
   const pullRequests = listed(first.body);
   // Further back only while a whole page is newer than where the last pass got to.
   for (let n = 2; pullRequests.length === (n - 1) * 100 && position.seenTo !== null && pullRequests.at(-1)!.updatedAt > position.seenTo; n++) {
-    const next = await ask(asking, { path: page(n), auth: token });
+    const next = await ask(github, { path: page(n), auth: token });
     if (next.status !== 'changed') break;
     pullRequests.push(...listed(next.body));
   }
@@ -297,11 +297,11 @@ function listed(body: string): PullRequestSeen[] {
  * reads the same two). Not asked conditionally: a pass asks only when the pull request has
  * changed and its review is waiting.
  */
-export async function commentsSeen(asking: Asking, slug: string, token: string, pr: number, since: Date): Promise<CommentSeen[]> {
+export async function commentsSeen(github: GitHubAccess, slug: string, token: string, pr: number, since: Date): Promise<CommentSeen[]> {
   const pages = <T>(path: string): Promise<T[]> =>
     allPages(async (n) => {
       const paged = pagePath(path, n);
-      const answer = await ask(asking, { path: paged, auth: token });
+      const answer = await ask(github, { path: paged, auth: token });
       if (answer.status !== 'changed') throw new GitHubError(`GitHub GET ${paged}: no answer`, 404);
       const items = JSON.parse(answer.body) as T[];
       return { items, full: items.length === 100 };
