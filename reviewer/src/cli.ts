@@ -34,7 +34,8 @@ const USAGE = `code-reviewer — standalone multi-agent PR review service
 Usage:
   code-reviewer run <owner/repo> <pr#> [--once] run (or resume) the review loop for a PR
       --once                                    return instead of waiting for answers or the
-                                                review slot (for CI; prints the outcome)
+                                                review slot (for CI and the machine's queue;
+                                                prints the outcome)
   code-reviewer sweep <owner/repo>              run (or resume) tonight's sweep: judge closed
                                                 issues, audit what landed on the default branch,
                                                 file concerns as issues (never fixes, never gates)
@@ -71,7 +72,8 @@ Usage:
                                                 every pass of the poller)
   code-reviewer failure-issue <owner/repo>      open, comment on or close that repository's failure
                                                 issue, from the report of a finished run on its
-                                                input (the nightly run starts this; not for hand use)
+                                                input (every recorded run's report starts this;
+                                                not for hand use)
   code-reviewer landed <owner/repo> <pr#>       a PR merged: label the tickets it addresses
                                                 needs-judging and lift their blocking edges
   code-reviewer labels <owner/repo>             bring the repo's labels in line with the ticket
@@ -80,7 +82,8 @@ Usage:
                                                 whether the machine handles it
   code-reviewer migrate                        apply pending migrations (advisory-locked)
   code-reviewer next <owner/repo>               print the PR number of the next queued review
-  code-reviewer abandon <owner/repo> <pr#> [why]  record that a run ended mid-stage (CI cleanup)
+  code-reviewer abandon <owner/repo> <pr#> [why]  record that a run ended mid-stage (CI cleanup,
+                                                and the machine's after a run it stopped)
   code-reviewer carry-gate <owner/repo> <pr#>   gate a passed PR's new head if it holds reviewed code
   code-reviewer git-credential get              git credential helper (minted App token)
   code-reviewer repo add <owner/repo> [opts]    register a repo
@@ -97,8 +100,8 @@ Usage:
   code-reviewer reset <owner/repo> <pr#>        delete a review's state (concerns/policies kept)
 `;
 
-// The commands CI runs unattended. The admin ones print tables and confirmations for a person at
-// a terminal, where a timestamp on every line is only noise.
+// The commands that run unattended, on the machine or in CI. The admin ones print tables and
+// confirmations for a person at a terminal, where a timestamp on every line is only noise.
 const STAMPED = new Set(['run', 'sweep', 'summary', 'checks', 'nightly', 'nightly-not-started', 'poll', 'queue', 'landed', 'migrate', 'next', 'abandon', 'carry-gate']);
 
 async function main() {
@@ -326,9 +329,10 @@ async function repoUpsert(mode: 'add' | 'set', slug: string, argv: string[]): Pr
 }
 
 /**
- * Record that a run ended without finishing its stage — a cancelled or timed-out CI job, which never
- * gets to record anything itself. Without this a killed run's review keeps whatever stage it was in
- * and holds the repo's only review slot until the staleness bound expires hours later.
+ * Record that a run ended without finishing its stage — a cancelled or timed-out CI job, or a run
+ * the machine stopped or found dead, none of which gets to record anything itself. Without this a
+ * killed run's review keeps whatever stage it was in and holds the repo's only review slot until
+ * the staleness bound expires hours later.
  *
  * `failed` rather than `pending`, so the next run resumes the stage through inferRetryState instead
  * of restarting at intake and auditing an empty diff. A review in `awaiting_answers` is untouched:

@@ -27,7 +27,7 @@ export const CHECKS_LOCK_CLASS = 0x63686b73; // 'chks'
 /**
  * The key of the lock held by a run of one project's nightly checks, in {@link CHECKS_LOCK_CLASS}.
  * Two runs share a checkout and the project's test databases, so one goes at a time. Two projects
- * whose names hash alike (one chance in two thousand million) would only wait for each other.
+ * whose names hash alike (one chance in two thousand million) could not run their checks at once.
  */
 export function checksLockKey(slug: string): number {
   return createHash('sha256').update(slug.toLowerCase()).digest().readUInt32BE(0) >>> 1;

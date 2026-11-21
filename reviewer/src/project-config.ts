@@ -20,8 +20,8 @@ export interface ProjectSetup {
   harnessNotes: string | null;
   extraContext: string | null;
   /**
-   * Environment for the project's setup and test commands. Empty from the database row, whose
-   * project gets its environment from the action's `repo-env` input alone.
+   * Environment for the project's setup, test and nightly check commands. Empty from the database
+   * row, whose project gets its environment from the action's `repo-env` input alone.
    */
   env: Record<string, string>;
   /**

@@ -105,9 +105,10 @@ async function takeMachine(say: (line: string) => void): Promise<Held | null> {
 }
 
 /**
- * The whole nightly run: every handled project's sweep, one after another, each in a process of
- * its own. Every run is recorded and reported, and the nightly run ends failed if any part of it did.
- * Told to stop, it stops the sweep it is on, takes no further step and ends interrupted.
+ * The whole nightly run: every handled project's steps (its sweep, its summary, its nightly
+ * checks), one after another, each in a process of its own. Every run is recorded and reported,
+ * and the nightly run ends failed if any part of it did. Told to stop, it stops the step it is
+ * on, takes no further step and ends interrupted.
  *
  * It has the machine from its first step to its last. While it is going no review starts (the
  * queue sees its lock), and a review already running is waited for, so the night is put back and

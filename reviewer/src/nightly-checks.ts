@@ -29,7 +29,8 @@ export function checksNamed(config: string | null): TestCommand[] {
 
 /**
  * Who a project's checks' test databases belong to. The project, not the run: the checks have no
- * row of their own to resume, so what a killed run left is dropped by the project's next one.
+ * row of their own to resume, so what a killed run left is dropped by the project's next one, or
+ * by the next nightly run.
  */
 export function checksOwner(slug: string): RunOwner {
   return `checks:${slug}`;

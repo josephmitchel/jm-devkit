@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 
 /**
- * GitHub App authentication for CI runs.
+ * GitHub App authentication for unattended runs, in CI and on the machine.
  *
  * A round can take two hours and an installation token lives one, so a token handed to the
  * job at startup is dead by the time the fixer pushes — the one operation whose failure wastes
@@ -55,7 +55,7 @@ export function appAuthConfigured(): boolean {
 /**
  * Name the repo whose installation to use. The CLI knows it from its arguments; the git
  * credential helper is invoked by git with no arguments at all, so it falls back to the
- * environment variable the workflow exports.
+ * environment variable set for it: by the workflow in CI, by `runCommand` on the machine.
  */
 export function configureAppAuth(repoSlug: string): void {
   configuredRepo = repoSlug;

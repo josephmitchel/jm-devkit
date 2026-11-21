@@ -323,23 +323,24 @@ export const githubArtifacts = pgTable('github_artifacts', {
  */
 export const testDatabases = pgTable('test_databases', {
   name: text('name').primaryKey(),
-  // The run it was created for, `review:<id>` or `sweep:<id>`. The run resumed has the same owner.
+  // Whose it is: `review:<id>`, `sweep:<id>` or `checks:<owner/name>` (RunOwner). A resumed review
+  // or sweep has the same owner, and so has a project's next run of its checks.
   owner: text('owner').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
-// `checks`: one project's nightly checks, run after its sweep or by hand. `landed`: started by a
-// pass of the poller for a merged pull request, and part of no other run. `review`: a pull
-// request's review, found by a pass and started by the queue; also part of no other run.
+// `sweep`, `summary`, `checks`: one project's steps in a nightly run; `checks` is also run by
+// hand, as a run of its own. `landed`, `carry-gate`: started by a pass of the poller. `review`:
+// found by a pass and started by the queue.
 export type RunKind = 'nightly' | 'sweep' | 'summary' | 'checks' | 'landed' | 'carry-gate' | 'review';
 // `interrupted`: stopped before its command finished, by its time limit or by the service stopping,
 // or found still `running` by the next run. Its work is taken up again by the next run.
 export type RunState = 'running' | 'succeeded' | 'failed' | 'interrupted';
 
 /**
- * A run of one of the code reviewer's commands on the machine: a nightly run, one project's part
- * in it (its sweep, then the posting of the night's summary), or a command a pass of the poller
- * started. `kind` and `state` are text, so a new kind of run needs no migration.
+ * A run of one of the code reviewer's commands on the machine: a nightly run, one of a project's
+ * steps in it, a command a pass of the poller started, a review the queue started, or a project's
+ * nightly checks run by hand. `kind` and `state` are text, so a new kind of run needs no migration.
  */
 export const runs = pgTable('runs', {
   // `run-<UTC start time>-<random>` (newRunId). The run's output is the file runOutputPath names.
@@ -348,7 +349,7 @@ export const runs = pgTable('runs', {
   // owner/name, not a repos row: a project's first run is recorded before it has one. Null for a
   // run that is not one project's, such as the nightly run itself.
   project: text('project'),
-  // The run this one is part of: the nightly run, for a project's sweep. Null for a run the poller started.
+  // The nightly run this one is a step of. Null for every other run, the nightly run included.
   parentId: text('parent_id').references((): AnyPgColumn => runs.id),
   state: text('state').$type<RunState>().notNull().default('running'),
   // Both set only on a run that failed of itself. A nightly run that failed only because a
