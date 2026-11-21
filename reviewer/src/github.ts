@@ -211,7 +211,7 @@ export async function getDefaultBranch(repoSlug: string): Promise<string> {
   return (await ghJson<{ default_branch: string }>(['api', `repos/${repoSlug}`])).default_branch;
 }
 
-/** The text of a file on the repo's default branch, read without a checkout, or null when it has none. */
+/** The text of a file on a project's default branch, read without a checkout, or null when it has none. */
 export async function getDefaultBranchFile(repoSlug: string, filePath: string): Promise<string | null> {
   try {
     return await gh(['api', `repos/${repoSlug}/contents/${filePath}`, '-H', 'Accept: application/vnd.github.raw+json']);
@@ -427,8 +427,8 @@ export async function getDiscussionSetup(repoSlug: string): Promise<DiscussionSe
     'query($o:String!,$r:String!){ repository(owner:$o,name:$r){ id hasDiscussionsEnabled discussionCategories(first:100){ nodes { id name } } } }',
     { o: owner, r: name },
   );
-  const repo = data.repository;
-  return { repositoryId: repo.id, enabled: repo.hasDiscussionsEnabled, categories: repo.discussionCategories.nodes };
+  const { repository } = data;
+  return { repositoryId: repository.id, enabled: repository.hasDiscussionsEnabled, categories: repository.discussionCategories.nodes };
 }
 
 /** Discussions are created only through GraphQL, by the repository's and the category's ids. Returns the discussion's URL. */

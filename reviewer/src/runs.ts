@@ -326,7 +326,7 @@ async function runChild(run: Run, args: string[], limitMs: number | null, stoppa
     const timers: NodeJS.Timeout[] = [];
     const child = spawn(process.execPath, ['--import', 'tsx/esm', path.join(reviewerRoot, 'src/cli.ts'), ...args], {
       cwd: reviewerRoot,
-      // The install repo is for git's credential helper, which git starts with no arguments.
+      // The project to authenticate for, told to git's credential helper, which git starts with no arguments.
       env: { ...process.env, REVIEWER_RUN_ID: run.id, ...(run.project ? { REVIEWER_APP_INSTALL_REPO: run.project } : {}) },
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: true,

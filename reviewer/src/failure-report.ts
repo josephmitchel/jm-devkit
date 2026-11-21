@@ -16,16 +16,16 @@ import { reviewerRoot } from './workspace.js';
  * with every run once it has been recorded as finished; nothing else decides where a failure goes.
  */
 
-/** A report and the repository it is for. */
+/** A report and the place it is for: a project, or the kit's repository, as `owner/name`. */
 export interface Told {
-  repo: string;
+  place: string;
   report: Report;
 }
 
 /** What is seen on the machine about a run that is being reported. */
 export interface Seen {
   /** The kit's own repository, where failures on the code reviewer's side go. */
-  kitRepo: string;
+  kitRepository: string;
   kitCommit: string | null;
   /** The end of the run's output. Only a failure on the project's side sends it anywhere. */
   tail: string;
@@ -37,7 +37,7 @@ export interface Seen {
 const KIT_REPO_VAR = 'REVIEWER_KIT_REPO';
 const KIT_REPO = 'josephmitchel/jm-devkit';
 
-export function kitRepo(env: NodeJS.ProcessEnv = process.env): string {
+export function kitRepository(env: NodeJS.ProcessEnv = process.env): string {
   const slug = env[KIT_REPO_VAR]?.trim() || KIT_REPO;
   if (!/^[\w.-]+\/[\w.-]+$/.test(slug)) throw new Error(`${KIT_REPO_VAR} must be the kit's repository as owner/name`);
   return slug;
@@ -93,17 +93,17 @@ export function reportsFor(run: Run, seen: Seen): Told[] {
   });
   if (outcome === 'failed') {
     return run.project !== null && failureSide(run.errorType) === 'project'
-      ? [{ repo: run.project, report: { outcome, side: 'project', facts: facts(run.kind), tail: seen.tail } }]
-      : [{ repo: seen.kitRepo, report: { outcome, side: 'kit', facts: facts(run.kind) } }];
+      ? [{ place: run.project, report: { outcome, side: 'project', facts: facts(run.kind), tail: seen.tail } }]
+      : [{ place: seen.kitRepository, report: { outcome, side: 'kit', facts: facts(run.kind) } }];
   }
-  const succeededOnKitSide = (kind: string): Told => ({ repo: seen.kitRepo, report: { outcome, side: 'kit', facts: facts(kind) } });
+  const succeededOnKitSide = (kind: string): Told => ({ place: seen.kitRepository, report: { outcome, side: 'kit', facts: facts(kind) } });
   const settled = [...new Set(seen.parts.map((p) => p.kind))].filter((kind) => {
     const ofKind = seen.parts.filter((p) => p.kind === kind);
     const failedOnKitSide = ofKind.some((p) => ownOutcome(p) === 'failed' && failureSide(p.errorType) === 'kit');
     return !failedOnKitSide && ofKind.some((p) => p.state === 'succeeded');
   });
   return [
-    ...(run.project === null ? [] : [{ repo: run.project, report: { outcome, side: 'project' as const, facts: facts(run.kind) } }]),
+    ...(run.project === null ? [] : [{ place: run.project, report: { outcome, side: 'project' as const, facts: facts(run.kind) } }]),
     ...(run.parentId === null ? [succeededOnKitSide(run.kind)] : []),
     ...settled.map(succeededOnKitSide),
   ];
@@ -135,17 +135,17 @@ export function parseReport(text: string): Report {
  * What the `failure-issue` command does: read the issues open in one repository, and open,
  * comment on or close its failure issue. Returns a line for each thing done.
  */
-export async function fileReport(repo: string, report: Report): Promise<string[]> {
+export async function fileReport(place: string, report: Report): Promise<string[]> {
   const done: string[] = [];
-  for (const step of failureIssuePlan(report, await listOpenIssuesWithAuthors(repo))) {
+  for (const step of failureIssuePlan(report, await listOpenIssuesWithAuthors(place))) {
     if (step.action === 'open') {
-      const issue = await createIssue(repo, { title: step.title, body: step.body, labels: [] });
-      done.push(`opened failure issue #${issue.number} in ${repo}`);
+      const issue = await createIssue(place, { title: step.title, body: step.body, labels: [] });
+      done.push(`opened failure issue #${issue.number} in ${place}`);
       continue;
     }
-    await postComment(repo, step.issue, step.body);
-    if (step.action === 'close') await updateIssue(repo, step.issue, { state: 'closed', stateReason: 'completed' });
-    done.push(`${step.action === 'close' ? 'closed' : 'commented on'} failure issue #${step.issue} in ${repo}`);
+    await postComment(place, step.issue, step.body);
+    if (step.action === 'close') await updateIssue(place, step.issue, { state: 'closed', stateReason: 'completed' });
+    done.push(`${step.action === 'close' ? 'closed' : 'commented on'} failure issue #${step.issue} in ${place}`);
   }
   return done;
 }
@@ -157,12 +157,12 @@ const SEND_TIMEOUT_MS = 5 * 60 * 1000;
  * because App auth is one repository per process, and the kit's repository is not the project's.
  * The process is given the report and nothing else about the run.
  */
-function sendReport(repo: string, report: Report): Promise<string[]> {
+function sendReport(place: string, report: Report): Promise<string[]> {
   return new Promise((resolve, reject) => {
     const { REVIEWER_RUN_ID: _run, ...env } = process.env;
-    const child = spawn(process.execPath, ['--import', 'tsx/esm', path.join(reviewerRoot, 'src/cli.ts'), 'failure-issue', repo], {
+    const child = spawn(process.execPath, ['--import', 'tsx/esm', path.join(reviewerRoot, 'src/cli.ts'), 'failure-issue', place], {
       cwd: reviewerRoot,
-      env: { ...env, REVIEWER_APP_INSTALL_REPO: repo },
+      env: { ...env, REVIEWER_APP_INSTALL_REPO: place },
       stdio: ['pipe', 'pipe', 'pipe'],
       timeout: SEND_TIMEOUT_MS,
     });
@@ -183,15 +183,15 @@ function sendReport(repo: string, report: Report): Promise<string[]> {
 
 /** How reportRun reaches the machine and GitHub. Replaced in tests. */
 export interface Reporter {
-  kitRepo(): string;
+  kitRepository(): string;
   kitCommit(): string | null;
   tail(run: Run): string;
   parts(run: Run): Promise<Run[]>;
-  send(repo: string, report: Report): Promise<string[]>;
+  send(place: string, report: Report): Promise<string[]>;
 }
 
 const onTheMachine: Reporter = {
-  kitRepo,
+  kitRepository,
   kitCommit() {
     try {
       return execFileSync('git', ['-C', reviewerRoot, 'rev-parse', 'HEAD'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
@@ -231,7 +231,7 @@ export async function reportRun(run: Run, say?: (line: string) => void, reporter
   let told: Told[];
   try {
     told = reportsFor(run, {
-      kitRepo: reporter.kitRepo(),
+      kitRepository: reporter.kitRepository(),
       kitCommit: reporter.kitCommit(),
       tail: outcome === 'failed' ? reporter.tail(run) : '',
       parts: await reporter.parts(run),
@@ -240,11 +240,11 @@ export async function reportRun(run: Run, say?: (line: string) => void, reporter
     note(`could not report that it ${outcome}: ${why(err)}`);
     return;
   }
-  for (const { repo, report } of told) {
+  for (const { place, report } of told) {
     try {
-      for (const line of await reporter.send(repo, report)) note(line);
+      for (const line of await reporter.send(place, report)) note(line);
     } catch (err) {
-      note(`could not report that it ${report.outcome} to ${repo}: ${why(err)}`);
+      note(`could not report that it ${report.outcome} to ${place}: ${why(err)}`);
     }
   }
 }

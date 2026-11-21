@@ -28,7 +28,7 @@ RuntimeDirectory=code-reviewer-nightly
 WorkingDirectory=/var/lib/code-reviewer/kit/reviewer
 Environment=REVIEWER_WORKSPACE_ROOT=/var/lib/code-reviewer/workspaces
 Environment=REVIEWER_STATE_DIR=/var/lib/code-reviewer/state
-# The App's bot account, as the author of anything the code reviewer commits.
+# The App's own account on GitHub, as the author of anything the code reviewer commits.
 Environment="REVIEWER_GIT_NAME=jm-code-reviewer[bot]"
 Environment="REVIEWER_GIT_EMAIL=338258166+jm-code-reviewer[bot]@users.noreply.github.com"
 

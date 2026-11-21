@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { kitRepo, outputTail, parseReport, reportRun, reportsFor, type Reporter } from './failure-report.js';
+import { kitRepository, outputTail, parseReport, reportRun, reportsFor, type Reporter } from './failure-report.js';
 import type { Run } from './runs.js';
 
 const COMMIT = '0123456789abcdef0123456789abcdef01234567';
@@ -21,17 +21,17 @@ const run = (over: Partial<Run>): Run => ({
   ...over,
 });
 const failed = (errorType: string | null, over: Partial<Run> = {}) => run({ state: 'failed', stage: 'auditing', errorType, ...over });
-const seen = { kitRepo: KIT, kitCommit: COMMIT, tail: 'the end of the output', parts: [] as Run[] };
+const seen = { kitRepository: KIT, kitCommit: COMMIT, tail: 'the end of the output', parts: [] as Run[] };
 /** Where each report goes and what it says, in short. */
 const told = (r: Run, over: Partial<typeof seen> = {}) =>
-  reportsFor(r, { ...seen, ...over }).map((t) => `${t.repo}: ${t.report.side}-side ${t.report.facts.kind} ${t.report.outcome}`);
+  reportsFor(r, { ...seen, ...over }).map((t) => `${t.place}: ${t.report.side}-side ${t.report.facts.kind} ${t.report.outcome}`);
 
 describe('where a finished run is reported', () => {
   it("reports a failure on the project's side to the project, with the end of its output", () => {
     const r = failed('SetupCommandError');
     expect(reportsFor(r, seen)).toEqual([
       {
-        repo: 'acme/widgets',
+        place: 'acme/widgets',
         report: {
           outcome: 'failed',
           side: 'project',
@@ -47,7 +47,7 @@ describe('where a finished run is reported', () => {
     const reports = reportsFor(r, seen);
     expect(reports).toEqual([
       {
-        repo: KIT,
+        place: KIT,
         report: {
           outcome: 'failed',
           side: 'kit',
@@ -202,12 +202,12 @@ describe("the end of a run's output", () => {
 
 describe("the kit's own repository", () => {
   it("is the kit's, unless the setting names another", () => {
-    expect(kitRepo({})).toBe('josephmitchel/jm-devkit');
-    expect(kitRepo({ REVIEWER_KIT_REPO: ' kit-owner/the-kit ' })).toBe(KIT);
+    expect(kitRepository({})).toBe('josephmitchel/jm-devkit');
+    expect(kitRepository({ REVIEWER_KIT_REPO: ' kit-owner/the-kit ' })).toBe(KIT);
   });
 
   it('is refused when the setting is not an owner and a name', () => {
-    expect(() => kitRepo({ REVIEWER_KIT_REPO: 'the-kit' })).toThrow(/REVIEWER_KIT_REPO/);
+    expect(() => kitRepository({ REVIEWER_KIT_REPO: 'the-kit' })).toThrow(/REVIEWER_KIT_REPO/);
   });
 });
 
@@ -229,7 +229,7 @@ describe('reporting a run', () => {
   const lines: string[] = [];
   const say = (line: string) => lines.push(line);
   const reporter = (over: Partial<Reporter>): Reporter => ({
-    kitRepo: () => KIT,
+    kitRepository: () => KIT,
     kitCommit: () => COMMIT,
     tail: () => 'the end of the output',
     parts: async () => [],
@@ -241,7 +241,7 @@ describe('reporting a run', () => {
     lines.length = 0;
     const sent: string[] = [];
     const r = run({});
-    await reportRun(r, say, reporter({ send: async (repo, report) => (sent.push(`${repo} ${report.side}`), [`closed failure issue #7 in ${repo}`]) }));
+    await reportRun(r, say, reporter({ send: async (place, report) => (sent.push(`${place} ${report.side}`), [`closed failure issue #7 in ${place}`]) }));
     expect(sent).toEqual(['acme/widgets project', `${KIT} kit`]);
     expect(lines).toEqual([`${r.id}: closed failure issue #7 in acme/widgets`, `${r.id}: closed failure issue #7 in ${KIT}`]);
   });
@@ -250,9 +250,9 @@ describe('reporting a run', () => {
     lines.length = 0;
     const sent: string[] = [];
     const r = run({});
-    const send: Reporter['send'] = async (repo) => {
-      if (repo !== KIT) throw new Error('GitHub answered 502');
-      sent.push(repo);
+    const send: Reporter['send'] = async (place) => {
+      if (place !== KIT) throw new Error('GitHub answered 502');
+      sent.push(place);
       return [];
     };
     await expect(reportRun(r, say, reporter({ send }))).resolves.toBeUndefined();
@@ -276,7 +276,7 @@ describe('reporting a run', () => {
       throw new Error('asked');
     };
     const r = run({ state: 'interrupted', errorType: 'service stopped' });
-    await reportRun(r, say, { kitRepo: never, kitCommit: never, tail: never, parts: never, send: never });
+    await reportRun(r, say, { kitRepository: never, kitCommit: never, tail: never, parts: never, send: never });
     expect(lines).toEqual([]);
   });
 

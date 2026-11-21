@@ -331,7 +331,7 @@ async function repoUpsert(mode: 'add' | 'set', slug: string, argv: string[]): Pr
 /**
  * Record that a run ended without finishing its stage — a cancelled or timed-out CI job, or a run
  * the machine stopped or found dead, none of which gets to record anything itself. Without this a
- * killed run's review keeps whatever stage it was in and holds the repo's only review slot until
+ * killed run's review keeps whatever stage it was in and holds the project's only review slot until
  * the staleness bound expires hours later.
  *
  * `failed` rather than `pending`, so the next run resumes the stage through inferRetryState instead
