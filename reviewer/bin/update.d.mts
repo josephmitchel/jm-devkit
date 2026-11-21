@@ -1,6 +1,4 @@
-/** The stages of bringing the code reviewer up to date, by the fixed names a run records. */
-export const UPDATE_STAGES: readonly ['moving the checkout', 'installing dependencies', 'applying migrations'];
-export type UpdateStage = (typeof UPDATE_STAGES)[number];
+import type { UpdateStage } from './run-words.mjs';
 
 export interface UpdateOptions {
   /** The kit's checkout: the directory that holds `reviewer/`. */

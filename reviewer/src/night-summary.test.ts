@@ -12,7 +12,7 @@ import {
   type DiscussionSetup,
   type Night,
 } from './night-summary.js';
-import { errorType } from './runs.js';
+import { errorType } from './run-vocabulary.js';
 
 const nothing: SweepSummary = { judged: [], tickets: [], answered: 0, opened: [], closedByAudit: [], commits: 0 };
 const night = (over: Partial<Night> = {}): Night => ({

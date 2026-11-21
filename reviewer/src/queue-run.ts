@@ -20,7 +20,8 @@ import {
   type RunningJob,
 } from './queue.js';
 import { takeRecordedStepOrSayWhy } from './recorded-step.js';
-import { AGENT_KINDS, errorType, interruptRunsLeftRunning, runLine, stopping, tidyAfterInterruption } from './runs.js';
+import { errorType } from './run-vocabulary.js';
+import { AGENT_KINDS, interruptRunsLeftRunning, runLine, stopping, tidyAfterInterruption } from './runs.js';
 import { OFF_THE_SLOT } from './stages/intake.js';
 
 /**

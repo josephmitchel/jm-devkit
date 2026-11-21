@@ -1,10 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
 import { DevkitConfigError } from '../../plugin/devkit-config.mjs';
+import { errorType, errorTypeLine } from './run-vocabulary.js';
 import {
   afterInterruption,
-  errorType,
-  errorTypeLine,
   leftByNightlyRuns,
   newRunId,
   nightlyStatus,

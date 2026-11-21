@@ -1,15 +1,13 @@
 import { DevkitConfigError } from '../../plugin/devkit-config.mjs';
-import { UPDATE_STAGES } from '../bin/update.mjs';
 import { reportRun } from './failure-report.js';
 import { lockFault, MACHINE_LOCK, MachineLockError, NIGHTLY_LOCK, tryLock, type Held } from './locks.js';
 import { listProjects, projectLine, type Project } from './projects.js';
 import { machineFor } from './queue.js';
 import { takeRecordedStepOrSayWhy } from './recorded-step.js';
+import { errorType, HOW_ENDED, NIGHTLY_STAGES, UPDATE_STAGES } from './run-vocabulary.js';
 import {
-  errorType,
   finishRun,
   interruptRunsLeftRunning,
-  NIGHTLY_STAGES,
   runLine,
   runLog,
   startRun,
@@ -203,7 +201,7 @@ async function takeSteps(nightly: Run, say: (line: string) => void, lockLost: ()
  */
 export function notStartedResult(stage: string, errorType: string): RunResult | null {
   const known = (UPDATE_STAGES as readonly string[]).includes(stage);
-  if (!known || !/^(exit \d+|killed by SIG[A-Z0-9]+|could not start)$/.test(errorType)) return null;
+  if (!known || !HOW_ENDED.test(errorType)) return null;
   return { state: 'failed', stage, errorType };
 }
 

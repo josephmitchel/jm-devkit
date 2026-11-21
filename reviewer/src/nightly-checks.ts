@@ -10,7 +10,8 @@ import { CHECKS_LOCK_CLASS, checksLockKey, locksHeld, tryLock } from './locks.js
 import { readProjectSetup, type ProjectRow, type ProjectSetup } from './project-config.js';
 import { cloneUrl } from './project-row.js';
 import { takeRecordedStep } from './recorded-step.js';
-import type { CHECKS_STAGES, Run } from './runs.js';
+import { howEnded, type CHECKS_STAGES } from './run-vocabulary.js';
+import type { Run } from './runs.js';
 import { droppingTestDatabases, provideTestDatabases, type RunOwner } from './test-databases.js';
 import { checksWorkspacePath, prepareWorkspace, runRepoCommand, streamRepoCommand, type StreamedCommand } from './workspace.js';
 
@@ -98,13 +99,7 @@ export function checkTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
 
 function checkResult(name: string, ended: StreamedCommand): CheckResult {
   const how =
-    ended.timedOutAfterMs !== null
-      ? `stopped after ${Math.round(ended.timedOutAfterMs / 60_000)} minutes`
-      : ended.signal !== null
-        ? `killed by ${ended.signal}`
-        : ended.exitCode !== null
-          ? `exit ${ended.exitCode}`
-          : 'could not start';
+    ended.timedOutAfterMs !== null ? `stopped after ${Math.round(ended.timedOutAfterMs / 60_000)} minutes` : howEnded(ended.exitCode, ended.signal);
   return { name, passed: ended.exitCode === 0 && ended.timedOutAfterMs === null, how, tail: ended.tail };
 }
 

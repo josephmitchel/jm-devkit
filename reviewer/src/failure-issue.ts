@@ -1,6 +1,6 @@
 import type { RunKind } from './db/schema.js';
 import { projectFault, type Side } from './failure-side.js';
-import { RUN_STAGES } from './runs.js';
+import { isErrorType, RUN_STAGES } from './run-vocabulary.js';
 import { ANSWER_AUTHORITY } from './reply-authority.js';
 
 /**
@@ -52,28 +52,6 @@ const KIND_WORDS: Record<RunKind, string> = {
   review: 'review',
 };
 
-// A type of error is shown by name only when it is on this list, is a project's fault (see
-// failure-side.ts) or is in one of the fixed forms a run's result is recorded in. A new error class of the code
-// reviewer's is added here to be shown by name.
-const KNOWN_ERROR_TYPES = new Set([
-  'Error',
-  'TypeError',
-  'RangeError',
-  'ReferenceError',
-  'SyntaxError',
-  'EvalError',
-  'URIError',
-  'AggregateError',
-  'AbortError',
-  'TimeoutError',
-  'ZodError',
-  'DrizzleError',
-  'DrizzleQueryError',
-  'GitHubError',
-  'MachineLockError',
-  'ChecksRunningError',
-]);
-const FIXED_ERROR_FORM = /^(?:exit \d{1,3}|killed by SIG[A-Z0-9]{2,8}|could not start|time limit)$/;
 const COMMIT = /^[0-9a-f]{40}$/;
 const TIME = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,3})?Z$/;
 const RUN_ID = /^run-\d{8}T\d{6}Z-[0-9a-f]{6}$/;
@@ -102,7 +80,7 @@ function checkedFacts(facts: RunFacts): CheckedFacts {
   return {
     kind: facts.kind as RunKind,
     stage: text(facts.stage, (s) => RUN_STAGES.has(s)),
-    errorType: text(facts.errorType, (s) => KNOWN_ERROR_TYPES.has(s) || FIXED_ERROR_FORM.test(s) || projectFault(s) !== null),
+    errorType: text(facts.errorType, isErrorType),
     kitCommit: text(facts.kitCommit, (s) => COMMIT.test(s)),
     time: text(facts.time, (s) => TIME.test(s)),
     runId: text(facts.runId, (s) => RUN_ID.test(s)),

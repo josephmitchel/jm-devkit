@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { outputTail } from './failure-report.js';
 import { checksAccount, checksDecision, checksNamed, checksOwner, checkTimeoutMs, runChecks, type CheckResult } from './nightly-checks.js';
-import { errorTypeLine } from './runs.js';
+import { errorTypeLine } from './run-vocabulary.js';
 import { leftBehind, planDatabases } from './test-databases.js';
 import { checksWorkspacePath, workspacePath } from './workspace.js';
 

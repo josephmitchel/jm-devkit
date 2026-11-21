@@ -1,7 +1,8 @@
 import type { RunKind } from './db/schema.js';
 import { reportRun } from './failure-report.js';
 import { ensureProjectRow } from './project-row.js';
-import { errorType, finishRun, runCommand, runLine, runLog, startRun, type Run, type RunResult } from './runs.js';
+import { errorType } from './run-vocabulary.js';
+import { finishRun, runCommand, runLine, runLog, startRun, type Run, type RunResult } from './runs.js';
 
 /** One of the code reviewer's commands, to be run for a project as a recorded run. */
 export interface RecordedStep {

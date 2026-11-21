@@ -8,10 +8,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const MINUTE = 60_000;
+import { UPDATE_STAGES, howEnded } from './run-words.mjs';
 
-/** The stages of bringing the code reviewer up to date, by the fixed names a run records. */
-export const UPDATE_STAGES = ['moving the checkout', 'installing dependencies', 'applying migrations'];
+const MINUTE = 60_000;
 
 /** A step that did not succeed, with the same type of error a run records. */
 class StepFailed extends Error {}
@@ -26,7 +25,7 @@ function run(command, { cwd, env, timeoutMs, capture = false }) {
     stdio: ['ignore', capture ? 'pipe' : 'inherit', 'inherit'],
   });
   if (done.status === 0) return capture ? done.stdout.trim() : '';
-  throw new StepFailed(done.signal ? `killed by ${done.signal}` : done.status === null ? 'could not start' : `exit ${done.status}`);
+  throw new StepFailed(howEnded(done.status, done.signal));
 }
 
 /**
