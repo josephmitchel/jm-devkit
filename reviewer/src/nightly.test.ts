@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { nightlyDecision, nightlyWork, notStartedResult, type Step } from './nightly.js';
+import { failureSide } from './failure-side.js';
+import { nightlyDecision, nightlyWork, notStartedResult, refusedResult, type Step } from './nightly.js';
 import { classifyProjects } from './projects.js';
 
 const config = JSON.stringify({
@@ -29,6 +30,43 @@ describe("the nightly run's order of work", () => {
         'acme/gadgets still on Actions: its default branch has .github/workflows/nightly-sweep.yml',
       ],
     });
+  });
+});
+
+describe('a project the machine would handle, whose project config is invalid', () => {
+  const invalid = '{"modules":["process"]}';
+  const projects = classifyProjects([
+    { slug: 'acme/widgets', config, sweepWorkflow: false },
+    { slug: 'acme/broken', config: invalid, sweepWorkflow: false },
+    { slug: 'acme/gadgets', config: invalid, sweepWorkflow: true },
+    { slug: 'Acme/bare', config: null, sweepWorkflow: false },
+  ]);
+
+  it('has a sweep step that cannot start, saying what is wrong, and no step after it; it is not passed over in silence', () => {
+    expect(nightlyWork(projects)).toEqual({
+      steps: [
+        { project: 'acme/broken', kind: 'sweep', invalidConfig: 'devkit.json is malformed: reviewer is required' },
+        { project: 'acme/widgets', kind: 'sweep' },
+        { project: 'acme/widgets', kind: 'summary' },
+      ],
+      skipped: [
+        'Acme/bare skipped: its default branch has no devkit.json',
+        'acme/gadgets still on Actions: its default branch has .github/workflows/nightly-sweep.yml',
+      ],
+    });
+  });
+
+  it("is recorded as a run that failed before it began, for a reason on the project's side", () => {
+    const [broken, widgets] = nightlyWork(projects).steps;
+    expect(refusedResult(broken)).toEqual({ state: 'failed', stage: 'starting', errorType: 'DevkitConfigError' });
+    expect(failureSide(refusedResult(broken)!.errorType)).toBe('project');
+    expect(refusedResult(widgets)).toBeNull();
+  });
+
+  it('does not stop the next project, and the night ends failed', () => {
+    const { steps } = nightlyWork(projects);
+    expect(nightlyDecision(steps, ['failed'])).toEqual({ next: { project: 'acme/widgets', kind: 'sweep' } });
+    expect(nightlyDecision(steps, ['failed', 'succeeded', 'succeeded'])).toEqual({ done: 'failed' });
   });
 });
 
@@ -119,6 +157,15 @@ describe('what a nightly run does next', () => {
     expect(nightlyDecision(steps, ['succeeded', 'interrupted'], true)).toEqual({ done: 'interrupted' });
     expect(nightlyDecision(steps, ['succeeded'], true)).toEqual({ done: 'interrupted' });
     expect(nightlyDecision(steps, [], true)).toEqual({ done: 'interrupted' });
+  });
+
+  it("takes no further step once the connection holding the machine's lock is lost, and ends failed for that reason", () => {
+    expect(nightlyDecision(steps, ['succeeded'], false, true)).toEqual({ done: 'failed', lockLost: true });
+    expect(nightlyDecision(steps, [], false, true)).toEqual({ done: 'failed', lockLost: true });
+  });
+
+  it('ends as it would have when the lock was lost after the last step had finished', () => {
+    expect(nightlyDecision(steps, ['succeeded', 'succeeded', 'succeeded'], false, true)).toEqual({ done: 'succeeded' });
   });
 
   it('ends as it would have when the stop came after the last step had finished', () => {

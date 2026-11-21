@@ -41,14 +41,19 @@ describe('projectState', () => {
     });
   });
 
-  it('is skipped with a project config that is not valid, saying what is wrong with it', () => {
+  it('is skipped with a project config that is not valid, saying what is wrong with it and that it has one', () => {
     expect(projectState({ config: '{"modules":["process"],"sweep":{"hour":4}}', sweepWorkflow: false })).toEqual({
       state: 'skipped',
       reason: 'devkit.json is malformed: reviewer is required',
+      invalidConfig: true,
     });
     const unparsable = projectState({ config: 'not json', sweepWorkflow: false });
-    expect(unparsable.state).toBe('skipped');
+    expect(unparsable).toMatchObject({ state: 'skipped', invalidConfig: true });
     expect(unparsable).toHaveProperty('reason', expect.stringMatching(/^devkit\.json is not valid JSON: /));
+  });
+
+  it('does not say a project with no project config has an invalid one: it is not under the kit', () => {
+    expect(projectState({ config: null, sweepWorkflow: false })).not.toHaveProperty('invalidConfig');
   });
 });
 

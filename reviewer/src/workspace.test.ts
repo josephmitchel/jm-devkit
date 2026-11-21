@@ -9,9 +9,9 @@ import { commitFacts, repoCommandEnv, runRepoCommand } from './workspace.js';
  * The reviewed repo's setup and test commands are arbitrary code — `npm ci` alone runs that
  * repo's install scripts. Handing them the reviewer's own environment leaks the App private key
  * that can push to the repo, the credential that pays for the review, and a connection string
- * to the reviewer's database. The last one nearly caused real damage: spendright's db suite
+ * to the reviewer's database. The last one nearly caused real damage: one project's db suite
  * falls back to `DATABASE_URL`, so on the first CI run it aimed at the reviewer's Neon database
- * and was stopped only by a `_test`-suffix guard in spendright's own test helper.
+ * and was stopped only by a `_test`-suffix guard in that project's own test helper.
  */
 describe('repoCommandEnv', () => {
   const source = {

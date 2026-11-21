@@ -8,12 +8,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { UPDATE_STAGES, howEnded } from './run-words.mjs';
+
 const MINUTE = 60_000;
 
-/** The stages of bringing the code reviewer up to date, by the fixed names a run records. */
-export const UPDATE_STAGES = ['moving the checkout', 'installing dependencies', 'applying migrations'];
-
-/** A step that did not succeed, with the same type of error a run records. */
 class StepFailed extends Error {}
 
 function run(command, { cwd, env, timeoutMs, capture = false }) {
@@ -26,13 +24,12 @@ function run(command, { cwd, env, timeoutMs, capture = false }) {
     stdio: ['ignore', capture ? 'pipe' : 'inherit', 'inherit'],
   });
   if (done.status === 0) return capture ? done.stdout.trim() : '';
-  throw new StepFailed(done.signal ? `killed by ${done.signal}` : done.status === null ? 'could not start' : `exit ${done.status}`);
+  throw new StepFailed(howEnded(done.status, done.signal));
 }
 
 /**
- * Move the checkout at `kitDir` to the head of the kit's default branch. The branch is asked of the
- * remote each time, so the kit renaming it needs nothing done here. Anything changed in the
- * checkout is discarded: nothing is ever edited there.
+ * The branch is asked of the remote each time, so the kit renaming it needs nothing done here.
+ * Anything changed in the checkout is discarded: nothing is ever edited there.
  */
 function moveToDefaultBranch(kitDir, env) {
   const git = (...args) => run(['git', ...args], { cwd: kitDir, env, timeoutMs: 5 * MINUTE, capture: true });
@@ -43,10 +40,7 @@ function moveToDefaultBranch(kitDir, env) {
   return { branch, commit: git('rev-parse', 'HEAD') };
 }
 
-/**
- * What the code reviewer needs of its environment to install its own dependencies: none of its
- * credentials. An install runs the install scripts of every package it fetches.
- */
+/** No credentials: an install runs the install scripts of every package it fetches. */
 function withoutCredentials(env) {
   const kept = { ...env };
   for (const name of Object.keys(kept)) {
@@ -56,9 +50,8 @@ function withoutCredentials(env) {
 }
 
 /**
- * Install the dependencies when the lockfile is not the one they were last installed from. The
- * note of that lockfile is written only after an install succeeds and lives in `node_modules`, so
- * an install that failed, or one that never happened, is tried again the next time.
+ * The note of the lockfile is written only after an install succeeds and lives in `node_modules`,
+ * so an install that failed, or never happened, is tried again the next time.
  */
 function installWhenLockfileChanged(reviewerDir, install, env, log) {
   const lockfile = crypto.createHash('sha256').update(fs.readFileSync(path.join(reviewerDir, 'package-lock.json'))).digest('hex');
@@ -75,11 +68,9 @@ function installWhenLockfileChanged(reviewerDir, install, env, log) {
 }
 
 /**
- * Bring the checkout up to date: move it to the kit's default branch, install dependencies when
- * the lockfile changed, apply migrations. The first step that fails ends it, so a nightly run
- * never starts on code, dependencies or a database that are out of step with each other. The
- * failure is then recorded as a nightly run that did not start, when the code reviewer is in a
- * state to record anything. Returns `{ ok: true }`, or which stage failed and how.
+ * The first step that fails ends it, so a nightly run never starts on code, dependencies or a
+ * database that are out of step with each other. The failure is then recorded as a nightly run that
+ * did not start, when the code reviewer is in a state to record anything.
  */
 export function updateCheckout({
   kitDir,

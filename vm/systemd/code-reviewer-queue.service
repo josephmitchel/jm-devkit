@@ -1,18 +1,14 @@
-# One turn of the code reviewer's queue: start the next queued review, if no agent job is running
-# on the machine, and see it through. Installed by vm/dev-vm-setup.sh. It has no timer: the
-# poller's service starts it each time a pass ends (OnSuccess= and OnFailure= there), so a review
-# a pass has just found starts at once, and one that had to wait is looked at again after the next
-# pass. By hand: sudo systemctl start --no-block code-reviewer-queue.service
+# One turn of the code reviewer's queue: start the next queued review if no agent job is running,
+# and see it through. Installed by vm/dev-vm-setup.sh. No timer: the poller's service starts it
+# each time a pass ends. By hand: sudo systemctl start --no-block code-reviewer-queue.service
 [Unit]
 Description=Code reviewer: one turn of the queue of reviews
 Wants=network-online.target
 After=network-online.target postgresql.service
 # As for the poller: not before the nightly run's update step has installed the dependencies once.
 ConditionPathExists=/var/lib/code-reviewer/kit/reviewer/node_modules/.installed-from-lockfile
-# Not while the nightly unit is active. Its update step replaces the code and the dependencies a
-# review runs from, and the nightly run then has the machine until it is over. The directory is
-# that unit's RuntimeDirectory=, there exactly as long as the unit is. A turn skipped this way is
-# not a failure, and what was queued stays queued.
+# Not while the nightly unit is active (the directory is its RuntimeDirectory=): its update step
+# replaces the code a review runs from. A turn skipped this way is not a failure.
 ConditionPathExists=!/run/code-reviewer-nightly
 
 [Service]
@@ -39,7 +35,6 @@ ExecStart=/usr/bin/node --import tsx/esm src/cli.ts queue
 
 # A review takes hours and has its own limit, kept by the code reviewer.
 TimeoutStartSec=infinity
-# On stop every process in the unit gets SIGTERM. The turn then records the review it was on as
-# stopped, on the pull request too, which needs the time allowed here before anything left is killed.
+# On stop the turn records the review it was on as stopped, on the pull request too, which needs this long.
 KillMode=control-group
 TimeoutStopSec=3min

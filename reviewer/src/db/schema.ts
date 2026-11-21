@@ -177,6 +177,8 @@ export const reviews = pgTable(
     state: reviewState('state').notNull().default('pending'),
     currentRoundId: integer('current_round_id'),
     error: text('error'),
+    // How many times in a row the machine's time limit has stopped this review (queue.ts afterReviewRun).
+    timeLimitStops: integer('time_limit_stops').notNull().default(0),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -321,23 +323,23 @@ export const githubArtifacts = pgTable('github_artifacts', {
  */
 export const testDatabases = pgTable('test_databases', {
   name: text('name').primaryKey(),
-  // The run it was created for, `review:<id>` or `sweep:<id>`. The run resumed has the same owner.
+  // Whose it is: `review:<id>`, `sweep:<id>` or `checks:<owner/name>` (RunOwner). A resumed review
+  // or sweep has the same owner, and so has a project's next run of its checks.
   owner: text('owner').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
-// `checks`: one project's nightly checks, run after its sweep or by hand. `landed`: started by a
-// pass of the poller for a merged pull request, and part of no other run. `review`: a pull
-// request's review, found by a pass and started by the queue; also part of no other run.
+// `sweep`, `summary`, `checks`: one project's steps in a nightly run; `checks` is also run by
+// hand, as a run of its own. `landed`, `carry-gate`: started by a pass of the poller. `review`:
+// found by a pass and started by the queue.
 export type RunKind = 'nightly' | 'sweep' | 'summary' | 'checks' | 'landed' | 'carry-gate' | 'review';
 // `interrupted`: stopped before its command finished, by its time limit or by the service stopping,
 // or found still `running` by the next run. Its work is taken up again by the next run.
 export type RunState = 'running' | 'succeeded' | 'failed' | 'interrupted';
 
 /**
- * A run of one of the code reviewer's commands on the machine: a nightly run, one project's part
- * in it (its sweep, then the posting of the night's summary), or a command a pass of the poller
- * started. `kind` and `state` are text, so a new kind of run needs no migration.
+ * A run of one of the code reviewer's commands on the machine. `kind` and `state` are text, so a
+ * new kind of run needs no migration.
  */
 export const runs = pgTable('runs', {
   // `run-<UTC start time>-<random>` (newRunId). The run's output is the file runOutputPath names.
@@ -346,7 +348,7 @@ export const runs = pgTable('runs', {
   // owner/name, not a repos row: a project's first run is recorded before it has one. Null for a
   // run that is not one project's, such as the nightly run itself.
   project: text('project'),
-  // The run this one is part of: the nightly run, for a project's sweep. Null for a run the poller started.
+  // The nightly run this one is a step of. Null for every other run, the nightly run included.
   parentId: text('parent_id').references((): AnyPgColumn => runs.id),
   state: text('state').$type<RunState>().notNull().default('running'),
   // Both set only on a run that failed of itself. A nightly run that failed only because a
@@ -358,14 +360,12 @@ export const runs = pgTable('runs', {
 });
 
 /**
- * An event a pass of the poller found in a project, such as a merged pull request, and what
- * became of it. The primary key is the rule that an event is handled once: a second record of
- * the same event cannot be made, whichever pass tries.
+ * An event a pass of the poller found in a project, and what became of it. The primary key is the
+ * rule that an event is handled once: a second record of the same event cannot be made.
  */
 export const pollerEvents = pgTable(
   'poller_events',
   {
-    // owner/name, as in `runs`.
     project: text('project').notNull(),
     // `<name>:<subject>`, such as `merged:12`. The same event always has the same key.
     event: text('event').notNull(),
@@ -375,9 +375,8 @@ export const pollerEvents = pgTable(
     attemptedAt: timestamp('attempted_at', { withTimezone: true }),
     // The run of its last attempt.
     runId: text('run_id').references(() => runs.id),
-    // Set once the event needs nothing more done. For a command a pass runs, that is once it has
-    // succeeded, and only then; a review's event has its own rule (queue.ts afterReviewRun). Null:
-    // still to be handled.
+    // Set once the event needs nothing more done: for a command a pass runs, once it has
+    // succeeded; a review's event has its own rule (queue.ts afterReviewRun).
     handledAt: timestamp('handled_at', { withTimezone: true }),
     foundAt: timestamp('found_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -397,9 +396,8 @@ export const pollerProjects = pgTable('poller_projects', {
 });
 
 /**
- * The last answer GitHub gave to a question the poller repeats every pass, with the ETag sent
- * back to ask "anything since?": which installations, which repositories, what a default branch
- * holds. No credential is kept here: a pass mints its tokens and holds them in memory.
+ * The last answer GitHub gave to a question the poller repeats every pass, with its ETag. No
+ * credential is kept here: a pass mints its tokens and holds them in memory.
  */
 export const githubAnswers = pgTable('github_answers', {
   question: text('question').primaryKey(),

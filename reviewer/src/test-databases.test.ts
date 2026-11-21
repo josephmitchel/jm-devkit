@@ -6,6 +6,7 @@ import {
   dropStatement,
   droppingTestDatabases,
   leftBehind,
+  ownersLeftBehind,
   planDatabases,
   provideTestDatabases,
   withAddresses,
@@ -111,6 +112,41 @@ describe('leftBehind', () => {
   it('is nothing for a run with no record', () => {
     expect(leftBehind(records, 'sweep:8')).toEqual([]);
     expect(leftBehind([], 'review:7')).toEqual([]);
+  });
+});
+
+describe('whose databases a nightly run drops as it starts, with the machine in hand', () => {
+  const records = [
+    { name: 'reviewer_test_aaaaaaaaaaaaaaaa_0', owner: 'review:7' },
+    { name: 'reviewer_test_aaaaaaaaaaaaaaaa_1', owner: 'review:7' },
+    { name: 'reviewer_test_bbbbbbbbbbbbbbbb_0', owner: 'sweep:12' },
+    { name: 'reviewer_test_cccccccccccccccc_0', owner: 'checks:acme/widgets' },
+    { name: 'reviewer_test_dddddddddddddddd_0', owner: 'checks:acme/widgets' },
+    { name: 'reviewer_test_eeeeeeeeeeeeeeee_0', owner: 'checks:Zenith/anvils' },
+  ];
+
+  it('are those of every review and sweep on record, each owner once: no agent job is running, so each was left by a run that died', () => {
+    expect(ownersLeftBehind(records).agentJobs).toEqual(['review:7', 'sweep:12']);
+  });
+
+  it("names a project's checks apart, by project: they run outside the machine's lock, so each is asked of its own", () => {
+    expect(ownersLeftBehind(records).checks).toEqual([
+      { project: 'acme/widgets', owner: 'checks:acme/widgets' },
+      { project: 'Zenith/anvils', owner: 'checks:Zenith/anvils' },
+    ]);
+  });
+
+  it('leaves alone a record whose owner it does not know', () => {
+    const odd = [
+      { name: 'reviewer_test_ffffffffffffffff_0', owner: 'review:seven' },
+      { name: 'reviewer_test_ffffffffffffffff_1', owner: 'by hand' },
+      { name: 'reviewer_test_ffffffffffffffff_2', owner: 'checks:' },
+    ];
+    expect(ownersLeftBehind(odd)).toEqual({ agentJobs: [], checks: [] });
+  });
+
+  it('is nothing with nothing on record', () => {
+    expect(ownersLeftBehind([])).toEqual({ agentJobs: [], checks: [] });
   });
 });
 

@@ -15,7 +15,7 @@ import {
   type PullRequestSeen,
   type ReviewKnown,
 } from './poller.js';
-import type { Run } from './runs.js';
+import { commandArgs, type Run } from './runs.js';
 
 const at = (time: string) => new Date(`2026-11-20T${time}Z`);
 
@@ -53,7 +53,7 @@ describe('what a pass of the poller runs, from what it saw on GitHub and what wa
   it('runs landed once for a pull request that has merged', () => {
     const decision = passDecision({ projects: [widgets([merged(12, '11:59:00')])] }, { projects: known() }, NOW);
     expect(decision.commands).toEqual([
-      { project: 'acme/widgets', event: 'merged:12', kind: 'landed', args: ['landed', 'acme/widgets', '12'], attempts: 0 },
+      { project: 'acme/widgets', event: 'merged:12', kind: 'landed', command: 'landed', pr: 12, attempts: 0 },
     ]);
     expect(decision.projects).toEqual([
       { project: 'acme/widgets', firstPass: false, startedAt: at('09:00:00'), seenTo: at('11:59:00'), found: ['merged:12'] },
@@ -128,7 +128,7 @@ describe('a merge whose landed did not succeed', () => {
   it('is tried again on the next pass, even when GitHub says nothing has changed since', () => {
     const decision = passDecision({ projects: [widgets(null)] }, { projects: known([failed(1, '11:57:10')]) }, NOW);
     expect(decision.commands).toEqual([
-      { project: 'acme/widgets', event: 'merged:12', kind: 'landed', args: ['landed', 'acme/widgets', '12'], attempts: 1 },
+      { project: 'acme/widgets', event: 'merged:12', kind: 'landed', command: 'landed', pr: 12, attempts: 1 },
     ]);
     // Already on record: it is not found a second time.
     expect(decision.projects[0].found).toEqual([]);
@@ -175,7 +175,7 @@ describe('a pull request labelled review-now', () => {
     const decision = found([labelled(12, '11:59:00', { labels: ['bug', 'review-now'] })]);
     expect(decision.projects[0].found).toEqual(['labelled:12']);
     expect(decision.queued).toEqual([
-      { project: 'acme/widgets', event: 'labelled:12', kind: 'review', args: ['run', 'acme/widgets', '12', '--once'], attempts: 0 },
+      { project: 'acme/widgets', event: 'labelled:12', kind: 'review', command: 'run', pr: 12, attempts: 0 },
     ]);
     // A review runs for hours and a pass waits for what it runs.
     expect(decision.commands).toEqual([]);
@@ -228,7 +228,7 @@ describe("a comment on the pull request of a review that waits on the owner", ()
   it("continues the review when it is the owner's, through the queue", () => {
     const decision = found([owner(900, '11:58:00')]);
     expect(decision.queued).toEqual([
-      { project: 'acme/widgets', event: 'replied:12/900', kind: 'review', args: ['run', 'acme/widgets', '12', '--once'], attempts: 0 },
+      { project: 'acme/widgets', event: 'replied:12/900', kind: 'review', command: 'run', pr: 12, attempts: 0 },
     ]);
     expect(decision.commands).toEqual([]);
   });
@@ -328,7 +328,7 @@ describe('the order a pass works in', () => {
       { projects: new Map([...known([], 'acme/anvils'), ...known()]) },
       NOW,
     );
-    expect(decision.commands.map((c) => c.args.join(' '))).toEqual(['landed acme/anvils 3', 'landed acme/widgets 12']);
+    expect(decision.commands.map((c) => commandArgs(c).join(' '))).toEqual(['landed acme/anvils 3', 'landed acme/widgets 12']);
   });
 });
 
@@ -346,7 +346,7 @@ describe('a new head on a pull request whose review passed', () => {
   it('runs carry-gate once for that head', () => {
     const decision = passDecision({ projects: [widgets([open(12, MOVED, '11:59:00')])] }, { projects: passed([REVIEWED]) }, NOW);
     expect(decision.commands).toEqual([
-      { project: 'acme/widgets', event: `head-moved:12@${MOVED}`, kind: 'carry-gate', args: ['carry-gate', 'acme/widgets', '12'], attempts: 0 },
+      { project: 'acme/widgets', event: `head-moved:12@${MOVED}`, kind: 'carry-gate', command: 'carry-gate', pr: 12, attempts: 0 },
     ]);
     expect(decision.projects[0].found).toEqual([`head-moved:12@${MOVED}`]);
   });
@@ -364,7 +364,7 @@ describe('a new head on a pull request whose review passed', () => {
     const handled: EventRecord = { event: `head-moved:12@${MOVED}`, handledAt: at('11:50:30'), attempts: 1, attemptedAt: at('11:50:20'), running: false };
     const decision = passDecision({ projects: [widgets([open(12, AGAIN, '11:59:00')])] }, { projects: passed([REVIEWED, MOVED], [handled]) }, NOW);
     expect(decision.commands).toEqual([
-      { project: 'acme/widgets', event: `head-moved:12@${AGAIN}`, kind: 'carry-gate', args: ['carry-gate', 'acme/widgets', '12'], attempts: 0 },
+      { project: 'acme/widgets', event: `head-moved:12@${AGAIN}`, kind: 'carry-gate', command: 'carry-gate', pr: 12, attempts: 0 },
     ]);
   });
 
@@ -410,7 +410,7 @@ describe('a new head on a pull request whose review passed', () => {
     const failed: EventRecord = { event: `head-moved:12@${MOVED}`, handledAt: null, attempts: 1, attemptedAt: at('11:57:10'), running: false };
     const decision = passDecision({ projects: [widgets(null)] }, { projects: passed([REVIEWED], [failed]) }, NOW);
     expect(decision.commands).toEqual([
-      { project: 'acme/widgets', event: `head-moved:12@${MOVED}`, kind: 'carry-gate', args: ['carry-gate', 'acme/widgets', '12'], attempts: 1 },
+      { project: 'acme/widgets', event: `head-moved:12@${MOVED}`, kind: 'carry-gate', command: 'carry-gate', pr: 12, attempts: 1 },
     ]);
     expect(decision.projects[0].found).toEqual([]);
   });
@@ -421,7 +421,7 @@ describe('a new head on a pull request whose review passed', () => {
       { projects: passed([REVIEWED]) },
       NOW,
     );
-    expect(decision.commands.map((c) => c.args.join(' '))).toEqual(['landed acme/widgets 9', 'carry-gate acme/widgets 12']);
+    expect(decision.commands.map((c) => commandArgs(c).join(' '))).toEqual(['landed acme/widgets 9', 'carry-gate acme/widgets 12']);
   });
 });
 
@@ -433,8 +433,8 @@ describe('what a pass runs and what it leaves for the queue', () => {
       { projects: new Map([['acme/widgets', { ...known().get('acme/widgets')!, passedGates: new Map([[12, ['a1'.repeat(20)]]]) }]]) },
       NOW,
     );
-    expect(decision.commands.map((c) => c.args.join(' '))).toEqual(['landed acme/widgets 9', 'carry-gate acme/widgets 12']);
-    expect(decision.queued.map((c) => c.args.join(' '))).toEqual(['run acme/widgets 14 --once']);
+    expect(decision.commands.map((c) => commandArgs(c).join(' '))).toEqual(['landed acme/widgets 9', 'carry-gate acme/widgets 12']);
+    expect(decision.queued.map((c) => commandArgs(c).join(' '))).toEqual(['run acme/widgets 14 --once']);
   });
 
   it('does not run a queued review when it is due again either: only the queue starts one', () => {

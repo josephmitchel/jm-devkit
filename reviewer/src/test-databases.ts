@@ -1,10 +1,12 @@
 /**
- * The databases a project's tests need (`reviewer.databases` in its project config): one empty
- * Postgres database per named variable, created before setup and dropped after the run.
+ * One empty Postgres database per variable in `reviewer.databases`, created before setup and
+ * dropped after the run.
  *
- * Every database is recorded in the code reviewer's own database before it is created, and only a
- * recorded database is ever dropped, by the run it was recorded for. A run that is killed leaves
- * its record, and drops what it left when it is resumed.
+ * Every database is recorded before it is created, under its owner: a review, a sweep, or a
+ * project's nightly checks. Only a recorded database is ever dropped. Its owner drops it when the
+ * run ends, when the same review or sweep is resumed, at the project's next run of its checks, and
+ * at `reset`. What a run that never comes back left is dropped by the next nightly run, once it
+ * holds the machine.
  */
 
 import { randomBytes } from 'node:crypto';
@@ -12,9 +14,9 @@ import { eq } from 'drizzle-orm';
 import pg from 'pg';
 
 import { db, schema } from './db/client.js';
+import { CHECKS_LOCK_CLASS, checksLockKey, tryLock } from './locks.js';
 import type { ProjectSetup } from './project-config.js';
 
-/** One database a run is to create, and the variable its address goes in. */
 export interface PlannedDatabase {
   variable: string;
   name: string;
@@ -22,15 +24,14 @@ export interface PlannedDatabase {
 }
 
 /**
- * The server the databases are created on, as a role that may create databases. Never the code
- * reviewer's `DATABASE_URL`: the project's commands are handed addresses made from this one.
+ * As a role that may create databases. Never the code reviewer's `DATABASE_URL`: the project's
+ * commands are handed addresses made from this one.
  */
 export const TEST_DATABASES_SETTING = 'REVIEWER_TEST_DATABASES_URL';
 
 /**
- * The databases to create for `variables` on the server at `serverUrl`, one each. `run` is a token
- * unique to this run, so two runs never plan the same name whatever projects they are for. Throws,
- * saying what is missing, when databases are named and there is no server to create them on.
+ * `run` is a token unique to this run, so two runs never plan the same name. Throws, saying what is
+ * missing, when databases are named and there is no server to create them on.
  */
 export function planDatabases(variables: string[], serverUrl: string | undefined, run: string): PlannedDatabase[] {
   if (variables.length === 0) return [];
@@ -88,11 +89,10 @@ const AFTER_ADDRESS = /[),.;:\]}]+$/;
 const OWN_NAME_IN_ADDRESS = /\/reviewer_test_[0-9a-f]{16}_[0-9]+(?:[?#]|$)/;
 
 /**
- * `text` without the addresses handed to a project's commands, for text that leaves the machine:
- * an address holds the password of the role that creates every project's test databases. Any
- * Postgres address on the server at `serverUrl`, or naming a database this code made, is replaced
- * whole, and the role's password is removed wherever else it stands, since a command can print
- * the parts of an address apart. With no server set nothing was handed out, and nothing changes.
+ * For text that leaves the machine: an address holds the password of the role that creates every
+ * project's test databases. Any Postgres address on the server at `serverUrl`, or naming a database
+ * this code made, is replaced whole, and the password is removed wherever else it stands, since a
+ * command can print the parts of an address apart.
  */
 export function withoutTestDatabaseAddresses(text: string, serverUrl: string | undefined): string {
   let server: URL;
@@ -127,39 +127,48 @@ function decoded(part: string): string {
   }
 }
 
-/**
- * The run that databases belong to: a review or a sweep, by its id, or a project's nightly checks,
- * by the project. A resumed run has the same owner, and so has the next run of a project's checks.
- */
+/** A resumed review or sweep has the same owner, and so has the next run of a project's checks. */
 export type RunOwner = `review:${number}` | `sweep:${number}` | `checks:${string}`;
 
-/** A database recorded as created, and the run it was created for. */
 export interface DatabaseRecord {
   name: string;
   owner: string;
 }
 
 /**
- * The recorded databases that are `owner`'s to drop: its own, from this process or from an earlier
- * one that was interrupted. Never another run's, which may be using them right now.
+ * Its own, from this process or from an earlier one that was interrupted. Never another run's,
+ * which may be using them right now.
  */
 export function leftBehind(records: DatabaseRecord[], owner: RunOwner): string[] {
   return records.filter((record) => record.owner === owner).map((record) => record.name);
 }
 
 /**
- * `project` with each database's address in its variable, over a value `env` gave the name. They
- * travel in `env`, to the project's commands only, never in the code reviewer's own environment.
+ * As a nightly run that has just taken the machine sorts them. No agent job is running then, so
+ * every review's and sweep's were left by a run that died. A project's checks run outside the
+ * machine's lock: theirs are dropped only while that project's checks lock can be had. An owner in
+ * no known form is not listed.
  */
+export function ownersLeftBehind(records: DatabaseRecord[]): { agentJobs: RunOwner[]; checks: Array<{ project: string; owner: RunOwner }> } {
+  const owners = [...new Set(records.map((record) => record.owner))];
+  return {
+    agentJobs: owners.filter((owner): owner is RunOwner => /^(?:review|sweep):\d+$/.test(owner)),
+    checks: owners.flatMap((owner) => {
+      const project = /^checks:(.+)$/.exec(owner)?.[1];
+      return project ? [{ project, owner: owner as RunOwner }] : [];
+    }),
+  };
+}
+
+/** The addresses travel in `env`, to the project's commands only, never in the code reviewer's own environment. */
 export function withAddresses(project: ProjectSetup, planned: PlannedDatabase[]): ProjectSetup {
   const addresses = Object.fromEntries(planned.map(({ variable, address }) => [variable, address]));
   return { ...project, env: { ...project.env, ...addresses } };
 }
 
 /**
- * Create the databases `project` names and return it with their addresses in its env. Called each
- * time a checkout is about to be set up; what `owner` created before, in this process or one that
- * was killed, is dropped first, so setup always meets empty databases.
+ * Called each time a checkout is about to be set up. What `owner` created before is dropped first,
+ * so setup always meets empty databases.
  */
 export async function provideTestDatabases(owner: RunOwner, project: ProjectSetup): Promise<ProjectSetup> {
   // Planned before anything is touched: a machine that cannot create the databases says so first.
@@ -178,7 +187,6 @@ export async function provideTestDatabases(owner: RunOwner, project: ProjectSetu
   return withAddresses(project, planned);
 }
 
-/** Drop every database recorded for `owner`, forgetting each once it is gone. */
 export async function dropTestDatabases(owner: RunOwner): Promise<void> {
   // No server, so nothing was created here: a run on such a machine never reads the table.
   if (!process.env[TEST_DATABASES_SETTING]?.trim()) return;
@@ -194,9 +202,8 @@ export async function dropTestDatabases(owner: RunOwner): Promise<void> {
 }
 
 /**
- * Do `run`, then drop `owner`'s databases whichever way it ended. A drop that fails is reported
- * and never replaces the run's own result or error; its databases stay recorded, and are dropped
- * when the same review or sweep next runs.
+ * A drop that fails is reported and never replaces the run's own result or error. Its databases
+ * stay recorded, and are dropped when the same owner next runs or by the next nightly run.
  */
 export async function droppingTestDatabases<T>(owner: RunOwner, run: () => Promise<T>): Promise<T> {
   try {
@@ -208,7 +215,39 @@ export async function droppingTestDatabases<T>(owner: RunOwner, run: () => Promi
   }
 }
 
-/** Run `work` on one connection to the server the databases live on. */
+/**
+ * For a nightly run that holds the machine: the databases of runs that will never drop their own.
+ * Returns a line for each thing done or left; a drop that fails is a line too and stops nothing.
+ */
+export async function dropDatabasesLeftBehind(): Promise<string[]> {
+  if (!process.env[TEST_DATABASES_SETTING]?.trim()) return [];
+  const lines: string[] = [];
+  const drop = async (owner: RunOwner) => {
+    try {
+      await dropTestDatabases(owner);
+      lines.push(`dropped the test databases ${owner} left behind`);
+    } catch (err) {
+      lines.push(`could not drop the test databases ${owner} left behind (${String(err).split('\n')[0]}); they stay recorded`);
+    }
+  };
+  const left = ownersLeftBehind(await db.select().from(schema.testDatabases));
+  for (const owner of left.agentJobs) await drop(owner);
+  for (const { project, owner } of left.checks) {
+    // Held while they go, so a run of the checks cannot start on databases that are being dropped.
+    const lock = await tryLock(checksLockKey(project), CHECKS_LOCK_CLASS);
+    if (!lock) {
+      lines.push(`${project}'s nightly checks are running: their test databases are left to that run`);
+      continue;
+    }
+    try {
+      await drop(owner);
+    } finally {
+      await lock.release();
+    }
+  }
+  return lines;
+}
+
 async function onServer(work: (statement: (sql: string) => Promise<void>) => Promise<void>): Promise<void> {
   const client = new pg.Client({ connectionString: serverAddress(process.env[TEST_DATABASES_SETTING] ?? '').href });
   await client.connect();

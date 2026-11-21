@@ -212,6 +212,18 @@ describe('the one open failure issue per place and kind of run', () => {
     expect(kit.issues[1].title).toBe("A nightly run failed on the code reviewer's side");
   });
 
+  it("names a lock that does not hold as the type of error, in the kit's repository", () => {
+    const kit = new Place();
+    kit.told(kitFailed(1, { kind: 'nightly', stage: 'starting', errorType: 'MachineLockError' }));
+    expect(kit.issues[0].body).toContain('Type of error: `MachineLockError`');
+  });
+
+  it("names a run of the checks that met another one going, in the kit's repository", () => {
+    const kit = new Place();
+    kit.told(kitFailed(1, { kind: 'checks', stage: 'starting', errorType: 'ChecksRunningError' }));
+    expect(kit.issues[0].body).toContain('Type of error: `ChecksRunningError`');
+  });
+
   it("keeps the two sides apart where the kit's repository is also the project", () => {
     const kitAsProject = new Place();
     kitAsProject.told(kitFailed(1));

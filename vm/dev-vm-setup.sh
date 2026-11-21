@@ -168,6 +168,8 @@ if [ ! -e "$CREDENTIALS_FILE" ]; then
 
 # The code reviewer's own database. While projects are still moving off GitHub Actions this is
 # the hosted database's address instead; keep this line, commented out, for the day of the copy.
+# It must be a DIRECT address, never a pooled one: the locks that keep agent jobs to one at a
+# time do not hold through a pooler, and the code reviewer refuses to start agent jobs if so.
 DATABASE_URL=postgres://$REVIEWER_DB:$db_password@127.0.0.1:$pg_port/$REVIEWER_DB
 
 # Where the databases a project's tests ask for are created.
@@ -292,7 +294,7 @@ cat <<EOF
 Done. Left to do by hand:
   - $AGENT_USER: sign in to Claude Code (run 'claude' and follow /login) and to GitHub (gh auth login).
     Its database addresses use the local socket, for example:
-      postgresql:///vices_demo?host=/var/run/postgresql
+      postgresql:///widgets_demo?host=/var/run/postgresql
   - $REVIEWER_USER: do NOT sign in to anything as this user. Its credentials reach the code
     reviewer's services only from $CREDENTIALS_FILE, which root alone can read.
 EOF
@@ -310,6 +312,8 @@ A pass queues the reviews it finds, and the queue takes a turn after every pass:
 next review when no agent job is running, and never while the nightly run is going.
   By hand:  sudo systemctl start --no-block code-reviewer-queue.service
   Its log:  journalctl -u code-reviewer-queue.service
+DATABASE_URL in $CREDENTIALS_FILE must be a direct address, not a pooled one: through a pooler
+the lock that keeps agent jobs to one at a time does not hold, and no agent job is started.
 EOF
 else
   cat <<EOF

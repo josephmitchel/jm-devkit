@@ -1,10 +1,10 @@
 import { and, asc, desc, eq, inArray, isNotNull, isNull } from 'drizzle-orm';
 
-import { db, pool, schema } from './db/client.js';
-import { reportRun } from './failure-report.js';
+import { db, schema } from './db/client.js';
 import { appCredentials } from './gh-auth.js';
-import { LOCK_CLASS } from './migrate.js';
-import { commentsSeen, projectsSeen, pullRequestsSeen, type Asking, type Memory } from './poller-github.js';
+import { PASS_LOCK, tryLock } from './locks.js';
+import { why } from './log.js';
+import { commentsSeen, projectsSeen, pullRequestsSeen, type GitHubAccess, type Memory } from './poller-github.js';
 import {
   commandFor,
   gatesOfPassedReviews,
@@ -18,54 +18,41 @@ import {
   type ProjectSeen,
   type ReviewKnown,
 } from './poller.js';
-import { ensureProjectRow } from './project-row.js';
 import { classifyProjects, projectLine } from './projects.js';
 import { OWN_COMMENT_KINDS } from './reply-authority.js';
-import { errorType, finishRun, interruptRunsLeftRunning, runCommand, runLine, startRun, stopping, type RunResult } from './runs.js';
+import { takeRecordedStepOrSayWhy } from './recorded-step.js';
+import { commandArgs, interruptRunsLeftRunning, runLine, stopping } from './runs.js';
 
 /**
- * One pass of the poller: ask GitHub what has happened in each handled project, let
- * {@link passDecision} say what to run, and run it. A review is not run here: its event goes on
- * record and the queue starts it (queue-run.ts). Everything that decides is in poller.ts and
- * everything that asks GitHub in poller-github.ts; this file only reads and writes the database
- * around them, in an order that keeps an event from being handled twice or lost.
+ * This file only reads and writes the database around the decision (poller.ts) and what is asked of
+ * GitHub (poller-github.ts), in an order that keeps an event from being handled twice or lost. A
+ * review is not run here: its event goes on record and the queue starts it.
  */
 
-// Held for the whole of a pass, on a connection of its own, so it is let go when the process dies.
-const PASS_LOCK_KEY = 2;
 // Longer than GitHub ever takes to answer; a request that hangs must not hold every later pass.
 const ANSWER_WITHIN_MS = 30_000;
 
 export type PassOutcome = 'succeeded' | 'failed' | 'not started';
 
-/**
- * Do a pass's work unless another pass is doing its own, in which case nothing is done. Passes
- * never overlap: the timer does not start a service that is still running, and this lock covers a
- * pass started by hand beside it.
- */
+/** The timer does not start a pass while one is going; this lock covers one started by hand beside it. */
 export async function underPassLock<T>(work: () => Promise<T>): Promise<T | 'not started'> {
-  const lock = await pool.connect();
+  const lock = await tryLock(PASS_LOCK);
+  if (!lock) return 'not started';
   try {
-    const held = await lock.query('select pg_try_advisory_lock($1, $2) as held', [LOCK_CLASS, PASS_LOCK_KEY]);
-    if (!held.rows[0].held) return 'not started';
-    try {
-      return await work();
-    } finally {
-      await lock.query('select pg_advisory_unlock($1, $2)', [LOCK_CLASS, PASS_LOCK_KEY]);
-    }
+    return await work();
   } finally {
-    lock.release();
+    await lock.release();
   }
 }
 
-/** Run one pass, unless another is still going. */
 export async function runPass(say: (line: string) => void = console.log): Promise<PassOutcome> {
   const outcome = await underPassLock(() => pass(say));
   if (outcome === 'not started') say('another pass is still going: this one leaves it to finish');
   return outcome;
 }
 
-const inDatabase: Memory = {
+/** The answers kept between passes, in the database. */
+export const inDatabase: Memory = {
   async recall(question) {
     const [row] = await db.select().from(schema.githubAnswers).where(eq(schema.githubAnswers.question, question));
     return row ? { etag: row.etag, answer: row.answer } : null;
@@ -79,25 +66,23 @@ const inDatabase: Memory = {
   },
 };
 
-const why = (err: unknown) => (err instanceof Error ? err.message : String(err));
-
 async function pass(say: (line: string) => void): Promise<PassOutcome> {
   // Under the lock no other pass is going, so a run of a pass still `running` has no process.
   for (const run of await interruptRunsLeftRunning(leftByPasses)) say(`an earlier pass never recorded how this ended: ${runLine(run)}`);
 
   const credentials = appCredentials();
   if (!credentials) throw new Error("a pass needs the code reviewer's App: set REVIEWER_APP_CLIENT_ID and REVIEWER_APP_PRIVATE_KEY");
-  const asking: Asking = {
+  const github: GitHubAccess = {
     fetch: (input, init) => fetch(input, { ...init, signal: AbortSignal.timeout(ANSWER_WITHIN_MS) }),
     credentials,
     memory: inDatabase,
     now: () => new Date(),
     tally: { asked: 0, unchanged: 0 },
   };
-  // Projects GitHub did not answer about. They are left alone this pass and the pass ends failed.
+  // Left alone this pass, and the pass ends failed.
   let unanswered = 0;
 
-  const { projects: read, unread } = await projectsSeen(asking);
+  const { projects: read, unread } = await projectsSeen(github);
   for (const { slug, why: reason } of unread) {
     say(`${slug} left alone this pass: its default branch could not be read (${reason})`);
     unanswered++;
@@ -112,12 +97,12 @@ async function pass(say: (line: string) => void): Promise<PassOutcome> {
     if (project.state !== 'handled') {
       // Said when it is learnt, not every few minutes.
       if (fresh) say(projectLine(project));
-      seen.push({ project, at: asking.now(), pullRequests: null });
+      seen.push({ project, at: github.now(), pullRequests: null });
       continue;
     }
     try {
       const [position] = await db.select().from(schema.pollerProjects).where(eq(schema.pollerProjects.project, project.slug));
-      const listing = await pullRequestsSeen(asking, project.slug, token, { etag: position?.pullsEtag ?? null, seenTo: position?.seenTo ?? null });
+      const listing = await pullRequestsSeen(github, project.slug, token, { etag: position?.pullsEtag ?? null, seenTo: position?.seenTo ?? null });
       if (position) {
         // Every event on record when the listing is read; otherwise only those still to be handled.
         const events = await eventsOnRecord(project.slug, listing.pullRequests === null);
@@ -128,7 +113,7 @@ async function pass(say: (line: string) => void): Promise<PassOutcome> {
         const reviews = listing.pullRequests === null ? [] : await reviewsKnown(project.slug);
         const before: ProjectKnown = { startedAt: position.startedAt, seenTo: position.seenTo, events, passedGates, reviews };
         for (const { pr, since } of repliesToRead(listing.pullRequests ?? [], before)) {
-          pr.comments = await commentsSeen(asking, project.slug, token, pr.number, since);
+          pr.comments = await commentsSeen(github, project.slug, token, pr.number, since);
         }
         known.set(project.slug, before);
       }
@@ -140,14 +125,14 @@ async function pass(say: (line: string) => void): Promise<PassOutcome> {
     }
   }
 
-  const decision = passDecision({ projects: seen }, { projects: known }, asking.now());
+  const decision = passDecision({ projects: seen }, { projects: known }, github.now());
 
   for (const p of decision.projects) {
-    await recordPass(p.project, p.found, { startedAt: p.startedAt, seenTo: p.seenTo, pullsEtag: etags.get(p.project) ?? null, lastPassAt: asking.now() });
+    await recordPass(p.project, p.found, { startedAt: p.startedAt, seenTo: p.seenTo, pullsEtag: etags.get(p.project) ?? null, lastPassAt: github.now() });
     if (p.firstPass) say(`${p.project}: first pass. Watched from ${p.startedAt.toISOString()}; nothing before that is acted on`);
   }
-  // On record now, and not this pass's to run: the queue starts it when the machine is free.
-  for (const job of decision.queued) say(`${job.project} ${job.event}: \`${job.args.join(' ')}\` queued`);
+  // Not this pass's to run: the queue starts it when the machine is free.
+  for (const job of decision.queued) say(`${job.project} ${job.event}: \`${commandArgs(job).join(' ')}\` queued`);
 
   const ended: string[] = [];
   for (const command of decision.commands) {
@@ -165,16 +150,15 @@ async function pass(say: (line: string) => void): Promise<PassOutcome> {
       `, ${ended.length} command(s) run` +
       (ended.length > 0 ? ` (${count('succeeded')} succeeded, ${count('failed')} failed, ${count('interrupted')} interrupted)` : '') +
       (left > 0 ? `, ${left} left for the next pass` : '') +
-      `. GitHub was asked ${asking.tally.asked} time(s) and answered "unchanged" to ${asking.tally.unchanged}`,
+      `. GitHub was asked ${github.tally.asked} time(s) and answered "unchanged" to ${github.tally.unchanged}`,
   );
   return unanswered > 0 || ended.some((e) => e !== 'succeeded' && e !== 'taken') || left > 0 ? 'failed' : 'succeeded';
 }
 
 /**
- * Put on record what a pass found in a project, together with where the pass got to, before
- * anything is run. From then on the record alone says what is still to be handled, so the next
- * pass can be told "unchanged" by GitHub and lose nothing. An event already on record stays as it
- * is. `startedAt` is kept from the project's first pass.
+ * Before anything is run. From then on the record alone says what is still to be handled, so the
+ * next pass can be told "unchanged" by GitHub and lose nothing. `startedAt` is kept from the
+ * project's first pass.
  */
 export async function recordPass(
   project: string,
@@ -197,9 +181,9 @@ const keyOf = (command: Pick<Command, 'project' | 'event'>) =>
   and(eq(schema.pollerEvents.project, command.project), eq(schema.pollerEvents.event, command.event));
 
 /**
- * Take an event to run its command, or return false when it is not this pass's to take. The count
- * of attempts is raised only from the number the pass read, and only while the event is
- * unhandled, so of two passes that decided the same command one finds nothing to take.
+ * False when it is not this pass's to take: the count of attempts is raised only from the number
+ * the pass read, and only while the event is unhandled, so of two passes that decided the same
+ * command one finds nothing to take.
  */
 export async function takeEvent(command: Pick<Command, 'project' | 'event' | 'attempts'>, now: Date = new Date()): Promise<boolean> {
   const taken = await db
@@ -210,7 +194,6 @@ export async function takeEvent(command: Pick<Command, 'project' | 'event' | 'at
   return taken.length > 0;
 }
 
-/** A project's reviews as the decision wants them, each with the comments the code reviewer posted for it. */
 async function reviewsKnown(project: string): Promise<ReviewKnown[]> {
   const reviews = await db
     .select({ id: schema.reviews.id, pr: schema.reviews.prNumber, state: schema.reviews.state, since: schema.reviews.updatedAt })
@@ -232,14 +215,14 @@ async function reviewsKnown(project: string): Promise<ReviewKnown[]> {
 }
 
 /**
- * Forget that a pull request's review was ever asked for: `reset` deletes the review, and the
- * events that asked for it go with it, so labelling the pull request again starts a new one.
+ * `reset` deletes the review; the events that asked for it go with it, so labelling the pull
+ * request again starts a new one.
  */
 export async function forgetReviewEvents(project: string, pr: number): Promise<void> {
   const rows = await db.select().from(schema.pollerEvents).where(eq(schema.pollerEvents.project, project));
   const asked = rows.filter((row) => {
     const command = commandFor(project, row.event, row.attempts);
-    return command?.kind === 'review' && Number(command.args[2]) === pr;
+    return command?.kind === 'review' && command.pr === pr;
   });
   if (asked.length === 0) return;
   await db
@@ -247,7 +230,7 @@ export async function forgetReviewEvents(project: string, pr: number): Promise<v
     .where(and(eq(schema.pollerEvents.project, project), inArray(schema.pollerEvents.event, asked.map((row) => row.event))));
 }
 
-/** A project's events as the decision wants them. `waitingOnly` leaves out the ones already handled. */
+/** `waitingOnly` leaves out the ones already handled. */
 async function eventsOnRecord(project: string, waitingOnly: boolean): Promise<EventRecord[]> {
   const rows = await db
     .select({ event: schema.pollerEvents, runState: schema.runs.state })
@@ -264,7 +247,6 @@ async function eventsOnRecord(project: string, waitingOnly: boolean): Promise<Ev
   }));
 }
 
-/** The commits the gate of each of a project's passed reviews is on, by pull request. */
 async function passedGatesOnRecord(project: string): Promise<Map<number, string[]>> {
   const statuses = schema.githubArtifacts;
   const rows = await db
@@ -278,9 +260,8 @@ async function passedGatesOnRecord(project: string): Promise<Map<number, string[
 }
 
 /**
- * Run one event's command as a recorded run of its own, and record the event as handled only if
- * the command succeeded. A failed or interrupted command leaves the event on record with one
- * more attempt against it, to be tried again by a later pass.
+ * The event is recorded as handled only if the command succeeded. Otherwise it stays on record with
+ * one more attempt against it, for a later pass.
  */
 async function handle(command: Command, say: (line: string) => void): Promise<'succeeded' | 'failed' | 'interrupted' | 'taken'> {
   const key = keyOf(command);
@@ -288,36 +269,28 @@ async function handle(command: Command, say: (line: string) => void): Promise<'s
     say(`${command.project} ${command.event}: already taken by another pass`);
     return 'taken';
   }
-  try {
-    // A project registers itself (ADR 0004): a command needs its row, and this may be its first run.
-    await ensureProjectRow(command.project);
-    const run = await startRun({ kind: command.kind, project: command.project });
-    await db.update(schema.pollerEvents).set({ runId: run.id }).where(key);
-    say(`${command.project} ${command.event}: \`${command.args.join(' ')}\` started as ${run.id}`);
-    let result: RunResult;
-    try {
-      result = await runCommand(run, command.args);
-    } catch (err) {
-      result = { state: 'failed', stage: 'starting', errorType: errorType(err) };
-    }
-    // Before the run is recorded as over: if this process dies between the two writes, the event
-    // must not be left looking unhandled after a command that succeeded.
-    if (result.state === 'succeeded') await db.update(schema.pollerEvents).set({ handledAt: new Date() }).where(key);
-    const finished = await finishRun(run, result);
-    say(runLine(finished));
-    await reportRun(finished, say);
-    return finished.state === 'running' ? 'failed' : finished.state;
-  } catch (err) {
-    // The run could not be recorded at all (the database, the state directory).
-    say(`${command.project} ${command.event} could not be run: ${why(err)}`);
-    return 'failed';
-  }
+  const name = `${command.project} ${command.event}`;
+  const finished = await takeRecordedStepOrSayWhy(
+    {
+      command,
+      name,
+      started: (run) => `${name}: \`${commandArgs(command).join(' ')}\` started as ${run.id}`,
+      needsProjectRow: true,
+      onStart: async (run) => void (await db.update(schema.pollerEvents).set({ runId: run.id }).where(key)),
+      // Before the run is recorded as over: if this process dies between the two writes, the
+      // event must not be left looking unhandled after a command that succeeded.
+      beforeFinish: async (result) => {
+        if (result.state === 'succeeded') await db.update(schema.pollerEvents).set({ handledAt: new Date() }).where(key);
+      },
+    },
+    say,
+  );
+  return finished === null || finished.state === 'running' ? 'failed' : finished.state;
 }
 
-// How many handled events `status` shows for a project. Those still to be handled are all shown.
+// Those still to be handled are all shown.
 const RECENT_EVENTS = 5;
 
-/** What `status` shows of the poller: each project's position, and its recent and unhandled events. */
 export async function pollerStatusRows(slug?: string): Promise<{ projects: Array<typeof schema.pollerProjects.$inferSelect>; events: EventRow[] }> {
   const projects = await db
     .select()

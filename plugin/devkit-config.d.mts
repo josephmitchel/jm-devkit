@@ -52,6 +52,8 @@ export interface JsonSchema {
   items?: JsonSchema;
   minItems?: number;
   uniqueItems?: boolean;
+  /** The kit's own keyword: properties whose value no two items of the array may share. */
+  uniqueItemProperties?: string[];
   contains?: JsonSchema;
   const?: unknown;
   enum?: unknown[];

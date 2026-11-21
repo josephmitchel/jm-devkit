@@ -23,7 +23,7 @@ The scripts below are the parts that must not be left to judgement. Run each as 
 | --- | --- | --- |
 | `install/kit-commit.mjs` | Prints the kit commit the installed plugin was built from: the last segment of `${CLAUDE_PLUGIN_ROOT}`, a 12-hex SHA prefix (or HEAD, for a plugin loaded from a checkout). | 0, or 2 cannot tell |
 | `install/app.mjs installed <repo>` | Asks GitHub, as the code reviewer's App, whether the App is installed on the repo. Prints `installed` or `not installed`. | 0 installed, 1 not, 2 no credentials or GitHub refused |
-| `install/discussions.mjs <repo>` | Asks GitHub, as the owner's `gh` login, whether the repo has discussions turned on and the code reviewer's discussion category. Prints `ready`, or exactly what the owner must create. | 0 ready, 1 not, 2 gh failed |
+| `install/discussions.mjs <repo>` | Asks GitHub, as the owner's `gh` login, whether the project has discussions turned on and the code reviewer's discussion category. Prints `ready`, or exactly what the owner must create. | 0 ready, 1 not, 2 gh failed |
 | `generator/generate.mjs <dir> [--check]` | Writes the kit-owned files from `<dir>/devkit.json` and removes the retired ones, printing `wrote <path>` or `removed <path>`; with `--check`, lists the ones behind, and says on stderr which of them are retired. | 0 level, 1 behind, 2 no or invalid `devkit.json` |
 | `install/settings.mjs <dir> [--dry-run]` | Removes the permission rules in `.claude/settings.json` that make an agent ask before a plain `git commit` or `git push`. | 0, or 2 not JSON |
 | `install/label.mjs <repo> [--dry-run]` | Creates `review-now` if the repo lacks it. Prints `create review-now`. | 0, 1 gh failed |

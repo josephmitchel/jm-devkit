@@ -1,49 +1,59 @@
-import { desc, eq } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray } from 'drizzle-orm';
 
 import { db, schema } from './db/client.js';
 import { createDiscussion, getDiscussionSetup } from './github.js';
-import { discussionCategory, discussionTarget, summaryPlan, type Night } from './night-summary.js';
+import { discussionCategory, discussionTarget, summaryPlans, type Night } from './night-summary.js';
 
-/** A project's latest sweep and the account its synthesis left, or null before its first sweep. */
-async function latestNight(slug: string): Promise<(Night & { sweepId: number }) | null> {
+type Sweep = typeof schema.sweeps.$inferSelect;
+
+/** And its latest, whenever that was. In the order they were made, each with the account its synthesis left. */
+async function nightsSince(slug: string, since: Date): Promise<Array<Night & { sweepId: number }>> {
   const [repo] = await db.select().from(schema.repos).where(eq(schema.repos.slug, slug));
-  if (!repo) return null;
-  const [sweep] = await db.select().from(schema.sweeps).where(eq(schema.sweeps.repoId, repo.id)).orderBy(desc(schema.sweeps.id)).limit(1);
-  if (!sweep) return null;
-  const [round] = sweep.currentRoundId
-    ? await db.select({ account: schema.rounds.roundSummary }).from(schema.rounds).where(eq(schema.rounds.id, sweep.currentRoundId))
-    : [];
-  return {
+  if (!repo) return [];
+  const ofProject = eq(schema.sweeps.repoId, repo.id);
+  const latest = await db.select().from(schema.sweeps).where(ofProject).orderBy(desc(schema.sweeps.id)).limit(1);
+  const finished = await db.select().from(schema.sweeps).where(and(ofProject, gte(schema.sweeps.finishedAt, since)));
+  const sweeps = [...new Map<number, Sweep>([...finished, ...latest].map((s) => [s.id, s])).values()].sort((a, b) => a.id - b.id);
+  const rounds = sweeps.flatMap((s) => (s.currentRoundId === null ? [] : [s.currentRoundId]));
+  const accounts =
+    rounds.length === 0
+      ? []
+      : await db.select({ id: schema.rounds.id, account: schema.rounds.roundSummary }).from(schema.rounds).where(inArray(schema.rounds.id, rounds));
+  return sweeps.map((sweep) => ({
     sweepId: sweep.id,
     project: slug,
     state: sweep.state,
     summary: sweep.summary,
-    account: round?.account ?? null,
+    account: accounts.find((r) => r.id === sweep.currentRoundId)?.account ?? null,
     baseSha: sweep.baseSha,
     headSha: sweep.headSha,
     finishedAt: sweep.finishedAt,
     discussionUrl: sweep.discussionUrl,
-  };
+  }));
 }
 
+// A little more than the rule looks back, so the query never cuts a night the rule would post.
+const LOOKS_BACK_MS = 8 * 24 * 60 * 60 * 1000;
+
 /**
- * What the `summary` command does: post the project's latest sweep as a discussion in the
- * project, unless there is nothing to post or it is already posted. Nothing is run again: the
- * post is made from what the sweep recorded.
+ * Nothing is run again: a post is made from what its sweep recorded, and recorded on that sweep, so
+ * it is made once.
  */
 export async function postSummary(slug: string): Promise<'posted' | 'nothing to post'> {
   // Asked on every night, a quiet one included: a category that is missing stays reported until
   // it exists, and a night with nothing to post cannot pass for the fault being mended.
   const target = discussionTarget(slug, await getDiscussionSetup(slug), discussionCategory());
-  const night = await latestNight(slug);
-  const plan = summaryPlan(night);
+  const now = new Date();
+  const plan = summaryPlans(await nightsSince(slug, new Date(now.getTime() - LOOKS_BACK_MS)), now);
   if (plan.action === 'skip') {
     console.log(`no summary posted for ${slug}: ${plan.why}`);
     return 'nothing to post';
   }
-  const url = await createDiscussion(target, plan.title, plan.body);
-  // Said before it is recorded, so the log has the address even if the record cannot be made.
-  console.log(`posted "${plan.title}" for sweep ${night!.sweepId} of ${slug}: ${url}`);
-  await db.update(schema.sweeps).set({ discussionUrl: url }).where(eq(schema.sweeps.id, night!.sweepId));
+  for (const { night, title, body } of plan.posts) {
+    const url = await createDiscussion(target, title, body);
+    // Said before it is recorded, so the log has the address even if the record cannot be made.
+    console.log(`posted "${title}" for sweep ${night.sweepId} of ${slug}: ${url}`);
+    await db.update(schema.sweeps).set({ discussionUrl: url }).where(eq(schema.sweeps.id, night.sweepId));
+  }
   return 'posted';
 }

@@ -62,9 +62,10 @@ export type ReviewOutcome = 'passed' | 'awaiting_answers' | 'queued';
 export interface RunReviewOptions {
   /**
    * Return at the first point the review cannot advance on its own instead of waiting it out.
-   * A CI run is billed for every minute it holds a runner, so a review that needs an answer
-   * (or the repo's review slot) exits and is re-entered by the next GitHub event — the state
-   * in Postgres is the entire handoff. Local runs leave this off and wait.
+   * A CI run is billed for every minute it holds a runner, and on the machine a waiting review
+   * would hold the queue's turn, so a review that needs an answer (or the repo's review slot)
+   * exits and is re-entered by the next GitHub event — the state in Postgres is the entire
+   * handoff. Only a run by hand leaves this off and waits.
    */
   oneShot?: boolean;
 }

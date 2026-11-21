@@ -1,9 +1,10 @@
-import { execFile, spawn } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
+import { streamChild } from './child.js';
 import type { CommitFacts } from './fix-commit.js';
 import { track } from './heartbeat.js';
 import { positiveIntEnv } from './stages/context.js';
@@ -360,9 +361,8 @@ const STREAM_KILL_AFTER_MS = 5000;
 const STREAM_CLOSES_WITHIN_MS = 5000;
 
 /**
- * Run a repo command for everything it writes: each piece goes to `write` as it comes, where
- * {@link runRepoCommand} keeps only a trimmed failure. The command gets the same environment
- * (see repoCommandEnv), and is stopped once it has run for `timeoutMs`.
+ * Each piece of the command's output goes to `write` as it comes, where {@link runRepoCommand}
+ * keeps only a trimmed failure. Same environment (repoCommandEnv); stopped after `timeoutMs`.
  */
 export function streamRepoCommand(
   dir: string,
@@ -372,53 +372,20 @@ export function streamRepoCommand(
   timeoutMs: number,
 ): Promise<StreamedCommand> {
   const activity = track(`command "${command.length > 60 ? `${command.slice(0, 57)}...` : command}"`);
-  return new Promise((resolve) => {
-    let tail = '';
-    let timedOut = false;
-    let settled = false;
-    const timers: NodeJS.Timeout[] = [];
-    const child = spawn('sh', ['-c', command], {
-      cwd: dir,
-      env: repoCommandEnv(process.env, projectEnv),
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    const finish = (exitCode: number | null, signal: string | null) => {
-      if (settled) return;
-      settled = true;
-      for (const timer of timers) clearTimeout(timer);
-      activity.done();
-      resolve({ exitCode, signal, timedOutAfterMs: timedOut ? timeoutMs : null, tail });
-    };
-    timers.push(
-      setTimeout(() => {
-        timedOut = true;
-        child.kill('SIGTERM');
-        timers.push(setTimeout(() => child.kill('SIGKILL'), STREAM_KILL_AFTER_MS));
-      }, timeoutMs),
-    );
-    for (const from of [child.stdout, child.stderr]) {
-      from.setEncoding('utf8');
-      from.on('data', (chunk: string) => {
-        activity.output();
-        tail = (tail + chunk).slice(-STREAM_TAIL_CHARS);
-        write(chunk);
-      });
-    }
-    child.on('error', (err) => {
-      tail = `${tail}${err.message}\n`;
-      write(`${err.message}\n`);
-      finish(null, null);
-    });
-    child.on('exit', (exitCode, signal) => {
-      timers.push(
-        setTimeout(() => {
-          child.stdout.destroy();
-          child.stderr.destroy();
-          finish(exitCode, signal);
-        }, STREAM_CLOSES_WITHIN_MS),
-      );
-    });
-    child.on('close', finish);
+  let tail = '';
+  const wrote = (chunk: string) => {
+    tail = (tail + chunk).slice(-STREAM_TAIL_CHARS);
+    write(chunk);
+  };
+  // Not a group of its own: only the command's shell is signalled when it is stopped for time.
+  const options = { cwd: dir, env: repoCommandEnv(process.env, projectEnv), ownGroup: false, limitMs: timeoutMs, killAfterMs: STREAM_KILL_AFTER_MS, closesWithinMs: STREAM_CLOSES_WITHIN_MS };
+  return streamChild('sh', ['-c', command], options, (chunk) => {
+    activity.output();
+    wrote(chunk);
+  }).then((child) => {
+    if (child.error) wrote(`${child.error.message}\n`);
+    activity.done();
+    return { exitCode: child.exitCode, signal: child.signal, timedOutAfterMs: child.stoppedBy === 'limit' ? timeoutMs : null, tail };
   });
 }
 

@@ -2,10 +2,13 @@ import {
   getIssue,
   getIssueRelations,
   getPrFacts,
+  listIssueComments,
   postComment,
   swapBlockedByForRelatesTo,
   updateIssue,
+  type IssueComment,
 } from './github.js';
+import { ANSWER_AUTHORITY } from './reply-authority.js';
 import { syncLabels } from './sweep/labels.js';
 import { LABELS, withStatus } from './sweep/render.js';
 
@@ -21,6 +24,9 @@ import { LABELS, withStatus } from './sweep/render.js';
  * GitHub on merge, which would hide it from the judge for good, so such a ticket is reopened and
  * labelled like the others; the process holds even when a PR slips. A concern the reviewer filed
  * is a ticket like any other: this is how its fix reaches a judge.
+ *
+ * Safe to run twice for one pull request: a ticket that already carries this pull request's landed
+ * comment is left exactly as it is, so a judge's verdict since then is not undone.
  */
 export async function runLanded(repoSlug: string, prNumber: number): Promise<void> {
   const pr = await getPrFacts(repoSlug, prNumber);
@@ -44,6 +50,10 @@ export async function runLanded(repoSlug: string, prNumber: number): Promise<voi
       issue = await getIssue(repoSlug, n);
     } catch (err) {
       console.warn(`  could not read #${n} (${String(err).split('\n')[0]}) — skipped`);
+      continue;
+    }
+    if (landingRecorded(await listIssueComments(repoSlug, n), prNumber)) {
+      console.log(`  #${n} already carries PR #${prNumber}'s landing: left as it is`);
       continue;
     }
     const closedByKeyword = refs.closed.includes(n);
@@ -80,7 +90,7 @@ export async function runLanded(repoSlug: string, prNumber: number): Promise<voi
     }
 
     const lines = [
-      `PR #${prNumber} landed. Labelled \`${LABELS.needsJudging}\`: the nightly judge decides whether this ticket is solved.`,
+      `${landedLine(prNumber)} Labelled \`${LABELS.needsJudging}\`: the nightly judge decides whether this ticket is solved.`,
     ];
     if (reopened) {
       lines.push(
@@ -93,6 +103,21 @@ export async function runLanded(repoSlug: string, prNumber: number): Promise<voi
     await postComment(repoSlug, n, lines.join('\n\n'));
     console.log(`  #${n}: labelled${lifted.length > 0 ? `, unblocked #${lifted.join(', #')}` : ''}`);
   }
+}
+
+const landedLine = (prNumber: number) => `PR #${prNumber} landed.`;
+
+/**
+ * Whether this pull request's landing is already recorded on a ticket: the comment is the last
+ * thing a landing does there. Only the code reviewer's own comment or the owner's counts, so a
+ * stranger cannot keep a ticket from being labelled.
+ */
+export function landingRecorded(
+  comments: Array<Pick<IssueComment, 'body' | 'authorLogin' | 'authorAssociation'>>,
+  prNumber: number,
+): boolean {
+  const ours = (c: (typeof comments)[number]) => c.authorLogin.endsWith('[bot]') || ANSWER_AUTHORITY.has(c.authorAssociation);
+  return comments.some((c) => ours(c) && c.body.startsWith(`${landedLine(prNumber)} `));
 }
 
 export interface TicketReferences {

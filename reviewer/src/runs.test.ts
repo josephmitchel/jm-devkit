@@ -1,13 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
 import { DevkitConfigError } from '../../plugin/devkit-config.mjs';
+import { errorType, errorTypeLine } from './run-vocabulary.js';
 import {
   afterInterruption,
-  errorType,
-  errorTypeLine,
+  commandArgs,
   leftByNightlyRuns,
   newRunId,
   nightlyStatus,
+  otherRunsStatus,
   runOutputPath,
   runResult,
   timeLimitMs,
@@ -155,31 +156,60 @@ describe('a run that was stopped before its command finished', () => {
   });
 });
 
-describe("a command's time limit", () => {
-  it('is five and a half hours for a job that runs agents: a sweep or a review', () => {
-    expect(timeLimitMs(['sweep', 'acme/widgets'], {})).toBe(19_800_000);
-    expect(timeLimitMs(['run', 'acme/widgets', '42', '--once'], {})).toBe(19_800_000);
+describe("a command's arguments", () => {
+  const of = (command: Parameters<typeof commandArgs>[0]['command'], pr: number | null = null) =>
+    commandArgs({ command, project: 'acme/widgets', pr }).join(' ');
+
+  it('are the command and its project, for a command that is the whole project\'s', () => {
+    expect(of('sweep')).toBe('sweep acme/widgets');
+    expect(of('summary')).toBe('summary acme/widgets');
+    expect(of('checks')).toBe('checks acme/widgets');
   });
 
-  it('is none for a command that runs no agents', () => {
-    expect(timeLimitMs(['landed', 'acme/widgets', '42'], {})).toBeNull();
-    expect(timeLimitMs(['carry-gate', 'acme/widgets', '42'], {})).toBeNull();
+  it('name the pull request, for a command that is one pull request\'s', () => {
+    expect(of('landed', 12)).toBe('landed acme/widgets 12');
+    expect(of('carry-gate', 12)).toBe('carry-gate acme/widgets 12');
+  });
+
+  it('run a review to return, not to wait', () => {
+    expect(of('run', 12)).toBe('run acme/widgets 12 --once');
+  });
+});
+
+describe("a command's time limit", () => {
+  it('is five and a half hours for a job that runs agents: a sweep or a review', () => {
+    expect(timeLimitMs({ command: 'sweep' }, {})).toBe(19_800_000);
+    expect(timeLimitMs({ command: 'run' }, {})).toBe(19_800_000);
+  });
+
+  it('is ten minutes for a step that runs no agents and only talks to GitHub, so one call that hangs cannot hold a pass or the night', () => {
+    expect(timeLimitMs({ command: 'landed' }, {})).toBe(600_000);
+    expect(timeLimitMs({ command: 'carry-gate' }, {})).toBe(600_000);
+    expect(timeLimitMs({ command: 'summary' }, {})).toBe(600_000);
+  });
+
+  it("is none for a project's nightly checks as a whole: each check has a limit of its own", () => {
+    expect(timeLimitMs({ command: 'checks' }, {})).toBeNull();
+  });
+
+  it('is not the agent jobs\' setting for a step that runs no agents', () => {
+    expect(timeLimitMs({ command: 'landed' }, { REVIEWER_AGENT_JOB_LIMIT_MS: '2000' })).toBe(600_000);
   });
 
   it('can be set for the machine, and a setting that is no number of milliseconds is ignored', () => {
-    expect(timeLimitMs(['sweep', 'acme/widgets'], { REVIEWER_AGENT_JOB_LIMIT_MS: '2000' })).toBe(2000);
-    expect(timeLimitMs(['sweep', 'acme/widgets'], { REVIEWER_AGENT_JOB_LIMIT_MS: 'soon' })).toBe(19_800_000);
-    expect(timeLimitMs(['sweep', 'acme/widgets'], { REVIEWER_AGENT_JOB_LIMIT_MS: '0' })).toBe(19_800_000);
+    expect(timeLimitMs({ command: 'sweep' }, { REVIEWER_AGENT_JOB_LIMIT_MS: '2000' })).toBe(2000);
+    expect(timeLimitMs({ command: 'sweep' }, { REVIEWER_AGENT_JOB_LIMIT_MS: 'soon' })).toBe(19_800_000);
+    expect(timeLimitMs({ command: 'sweep' }, { REVIEWER_AGENT_JOB_LIMIT_MS: '0' })).toBe(19_800_000);
   });
 });
 
 describe('what an interrupted command needs before its work can be taken up again', () => {
   it('is nothing for a sweep, which resumes from its own recorded state when it is next run', () => {
-    expect(afterInterruption(['sweep', 'acme/widgets'], 'time limit')).toBeNull();
+    expect(afterInterruption({ command: 'sweep', project: 'acme/widgets', pr: null }, 'time limit')).toBeNull();
   });
 
   it("is the review recorded as stopped mid-stage, so the next run retries the stage and the project's slot is free", () => {
-    expect(afterInterruption(['run', 'acme/widgets', '42', '--once'], 'service stopped')).toEqual([
+    expect(afterInterruption({ command: 'run', project: 'acme/widgets', pr: 42 }, 'service stopped')).toEqual([
       'abandon',
       'acme/widgets',
       '42',
@@ -347,5 +377,50 @@ describe('the recent nightly runs in status', () => {
 
   it('says so when there has been no nightly run', () => {
     expect(nightlyStatus([], outputAt)).toEqual(['nightly runs: none yet']);
+  });
+});
+
+describe('what status shows of the runs that are part of no nightly run and were started for no event', () => {
+  const outputAt = (runId: string) => `/var/lib/code-reviewer/runs/${runId}.log`;
+  const startedForEvents = new Set(['landed', 'carry-gate', 'review'] as const);
+  const row = (id: string, fields: Partial<Run>): Run => ({
+    id,
+    kind: 'checks',
+    project: 'acme/widgets',
+    parentId: null,
+    state: 'succeeded',
+    stage: null,
+    errorType: null,
+    startedAt: new Date('2026-11-20T10:00:00Z'),
+    finishedAt: new Date('2026-11-20T10:05:00Z'),
+    ...fields,
+  });
+
+  it("lists a project's nightly checks run by hand, with how each ended", () => {
+    const rows = [
+      row('run-20261120T100000Z-aaaaaa', {}),
+      row('run-20261119T100000Z-bbbbbb', { state: 'failed', stage: 'checking', errorType: 'NightlyCheckError' }),
+    ];
+    expect(otherRunsStatus(rows, startedForEvents, outputAt)).toEqual([
+      'runs started by hand',
+      '  acme/widgets checks [succeeded] run-20261120T100000Z-aaaaaa',
+      '  acme/widgets checks [failed in checking: NightlyCheckError] run-20261119T100000Z-bbbbbb' +
+        ', output: /var/lib/code-reviewer/runs/run-20261119T100000Z-bbbbbb.log',
+    ]);
+  });
+
+  it('leaves out what the other sections show: nightly runs, their parts, and the runs a pass or the queue started', () => {
+    const rows = [
+      row('run-20261120T031502Z-aaaaaa', { kind: 'nightly', project: null }),
+      row('run-20261120T031503Z-bbbbbb', { parentId: 'run-20261120T031502Z-aaaaaa' }),
+      row('run-20261120T101500Z-cccccc', { kind: 'landed' }),
+      row('run-20261120T101600Z-dddddd', { kind: 'review' }),
+      row('run-20261120T110000Z-eeeeee', {}),
+    ];
+    expect(otherRunsStatus(rows, startedForEvents, outputAt)).toEqual(['runs started by hand', '  acme/widgets checks [succeeded] run-20261120T110000Z-eeeeee']);
+  });
+
+  it('says so when there is none', () => {
+    expect(otherRunsStatus([], startedForEvents, outputAt)).toEqual(['runs started by hand: none yet']);
   });
 });

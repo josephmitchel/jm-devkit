@@ -1,10 +1,4 @@
-/**
- * Creating and dropping a project's test databases, against a real Postgres. Not part of
- * `npm test`: run it with `REVIEWER_TEST_DATABASES_URL=<server> npm run test:postgres`, the
- * address being a role that may create databases. It keeps the code reviewer's own state in a
- * scratch database it creates on that server and drops afterwards, so whatever `DATABASE_URL`
- * holds is never opened.
- */
+/** Creating and dropping a project's test databases for real. Run as locks.postgres.test.ts says. */
 import { randomBytes } from 'node:crypto';
 import pg from 'pg';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
@@ -177,6 +171,32 @@ describe("a project's test databases, on a real Postgres", () => {
     });
 
     expect(await exists(nameOf(theirs.env.APP_DATABASE_URL))).toBe(true);
+  });
+
+  it('drops what runs that never came back left behind, as a starting nightly run does, and leaves the databases of checks that are running', async () => {
+    const naming = projectNaming(['APP_DATABASE_URL']);
+    const review = await databases.provideTestDatabases(run('review:8'), naming);
+    const sweep = await databases.provideTestDatabases(run('sweep:8'), naming);
+    const idle = await databases.provideTestDatabases(run('checks:acme/gadgets'), naming);
+    const busy = await databases.provideTestDatabases(run('checks:acme/widgets'), naming);
+    const locks = await import('./locks.js');
+    const running = await locks.tryLock(locks.checksLockKey('acme/widgets'), locks.CHECKS_LOCK_CLASS);
+    expect(running).not.toBeNull();
+
+    let lines: string[];
+    try {
+      lines = await databases.dropDatabasesLeftBehind();
+    } finally {
+      await running!.release();
+    }
+
+    expect(await exists(nameOf(review.env.APP_DATABASE_URL))).toBe(false);
+    expect(await exists(nameOf(sweep.env.APP_DATABASE_URL))).toBe(false);
+    expect(await exists(nameOf(idle.env.APP_DATABASE_URL))).toBe(false);
+    expect(await exists(nameOf(busy.env.APP_DATABASE_URL))).toBe(true);
+    expect(lines).toContain("acme/widgets's nightly checks are running: their test databases are left to that run");
+    // Its lock was let go again: the project's checks can run.
+    expect(await locks.locksHeld(locks.CHECKS_LOCK_CLASS)).toEqual(new Set());
   });
 
   it('drops a database a project command left a connection open to', async () => {

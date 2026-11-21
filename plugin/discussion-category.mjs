@@ -1,20 +1,18 @@
-// The discussion category the code reviewer posts each night's summary in: its name, how a
-// project's categories are matched against it, and what the owner is told to create when it is
-// missing. The code reviewer (reviewer/src/night-summary.ts) and install's check
-// (install/discussions.mjs) both read it here, so they cannot disagree about what a project needs.
+// The code reviewer (reviewer/src/night-summary.ts) and install's check (install/discussions.mjs)
+// both read the category from here, so they cannot disagree about what a project needs.
 
 export const DISCUSSION_CATEGORY = 'Code reviewer';
 
 const CATEGORY_VAR = 'REVIEWER_DISCUSSION_CATEGORY';
 
-/** The name of the category: the setting when there is one, else the default. */
+/** The setting when there is one, else the default. */
 export function discussionCategory(env = process.env) {
   return env[CATEGORY_VAR]?.trim() || DISCUSSION_CATEGORY;
 }
 
 /**
- * The project's category of that name, or undefined when discussions are off or it has none.
- * Capitals and surrounding spaces do not count.
+ * Undefined when discussions are off or the project has none of that name. Capitals and surrounding
+ * spaces do not count.
  */
 export function findDiscussionCategory({ enabled, categories }, category) {
   const wanted = category.trim().toLowerCase();

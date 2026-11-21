@@ -2,7 +2,18 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-import { afterReviewRun, leftByQueue, machineFor, queueDecision, queueStatus, type Machine, type QueuedEvent } from './queue.js';
+import {
+  afterReviewRun,
+  leftByQueue,
+  machineFor,
+  noLongerHandled,
+  queueDecision,
+  queueStatus,
+  timeLimitStopsAfter,
+  type Machine,
+  type QueuedEvent,
+} from './queue.js';
+import { classifyProjects } from './projects.js';
 import type { Run } from './runs.js';
 
 const at = (time: string) => new Date(`2026-11-20T${time}Z`);
@@ -30,6 +41,34 @@ const decide = (events: QueuedEvent[], machine: Machine = FREE, slots: ReadonlyM
   queueDecision(events, slots, machine, NOW);
 const started = (decision: ReturnType<typeof decide>) => decision.start && `${decision.start.project} ${decision.start.event}`;
 
+describe('a review queued for a project the machine no longer handles', () => {
+  const config = JSON.stringify({ modules: ['process'], reviewer: { tests: [{ name: 'unit', command: 'npm test' }] } });
+  const lastSeen = classifyProjects([
+    { slug: 'acme/widgets', config, sweepWorkflow: true },
+    { slug: 'acme/gadgets', config, sweepWorkflow: false },
+    { slug: 'acme/bare', config: null, sweepWorkflow: false },
+  ]);
+
+  it('is known from what the last pass saw: back on Actions, without a project config, or without the App', () => {
+    expect(noLongerHandled(['acme/widgets', 'acme/gadgets', 'acme/bare', 'Zenith/anvils'], lastSeen)).toEqual(
+      new Map([
+        ['acme/widgets', 'still on Actions: its default branch has .github/workflows/nightly-sweep.yml'],
+        ['acme/bare', 'skipped: its default branch has no devkit.json'],
+        ['Zenith/anvils', "the code reviewer's App is no longer installed on it"],
+      ]),
+    );
+  });
+
+  it('is not started: its event stays queued with that reason, and the next job is not held up', () => {
+    const events = [queued('labelled:12', '11:00:00'), queued('labelled:3', '11:05:00', { project: 'acme/gadgets' })];
+    const decision = queueDecision(events, noSlotsHeld, FREE, NOW, noLongerHandled(['acme/widgets', 'acme/gadgets'], lastSeen));
+    expect(started(decision)).toBe('acme/gadgets labelled:3');
+    expect(decision.waiting.map(({ job, why }) => `${job.project} ${job.event}: ${why}`)).toEqual([
+      'acme/widgets labelled:12: the machine no longer handles its project (still on Actions: its default branch has .github/workflows/nightly-sweep.yml)',
+    ]);
+  });
+});
+
 describe('who has the machine when a review and the nightly run both want it', () => {
   it('is the review when nothing else is going', () => {
     expect(machineFor('review', FREE)).toEqual({ take: true });
@@ -37,6 +76,14 @@ describe('who has the machine when a review and the nightly run both want it', (
 
   it('is not a review while another agent job is running', () => {
     expect(machineFor('review', { agentJobRunning: true, nightlyGoing: false })).toEqual({ take: false, why: 'another agent job is running' });
+  });
+
+  it("is nobody's once the connection holding its lock is lost: the turn can no longer say it has the machine", () => {
+    expect(machineFor('review', { ...FREE, lockLost: true })).toMatchObject({ take: false });
+    expect(decide([queued('labelled:12', '11:00:00')], { ...FREE, lockLost: true })).toMatchObject({
+      start: null,
+      waiting: [{ why: "the connection holding the machine's lock was lost: nothing more starts this turn" }],
+    });
   });
 
   it('is the nightly run once it is going, even in a moment when the machine is free: the review waits for the night to be over', () => {
@@ -64,7 +111,8 @@ describe('the next review the machine starts', () => {
       event: 'labelled:12',
       covers: [],
       kind: 'review',
-      args: ['run', 'acme/widgets', '12', '--once'],
+      command: 'run',
+      pr: 12,
       attempts: 0,
       foundAt: at('11:58:00'),
     });
@@ -104,7 +152,7 @@ describe('the next review the machine starts', () => {
 
   it('is one run for every queued event that asks for the same review', () => {
     const decision = decide([queued('replied:12/905', '11:59:00'), queued('labelled:12', '11:57:00'), queued('replied:12/900', '11:58:00')]);
-    expect(decision.start).toMatchObject({ event: 'labelled:12', covers: ['replied:12/900', 'replied:12/905'], args: ['run', 'acme/widgets', '12', '--once'] });
+    expect(decision.start).toMatchObject({ event: 'labelled:12', covers: ['replied:12/900', 'replied:12/905'], command: 'run', pr: 12 });
     expect(decision.waiting).toEqual([]);
   });
 
@@ -214,8 +262,34 @@ describe("what a review's run leaves of the event that asked for it", () => {
     expect(afterReviewRun({ state: 'interrupted', stage: null, errorType: 'found running' }, 'failed')).toBe('try again');
   });
 
-  it('is handled when its time limit stopped it: a review that ran five and a half hours is not started again unasked', () => {
-    expect(afterReviewRun({ state: 'interrupted', stage: 'fixing', errorType: 'time limit' }, 'failed')).toBe('handled');
+  const atItsLimit = { state: 'interrupted', stage: 'fixing', errorType: 'time limit' } as const;
+
+  it('is tried again when its time limit stopped it, so the next run resumes the review from the stage it was in', () => {
+    expect(afterReviewRun(atItsLimit, 'failed', 0)).toBe('try again');
+    expect(afterReviewRun(atItsLimit, 'failed', 1)).toBe('try again');
+  });
+
+  it('is handled at the third stop in a row by the time limit: the review stays stopped until the owner comments', () => {
+    expect(afterReviewRun(atItsLimit, 'failed', 2)).toBe('handled');
+  });
+
+  describe('the count of time-limit stops the review carries afterwards', () => {
+    it('is one more for a stop that is resumed', () => {
+      expect(timeLimitStopsAfter(atItsLimit, 'try again', 0)).toBe(1);
+      expect(timeLimitStopsAfter(atItsLimit, 'try again', 1)).toBe(2);
+    });
+
+    it("starts from none once the event is handled, so the owner's retry of an abandoned review is resumed twice again", () => {
+      expect(timeLimitStopsAfter(atItsLimit, 'handled', 2)).toBe(0);
+      expect(timeLimitStopsAfter(succeeded, 'handled', 2)).toBe(0);
+      expect(timeLimitStopsAfter({ state: 'failed', stage: 'auditing', errorType: 'Error' }, 'handled', 1)).toBe(0);
+    });
+
+    it('is kept by a run that says nothing about the limit: turned away, stopped with the service, failed before it began', () => {
+      expect(timeLimitStopsAfter(succeeded, 'waits for the slot', 1)).toBe(1);
+      expect(timeLimitStopsAfter({ state: 'interrupted', stage: 'auditing', errorType: 'service stopped' }, 'try again', 2)).toBe(2);
+      expect(timeLimitStopsAfter({ state: 'failed', stage: 'starting', errorType: 'Error' }, 'try again', 1)).toBe(1);
+    });
   });
 });
 
@@ -255,7 +329,7 @@ describe('the queue, in status', () => {
       { agentJobRunning: true, nightlyGoing: false },
       new Map([['acme/widgets', [12]]]),
     );
-    const running = [{ run: run('run-20261120T115700Z-aaaaaa'), args: ['run', 'acme/widgets', '12', '--once'] }];
+    const running = [{ run: run('run-20261120T115700Z-aaaaaa'), command: { command: 'run' as const, project: 'acme/widgets', pr: 12 } }];
     expect(queueStatus(decision, running, { agentJobRunning: true, nightlyGoing: false })).toEqual([
       'the queue: agent jobs, one at a time on this machine',
       '  running: acme/widgets review `run acme/widgets 12 --once` since 2026-11-20T11:57:00Z, run-20261120T115700Z-aaaaaa',
@@ -275,7 +349,7 @@ describe('the queue, in status', () => {
   it("shows a sweep of the nightly run as what is running, and that reviews wait for the night", () => {
     const sweep = run('run-20261120T020001Z-eeeeee', { kind: 'sweep', parentId: 'run-20261120T020000Z-dddddd', startedAt: at('02:00:01') });
     const machine = { agentJobRunning: true, nightlyGoing: true };
-    expect(queueStatus(decide([queued('labelled:12', '02:10:00')], machine), [{ run: sweep, args: null }], machine)).toEqual([
+    expect(queueStatus(decide([queued('labelled:12', '02:10:00')], machine), [{ run: sweep, command: null }], machine)).toEqual([
       'the queue: agent jobs, one at a time on this machine',
       '  a nightly run is going: reviews wait until it is over',
       '  running: acme/widgets sweep since 2026-11-20T02:00:01Z, run-20261120T020001Z-eeeeee',
@@ -285,7 +359,7 @@ describe('the queue, in status', () => {
 
   it('says so when a nightly run is waiting for a review to finish', () => {
     const machine = { agentJobRunning: true, nightlyGoing: true };
-    const running = [{ run: run('run-20261120T015000Z-aaaaaa', { startedAt: at('01:50:00') }), args: ['run', 'acme/widgets', '12', '--once'] }];
+    const running = [{ run: run('run-20261120T015000Z-aaaaaa', { startedAt: at('01:50:00') }), command: { command: 'run' as const, project: 'acme/widgets', pr: 12 } }];
     expect(queueStatus(decide([], machine), running, machine).slice(1)).toEqual([
       '  a nightly run is going: reviews wait until it is over',
       '  running: acme/widgets review `run acme/widgets 12 --once` since 2026-11-20T01:50:00Z, run-20261120T015000Z-aaaaaa',

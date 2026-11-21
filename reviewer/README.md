@@ -2,7 +2,7 @@
 
 A standalone, repo-agnostic multi-agent code review service with two modes. The **PR loop** audits a pull request's diff (plus blast radius) against the nine ISO/IEC 25010:2023 quality characteristics plus test quality, posts a report with questions to the PR, plans and pushes fixes after the owner replies, verifies them with judge agents, and gates the PR with a `code-reviewer/gate` commit status on the exact verified head SHA. The **nightly sweep** runs the same audit over what landed on the default branch each day and files the concerns as GitHub issues, and judges every ticket whose PR has merged, its own issues included — advisory, never blocking.
 
-Extracted from SpendRight's in-repo audit system. State lives in Postgres (`code_reviewer` database); the process is stateless — kill it anywhere and re-run the same command to resume.
+Extracted from one project's in-repo audit system. State lives in Postgres (`code_reviewer` database); the process is stateless — kill it anywhere and re-run the same command to resume.
 
 ## Requirements
 
@@ -109,7 +109,9 @@ it has just made (so a PR that changes it is set up and tested as it says):
 
 The code reviewer validates the file with the kit's one small interpreter of the schema's keywords
 (`plugin/devkit-config.mjs`, which the generator uses too), so the schema stays the one
-definition; its tests fail if the schema starts using a keyword the interpreter does not enforce.
+definition; its tests fail if the schema starts using a keyword the interpreter does not enforce. One
+keyword is the kit's own, `uniqueItemProperties`: no two items of a list may share the value of a
+named property, which is how two nightly checks of the same name are refused.
 
 ### Test databases
 
@@ -126,9 +128,15 @@ of its own that cannot open the code reviewer's database, because the project's 
 that role's addresses. With `reviewer.databases` set and the setting absent the run fails, saying
 so; GitHub Actions has no such server, so a project adds `databases` when it moves to the machine.
 
-Every database is recorded in the `test_databases` table before it is created, and a run drops only
-what is recorded for it. A run that is killed leaves its record, and the same review or sweep drops
-what it left when it next runs.
+Every database is recorded in the `test_databases` table before it is created, under the review,
+the sweep or the project's nightly checks it is for, and only a recorded database is ever dropped.
+A run that is killed leaves its record, and the same review or sweep, or the project's next run of
+its checks, drops what it left when it next runs. What a run that never comes back left (a review
+whose pull request closed after a kill) is dropped by the next nightly run: once it holds the
+machine no review or sweep is running, so it drops every database recorded for one, and a
+project's checks' databases unless that project's checks are running at that moment. A `sweep` or
+`run` started by hand outside the queue is not covered by the machine's lock, so do not leave one
+running into the night on a project that names databases.
 
 `npm test` needs no database. The suite that creates and drops databases on a real Postgres runs on
 its own, given a server:
@@ -199,7 +207,10 @@ versa; running both on the same repo at the same moment is not supported.
 the App for the projects (the `projects` command's list), takes the handled ones in name order and
 runs each one's sweep, posts its summary and then runs its nightly checks if it names any, one at a
 time, each as a `sweep`, `summary` or `checks` command in a process of its own. A project that is
-not handled is left alone, with a line saying why. A step that fails is recorded and the run goes
+not handled is left alone, with a line saying why, with one exception: a project the machine would
+handle whose project config is there and not valid is not passed over. Its sweep is recorded as a
+run that failed before it began, with the error type `DevkitConfigError`, which opens the failure
+issue in the project saying what is wrong. A step that fails is recorded and the run goes
 on to the next; the command exits non-zero when any step failed, or when the projects could not be
 found. It needs the App's credentials and the database address in its environment, as `projects`
 and `sweep` do. A handled project needs nothing registered: the nightly run makes its row in the
@@ -209,7 +220,8 @@ A nightly run has the machine for the night. If a review is running when it star
 that review to finish and then goes; while it is going no review starts, and a second nightly run
 does not start beside it (see "The queue of reviews").
 
-A sweep has five and a half hours, as a run on GitHub Actions had. One that runs longer is stopped,
+A sweep has five and a half hours, as a run on GitHub Actions had, and the summary step, which
+runs no agents, has ten minutes. One that runs longer is stopped,
 with the agents and commands it started, and the run goes on to the next step. Told to stop
 (SIGTERM, as when its service is stopped), the nightly run stops the step it is on and takes no
 further step. Either way the run is recorded as `interrupted`, with what stopped it, and so is a
@@ -219,7 +231,9 @@ record anything. An interrupted sweep resumes from its own state the next time i
 Every run is a row in the `runs` table with a run id (`run-<UTC start time>-<random>`, which names
 no project): the nightly run itself, and under it one row for each project's sweep and one for its
 summary, with how it ended and, when it failed, the stage it stopped in and the type of error.
-`code-reviewer status` lists the five most recent nightly runs with each project's result.
+`code-reviewer status` lists the five most recent nightly runs with each project's result, and
+after them the five most recent runs started by hand (a project's nightly checks run on demand),
+which are part of no nightly run.
 
 Everything a run's command wrote is kept in a file named by the run id, `runs/<run id>.log` under
 the code reviewer's state directory: `REVIEWER_STATE_DIR`, or `~/.local/state/code-reviewer` when
@@ -240,9 +254,11 @@ own calendar.
   skipped, as is a sweep that did not finish. The rule is `summaryPlan` in `src/night-summary.ts`.
 - **One discussion per sweep.** The discussion's address is recorded on the sweep's row
   (`sweeps.discussion_url`, shown by `status`), so a nightly run started again the same night, or
-  the command run by hand, posts nothing more. Only a project's latest sweep is ever posted: a
-  night that could not be posted is not caught up once a later sweep has run, so after creating a
-  missing category run `summary` by hand to post that night.
+  the command run by hand, posts nothing more.
+- **A night that could not be posted is caught up.** Each time it runs, the summary step posts
+  every sweep of the project that finished in the last seven days, has something to say and has
+  no discussion recorded, oldest first (`summaryPlans`). So the nights missed while a category
+  was missing are posted at the first summary after it exists, each under its own date.
 - **The category** is named by the setting `REVIEWER_DISCUSSION_CATEGORY`, `Code reviewer` when it
   is not set, and matched whatever its capitals. The name, the matching and the words the owner is
   told are in `plugin/discussion-category.mjs`, which install's check
@@ -283,6 +299,12 @@ and reported the same way, and exits 1 when a check failed.
   quotes. Being a kind of run of their own, the checks never change the sweep's result, and their
   failure issue is beside the sweep's: each is closed only by a success of its own kind. The run
   as a whole has no time limit: the setup command and each check have their own.
+- **One run per project at a time.** The nightly step and a run by hand share the checkout and
+  the project's test databases, so a run of the checks holds a lock of the project's own (a
+  Postgres advisory lock, `checksLockKey` in `src/locks.ts`). A second run by hand while one is
+  going says so, records nothing and exits 1. A nightly step that meets a run by hand fails
+  before it touches anything, with the error type `ChecksRunningError`, on the code reviewer's
+  side.
 - **Output.** Everything a check writes goes to the run's output file and the journal, as a
   sweep's output does.
 
@@ -347,9 +369,10 @@ project and the event's key, so a second record of the same event cannot be made
 - Passes do not overlap. The timer does not start a pass while one is going, and a pass holds a
   Postgres advisory lock, so one started by hand beside it does nothing.
 - A pass killed outright leaves its `landed` run recorded as `running`. The next pass records it
-  as `interrupted` and the event is tried again. This is the one way a `landed` can run twice for
-  one merge: the first may have finished its work on GitHub in the moment before it was killed.
-  `landed` sets the same labels and lifts the same blocks a second time, and comments again.
+  as `interrupted` and the event is tried again. So a `landed` can run twice for one merge, and
+  so can one that failed partway. A second run changes nothing the first already did: a ticket
+  that carries that pull request's landed comment (`landingRecorded` in `src/landed.ts`) is left as
+  it is, with no second comment, and a ticket the first run did not finish is finished.
 
 **A project's first pass starts from that moment.** `poller_projects` holds, per project, GitHub's
 time at its first pass and how far the last pass's reading got. A pull request that merged before
@@ -366,8 +389,10 @@ holds only reviewed code, and carries the gate if it does.
   by hand.
 - A `carry-gate` that failed is tried again like a `landed` that failed. It asks GitHub for the
   head at that moment, so a retry after the head has moved on decides for the newer head.
-- `carry-gate` runs no agents. It runs inside the pass like `landed`, has no time limit of its own
-  and waits for no sweep or review.
+- `carry-gate` runs no agents. It runs inside the pass like `landed` and waits for no sweep or
+  review. Like `landed` and the nightly summary it has ten minutes, so one call to GitHub that
+  hangs cannot hold a pass or the night; one stopped by that limit is recorded as `interrupted`
+  and tried again like a failure.
 - GitHub's listing gives no time for a head, only for the pull request's last change. A pull
   request not changed since the project's first pass is left alone. One whose head moved before
   the first pass and which is commented on after it has `carry-gate` run once for that head.
@@ -423,7 +448,7 @@ queues.
   and it has changed since the last pass.
 
 **One agent job at a time.** A review and a sweep run agents on the one subscription, so they
-never run together on the machine. Two Postgres advisory locks say who may run (`src/machine.ts`):
+never run together on the machine. Two Postgres advisory locks say who may run (`src/locks.ts`):
 
 - the machine's lock, held by whoever is running an agent job: the queue for the length of a
   review, the nightly run for the length of the night;
@@ -438,11 +463,23 @@ and the nightly checks run no agents and take neither lock. Nor do `sweep` and `
 a project still on Actions runs them against the same database. The locks are taken by the
 `nightly` and `queue` commands, so a `sweep` or `run` started by hand is outside the rule.
 
+The locks belong to a database session, so they hold only on a direct address. Before the nightly
+run or a turn of the queue starts any agent job it tries the lock it holds from a second
+connection (`lockFault` in `src/locks.ts`). If the second is given the lock, or the two
+connections turn out to share a session, no agent job is started: the nightly run, or the review
+that was next, is recorded as failed with the error type `MachineLockError`, which opens the
+failure issue in the kit's repository. If the connection holding the lock is lost while a run is
+going, that run starts nothing further: a nightly run ends failed with the same error type and its
+remaining steps not started, and a turn of the queue leaves what is queued for the next turn.
+
 **The queue is the record.** A queued review is its event in `poller_events`, not yet handled.
 `queueDecision` in `src/queue.ts` says which starts next: the one found first, across projects.
 Events that ask for the same command are one job, so a label and two replies on one pull request
 are one run. A review found while an agent job is running stays queued and is looked at again on
-the next turn.
+the next turn. A review queued for a project the machine no longer handles (its sweep workflow is
+back, its project config is gone, or the App was removed) is not started: it stays queued, with
+that reason in `status`, and starts if the project is handled again. Whether it is handled is
+read from what the last pass kept (`projectsLastSeen`), not asked of GitHub again.
 
 **Handled does not mean exit 0.** `run --once` exits 0 when the review passed, when it now waits
 for answers, and when it was turned away because another review holds its project's review slot.
@@ -450,14 +487,18 @@ for answers, and when it was turned away because another review holds its projec
 the review is in afterwards:
 
 - passed, or waiting for answers: handled. The owner's reply is an event of its own.
-- stopped in one of its stages, or at its time limit: handled. The review has said so on the pull
-  request, and it is not started again until the owner comments there.
+- stopped in one of its stages: handled. The review has said so on the pull request, and it is not
+  started again until the owner comments there.
 - turned away from its project's slot: not handled, and not a failure. It starts when no other
   review of the project holds the slot, which is how a finished review starts the next one queued
   behind it. It is also tried after the same doubling wait as a failure, because a holder whose
   pull request has closed never finishes and only a review claiming the slot retires it.
-- failed before the review did anything, or interrupted by the service stopping or by a restart:
-  tried again, after a minute, then two, four and so on up to six hours.
+- failed before the review did anything, or interrupted by its time limit, by the service stopping
+  or by a restart: tried again, after a minute, then two, four and so on up to six hours, which
+  resumes the review from the stage it was in.
+- stopped by its time limit for the third time in a row: handled, like a stop in a stage, so a
+  review that keeps running out its limit is resumed twice and then waits for the owner's comment.
+  The count is `reviews.time_limit_stops`; it starts again from none whenever the event is handled.
 
 This replaces the workflow dispatch hand-off (`REVIEWER_DISPATCH_WORKFLOW`), which a project still
 on Actions keeps.
@@ -524,7 +565,9 @@ The credentials reach the service only through its environment, from
 service drops to the `reviewer` user. The setup creates it when it is missing and never changes or
 prints one that exists. It holds one `NAME=value` per line, with no quotes:
 
-- `DATABASE_URL`: the code reviewer's own database. The setup fills it in.
+- `DATABASE_URL`: the code reviewer's own database. The setup fills it in. It must be a direct
+  address, not a pooled one: the locks that keep agent jobs to one at a time are held by a
+  database session, and a pooler that shares sessions gives the same lock to two takers.
 - `REVIEWER_TEST_DATABASES_URL`: where projects' test databases are created. The setup fills it in.
 - `CLAUDE_CODE_OAUTH_TOKEN`: the Claude subscription's token, from `claude setup-token`.
 - `REVIEWER_APP_CLIENT_ID`: the App's client id.
@@ -568,10 +611,11 @@ intake → audit (scout + 10 auditors) → synthesis ──┬─ clean → gate
 - `src/sweep/*` — the nightly sweep: `loop.ts` driver, `judge.ts` (owner decisions: `wontfix`, hand closes, ticked minors), `tickets.ts` (`needs-judging` tickets, concerns included), `answers.ts`, `publish.ts`, `render.ts` (issue/digest/status text)
 - `src/projects.ts` — which projects there are and whether the machine handles each: asked of the App, never listed in the kit (ADR 0004)
 - `src/nightly.ts` — the nightly run: its order of work and what it does after a failure, as decisions; `src/runs.ts` — the record of runs on the machine (run ids, output files, how a run ended) and the one place a command is run, given its time limit and told to stop
+- `src/recorded-step.ts` — the one way a command becomes a recorded run: started, run, recorded and reported; `src/run-vocabulary.ts` — the fixed words a run is recorded with (its stages and types of error), each written and recognised in the one place; `bin/run-words.mjs` — the part of that vocabulary `bin/update.mjs` writes too
 - `src/night-summary.ts` — whether a night's summary is posted, its title and text, and the discussion category it goes in, as decisions; `src/post-summary.ts` — the `summary` command, which posts it
 - `src/nightly-checks.ts` — a project's nightly checks: the order they run in and what happens after one fails, as a decision; the account a failed run ends with; the `checks` command
 - `src/poller.ts` — a pass of the poller as a decision: the events it acts on, what it runs and when it tries again; `src/poller-github.ts` — what a pass asks GitHub, conditionally, and the answers it keeps; `src/poller-pass.ts` — the pass itself: the record of events, the lock, and running each command
-- `src/queue.ts` — the queue of reviews as decisions: who has the machine, which review starts next, and what a review's run leaves of its event; `src/queue-run.ts` — one turn of the queue; `src/machine.ts` — the two locks that keep agent jobs to one at a time; `src/reply-authority.ts` — whose comment counts as the owner's word
+- `src/queue.ts` — the queue of reviews as decisions: who has the machine, which review starts next, and what a review's run leaves of its event; `src/queue-run.ts` — one turn of the queue; `src/locks.ts` — every advisory lock the code reviewer takes (migrations, a pass, the two that keep agent jobs to one at a time, a project's nightly checks) and the proof that a lock holds; `src/reply-authority.ts` — whose comment counts as the owner's word
 - `src/failure-side.ts` — which side a failed run is on, from the type of its error; `src/failure-issue.ts` — what a failure issue says and when it is opened, commented on and closed; `src/failure-report.ts` — which places a finished run is reported to, and the reporting (`reportRun`)
 - `bin/update.mjs` — brings the code reviewer's own checkout up to date before a nightly run; `src/project-row.ts` — creates a project's row the first time it is met
 - `../vm/` — the machine setup and the systemd units it installs

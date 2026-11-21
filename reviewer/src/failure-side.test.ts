@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { DevkitConfigError } from '../../plugin/devkit-config.mjs';
 import { failureSide, NightlyCheckError, projectFault, SetupCommandError } from './failure-side.js';
-import { errorType } from './runs.js';
+import { errorType } from './run-vocabulary.js';
 
 describe('which side a failed run is on, from the type of its error', () => {
   it("is the project's when its project config is invalid", () => {
