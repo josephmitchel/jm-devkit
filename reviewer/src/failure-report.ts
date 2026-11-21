@@ -7,6 +7,8 @@ import { db, schema } from './db/client.js';
 import { failureIssuePlan, type Report, type RunFacts } from './failure-issue.js';
 import { failureSide } from './failure-side.js';
 import { createIssue, listOpenIssuesWithAuthors, postComment, updateIssue } from './github.js';
+import { why } from './log.js';
+import { howEnded } from './run-vocabulary.js';
 import { runLog, runOutputPath, type Run } from './runs.js';
 import { TEST_DATABASES_SETTING, withoutTestDatabaseAddresses } from './test-databases.js';
 import { reviewerRoot } from './workspace.js';
@@ -173,8 +175,8 @@ function sendReport(place: string, report: Report): Promise<string[]> {
     child.on('error', reject);
     child.on('close', (exitCode, signal) => {
       if (exitCode === 0) return resolve(out.split('\n').filter((line) => line.trim() !== ''));
-      const why = err.trim().split('\n').slice(-3).join(' | ');
-      reject(new Error(`${signal ? `killed by ${signal}` : `exit ${exitCode}`}${why ? `: ${why}` : ''}`));
+      const said = err.trim().split('\n').slice(-3).join(' | ');
+      reject(new Error(`${howEnded(exitCode, signal)}${said ? `: ${said}` : ''}`));
     });
     child.stdin.on('error', () => {});
     child.stdin.end(JSON.stringify(report));
@@ -225,7 +227,6 @@ export async function reportRun(run: Run, say?: (line: string) => void, reporter
       // Nothing left to tell it to.
     }
   };
-  const why = (err: unknown) => (err instanceof Error ? err.message : String(err));
   const outcome = ownOutcome(run);
   if (outcome === null) return;
   let told: Told[];

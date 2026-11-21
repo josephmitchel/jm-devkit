@@ -1,12 +1,13 @@
-import { spawn, type ChildProcess } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { and, asc, desc, eq, inArray, isNull, notInArray } from 'drizzle-orm';
 
+import { streamChild } from './child.js';
 import { db, schema } from './db/client.js';
 import type { RunKind } from './db/schema.js';
+import { toTheSecond } from './log.js';
 import { howEnded, reportedErrorType, stageReached, type StopReason } from './run-vocabulary.js';
 import { reviewerRoot, workspaceRoot } from './workspace.js';
 
@@ -108,7 +109,7 @@ export function leftByNightlyRuns(rows: Run[]): Run[] {
 
 /** `run-<UTC time it started>-<random>`. It names no project, so it can be printed anywhere. */
 export function newRunId(now: Date = new Date(), suffix: string = crypto.randomBytes(3).toString('hex')): string {
-  const time = now.toISOString().replace(/\.\d+Z$/, 'Z').replace(/[-:]/g, '');
+  const time = toTheSecond(now).replace(/[-:]/g, '');
   return `run-${time}-${suffix}`;
 }
 
@@ -254,17 +255,6 @@ export function stopCommandsOnSignal(): void {
   }
 }
 
-// A command leads a process group of its own, so its agents and any project command it started
-// are signalled with it.
-function signalGroup(child: ChildProcess, signal: NodeJS.Signals): void {
-  if (child.pid === undefined) return;
-  try {
-    process.kill(-child.pid, signal);
-  } catch {
-    child.kill(signal);
-  }
-}
-
 /**
  * Run one of the code reviewer's own commands for a run that has been started, in a process of
  * its own: App auth is one project per process, and a command that dies takes only itself. What it
@@ -296,57 +286,38 @@ export async function tidyAfterInterruption(run: Run, command: ProjectCommand, r
 async function runChild(run: Run, args: string[], limitMs: number | null, stoppable: boolean): Promise<Ended> {
   const file = fs.createWriteStream(runOutputPath(run.id), { flags: 'a' });
   file.on('error', (err) => console.warn(`could not keep the output of ${run.id} (${err.message})`));
-  const ended = await new Promise<Ended>((resolve) => {
-    let output = '';
-    let stopped: StopReason | null = null;
-    const timers: NodeJS.Timeout[] = [];
-    const child = spawn(process.execPath, ['--import', 'tsx/esm', path.join(reviewerRoot, 'src/cli.ts'), ...args], {
+  let output = '';
+  let stopWithService = () => {};
+  const child = await streamChild(
+    process.execPath,
+    ['--import', 'tsx/esm', path.join(reviewerRoot, 'src/cli.ts'), ...args],
+    {
       cwd: reviewerRoot,
       // The project to authenticate for, told to git's credential helper, which git starts with no arguments.
       env: { ...process.env, REVIEWER_RUN_ID: run.id, ...(run.project ? { REVIEWER_APP_INSTALL_REPO: run.project } : {}) },
-      stdio: ['ignore', 'pipe', 'pipe'],
-      detached: true,
-    });
-    const stop = (reason: StopReason) => {
-      if (stopped !== null) return;
-      stopped = reason;
-      signalGroup(child, 'SIGTERM');
-      timers.push(setTimeout(() => signalGroup(child, 'SIGKILL'), KILL_AFTER_MS));
-    };
-    const stopWithService = () => stop('service stopped');
-    if (stoppable) going.add(stopWithService);
-    // The stop may have come between the decision to run this and its start.
-    if (stoppable && stopRequested) stopWithService();
-    if (limitMs !== null) timers.push(setTimeout(() => stop('time limit'), limitMs));
-
-    const finish = (exitCode: number | null, signal: string | null) => {
-      going.delete(stopWithService);
-      for (const timer of timers) clearTimeout(timer);
-      resolve({ exitCode, signal, output, stopped });
-    };
-    for (const [from, to] of [[child.stdout, process.stdout], [child.stderr, process.stderr]] as const) {
-      from.setEncoding('utf8');
-      from.on('data', (chunk: string) => {
-        output += chunk;
-        file.write(chunk);
-        to.write(chunk);
-      });
-    }
-    child.on('error', (err) => {
-      file.write(`${err.message}\n`);
-      finish(null, null);
-    });
-    child.on('exit', (exitCode, signal) => {
-      timers.push(
-        setTimeout(() => {
-          child.stdout.destroy();
-          child.stderr.destroy();
-          finish(exitCode, signal);
-        }, OUTPUT_CLOSES_WITHIN_MS),
-      );
-    });
-    child.on('close', finish);
-  });
+      // So its agents and any project command it started are stopped with it.
+      ownGroup: true,
+      limitMs,
+      killAfterMs: KILL_AFTER_MS,
+      closesWithinMs: OUTPUT_CLOSES_WITHIN_MS,
+    },
+    (chunk, from) => {
+      output += chunk;
+      file.write(chunk);
+      process[from].write(chunk);
+    },
+    (stop) => {
+      if (!stoppable) return;
+      stopWithService = stop;
+      going.add(stopWithService);
+      // The stop may have come between the decision to run this and its start.
+      if (stopRequested) stop();
+    },
+  );
+  going.delete(stopWithService);
+  if (child.error) file.write(`${child.error.message}\n`);
+  const stoppedBy = { limit: 'time limit', caller: 'service stopped' } as const;
+  const ended: Ended = { exitCode: child.exitCode, signal: child.signal, output, stopped: child.stoppedBy && stoppedBy[child.stoppedBy] };
   await new Promise((done) => {
     file.on('close', done);
     file.end();

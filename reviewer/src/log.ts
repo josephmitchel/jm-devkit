@@ -26,3 +26,13 @@ export function timestampConsole(now: () => Date = () => new Date()): void {
 export function printRaw(line: string): void {
   process.stdout.write(`${line}\n`);
 }
+
+/** What went wrong, in words, whatever was thrown. */
+export function why(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/** A moment to the second, in UTC, as the logs and `status` show it. */
+export function toTheSecond(when: Date): string {
+  return when.toISOString().replace(/\.\d+Z$/, 'Z');
+}

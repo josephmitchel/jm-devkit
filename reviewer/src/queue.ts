@@ -1,4 +1,5 @@
 import type { RunState } from './db/schema.js';
+import { toTheSecond as time } from './log.js';
 import { commandFor, retryDelayMs, type Command } from './poller.js';
 import type { Project } from './projects.js';
 import { AGENT_KINDS, commandArgs, type ProjectCommand, type Run, type RunResult } from './runs.js';
@@ -81,8 +82,6 @@ export interface QueueDecision {
   /** Every other job, in the order found, with why it is not starting. */
   waiting: Array<{ job: Job; why: string }>;
 }
-
-const time = (when: Date) => when.toISOString().replace(/\.\d+Z$/, 'Z');
 
 /**
  * Why a job cannot be started yet, whatever the machine is doing, or null when it can.

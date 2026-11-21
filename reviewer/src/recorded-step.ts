@@ -1,4 +1,5 @@
 import { reportRun } from './failure-report.js';
+import { why } from './log.js';
 import { ensureProjectRow } from './project-row.js';
 import { errorType } from './run-vocabulary.js';
 import { commandKind, finishRun, runCommand, runLine, runLog, startRun, type ProjectCommand, type Run, type RunResult } from './runs.js';
@@ -65,7 +66,7 @@ export async function takeRecordedStepOrSayWhy(step: RecordedStep, say: (line: s
   try {
     return await takeRecordedStep(step, say);
   } catch (err) {
-    say(`${step.name} could not be run: ${err instanceof Error ? err.message : String(err)}`);
+    say(`${step.name} could not be run: ${why(err)}`);
     return null;
   }
 }

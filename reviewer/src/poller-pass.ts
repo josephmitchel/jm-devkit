@@ -3,6 +3,7 @@ import { and, asc, desc, eq, inArray, isNotNull, isNull } from 'drizzle-orm';
 import { db, schema } from './db/client.js';
 import { appCredentials } from './gh-auth.js';
 import { PASS_LOCK, tryLock } from './locks.js';
+import { why } from './log.js';
 import { commentsSeen, projectsSeen, pullRequestsSeen, type Asking, type Memory } from './poller-github.js';
 import {
   commandFor,
@@ -71,8 +72,6 @@ export const inDatabase: Memory = {
       .onConflictDoUpdate({ target: schema.githubAnswers.question, set: kept });
   },
 };
-
-const why = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
 async function pass(say: (line: string) => void): Promise<PassOutcome> {
   // Under the lock no other pass is going, so a run of a pass still `running` has no process.

@@ -106,24 +106,30 @@ const repositoriesOf = (installation: number) => `installation/${installation}/r
 const defaultBranchOf = (slug: string) => `repos/${slug}/default-branch`;
 const pageOf = (question: string, page: number) => `${question}?page=${page}`;
 
-/** A list GitHub serves a hundred at a time, each page a question of its own. */
-async function rememberedPages<T>(
-  asking: Asking,
-  question: string,
-  request: Request,
-  items: (body: string) => T[],
-): Promise<T[]> {
+const pagePath = (path: string, page: number) => `${path}${path.includes('?') ? '&' : '?'}per_page=100&page=${page}`;
+
+/** Every item of a list served a page at a time. `page` gives one page, or null when there is none. */
+async function allPages<T>(page: (n: number) => Promise<{ items: T[]; full: boolean } | null>): Promise<T[]> {
   const all: T[] = [];
-  for (let page = 1; ; page++) {
-    const path = `${request.path}${request.path.includes('?') ? '&' : '?'}per_page=100&page=${page}`;
-    const got = await remembered(asking, pageOf(question, page), { ...request, path }, (body) => {
+  for (let n = 1; ; n++) {
+    const got = await page(n);
+    if (!got) return all;
+    all.push(...got.items);
+    if (!got.full) return all;
+  }
+}
+
+/** A list GitHub serves a hundred at a time, each page a question of its own. */
+function rememberedPages<T>(asking: Asking, question: string, request: Request, items: (body: string) => T[]): Promise<T[]> {
+  return allPages(async (n) => {
+    const path = pagePath(request.path, n);
+    const got = await remembered(asking, pageOf(question, n), { ...request, path }, (body) => {
       const list = items(body);
       return { list, full: list.length === 100 };
     });
     if (!got) throw new GitHubError(`GitHub GET ${path}: 404`, 404);
-    all.push(...got.answer.list);
-    if (!got.answer.full) return all;
-  }
+    return { items: got.answer.list, full: got.answer.full };
+  });
 }
 
 /** A project the App is installed on, as this pass saw its default branch. */
@@ -176,15 +182,11 @@ const NO_FILES: Observed = { config: null, sweepWorkflow: false };
  * whoever must know between passes whether the machine still handles a project.
  */
 export async function projectsLastSeen(memory: Memory): Promise<Array<{ slug: string } & Observed>> {
-  const kept = async <T>(question: string): Promise<T[]> => {
-    const all: T[] = [];
-    for (let page = 1; ; page++) {
-      const answer = (await memory.recall(pageOf(question, page)))?.answer as { list: T[]; full: boolean } | undefined;
-      if (!answer) return all;
-      all.push(...answer.list);
-      if (!answer.full) return all;
-    }
-  };
+  const kept = <T>(question: string): Promise<T[]> =>
+    allPages(async (n) => {
+      const answer = (await memory.recall(pageOf(question, n)))?.answer as { list: T[]; full: boolean } | undefined;
+      return answer ? { items: answer.list, full: answer.full } : null;
+    });
   const projects: Array<{ slug: string } & Observed> = [];
   for (const installation of await kept<number>(INSTALLATIONS)) {
     for (const slug of await kept<string>(repositoriesOf(installation))) {
@@ -296,17 +298,14 @@ function listed(body: string): PullRequestSeen[] {
  * changed and its review is waiting.
  */
 export async function commentsSeen(asking: Asking, slug: string, token: string, pr: number, since: Date): Promise<CommentSeen[]> {
-  const pages = async <T>(path: string): Promise<T[]> => {
-    const all: T[] = [];
-    for (let n = 1; ; n++) {
-      const paged = `${path}${path.includes('?') ? '&' : '?'}per_page=100&page=${n}`;
+  const pages = <T>(path: string): Promise<T[]> =>
+    allPages(async (n) => {
+      const paged = pagePath(path, n);
       const answer = await ask(asking, { path: paged, auth: token });
       if (answer.status !== 'changed') throw new GitHubError(`GitHub GET ${paged}: no answer`, 404);
       const items = JSON.parse(answer.body) as T[];
-      all.push(...items);
-      if (items.length < 100) return all;
-    }
-  };
+      return { items, full: items.length === 100 };
+    });
   const comments = await pages<{ id: number; created_at: string; author_association?: string }>(
     `/repos/${slug}/issues/${pr}/comments?since=${encodeURIComponent(since.toISOString())}`,
   );

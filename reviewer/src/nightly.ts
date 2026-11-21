@@ -1,5 +1,6 @@
 import { DevkitConfigError } from '../../plugin/devkit-config.mjs';
 import { reportRun } from './failure-report.js';
+import { why } from './log.js';
 import { lockFault, MACHINE_LOCK, MachineLockError, NIGHTLY_LOCK, tryLock, type Held } from './locks.js';
 import { listProjects, projectLine, type Project } from './projects.js';
 import { machineFor } from './queue.js';
@@ -166,7 +167,7 @@ async function takeSteps(nightly: Run, say: (line: string) => void, lockLost: ()
   try {
     work = nightlyWork(await listProjects());
   } catch (err) {
-    say(`could not find the projects: ${err instanceof Error ? err.message : String(err)}`);
+    say(`could not find the projects: ${why(err)}`);
     await reportRun(await finishRun(nightly, { state: 'failed', stage: NIGHTLY_STAGES[0], errorType: errorType(err) }), say);
     return 'failed';
   }

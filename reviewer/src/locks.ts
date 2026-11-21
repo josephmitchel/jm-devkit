@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 
 import { pool } from './db/client.js';
+import { why } from './log.js';
 
 /**
  * Every Postgres advisory lock the code reviewer takes: the keys, and the one way a lock is taken,
@@ -100,7 +101,7 @@ async function hold(key: number, lockClass: number, wait: boolean): Promise<Held
   let isLost = false;
   const lost = (err: unknown) => {
     isLost = true;
-    console.warn(`the connection holding lock ${key} was lost (${err instanceof Error ? err.message : String(err)}): the lock is no longer held`);
+    console.warn(`the connection holding lock ${key} was lost (${why(err)}): the lock is no longer held`);
   };
   // Without a listener a connection dropped while it is checked out ends the process.
   client.on('error', lost);

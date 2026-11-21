@@ -1,4 +1,5 @@
 import type { RunKind, pollerEvents, pollerProjects } from './db/schema.js';
+import { toTheSecond as time } from './log.js';
 import type { Project } from './projects.js';
 import { countsAsReply } from './reply-authority.js';
 import { AGENT_KINDS, commandKind, runLine, runOutputPath, type ProjectCommand, type Run } from './runs.js';
@@ -304,8 +305,6 @@ export function leftByPasses(rows: Run[]): Run[] {
 
 /** An event's row, with the run of its last attempt. */
 export type EventRow = typeof pollerEvents.$inferSelect & { run: Run | null };
-
-const time = (when: Date) => when.toISOString().replace(/\.\d+Z$/, 'Z');
 
 /**
  * The `status` section for the poller: each project it has passed over, when its last pass was,
