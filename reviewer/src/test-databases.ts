@@ -43,7 +43,7 @@ export function planDatabases(variables: string[], serverUrl: string | undefined
     );
   }
   return variables.map((variable, index) => {
-    const name = ownName(`reviewer_test_${run}_${index}`);
+    const name = ownName(`reviewer_test_${run}_${index}_test`);
     const address = serverAddress(serverUrl);
     address.pathname = `/${name}`;
     return { variable, name, address: address.href };
@@ -63,8 +63,12 @@ function serverAddress(serverUrl: string): URL {
   return address;
 }
 
-/** The shape of every name planDatabases gives: the prefix, a run's 16 hex digits, an index. */
-const OWN_NAME = /^reviewer_test_[0-9a-f]{16}_[0-9]+$/;
+/**
+ * The shape of every name planDatabases gives: the prefix, a run's 16 hex digits, an index, and
+ * `_test`, the ending a suite that truncates its tables commonly demands of a database before it
+ * runs. The ending is optional here so a database recorded before names had it can still be dropped.
+ */
+const OWN_NAME = /^reviewer_test_[0-9a-f]{16}_[0-9]+(?:_test)?$/;
 
 /** `name`, or a refusal: no statement names a database this code did not make, whatever a record holds. */
 function ownName(name: string): string {
@@ -86,7 +90,7 @@ export function dropStatement(name: string): string {
 const POSTGRES_ADDRESS = /postgres(?:ql)?:\/\/[^\s"'`<>]+/g;
 // Punctuation of the sentence an address sits in, not of the address.
 const AFTER_ADDRESS = /[),.;:\]}]+$/;
-const OWN_NAME_IN_ADDRESS = /\/reviewer_test_[0-9a-f]{16}_[0-9]+(?:[?#]|$)/;
+const OWN_NAME_IN_ADDRESS = /\/reviewer_test_[0-9a-f]{16}_[0-9]+(?:_test)?(?:[?#]|$)/;
 
 /**
  * For text that leaves the machine: an address holds the password of the role that creates every

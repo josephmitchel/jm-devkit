@@ -148,14 +148,17 @@ test('parseWorkerList reads each slug and cron hour', () => {
   ]);
 });
 
-test('without the App credentials in the secrets file it exits 2 naming what is missing', async () => {
-  const { fetch, requests } = fleet();
-  const result = await run(['hour', 'owner/project'], fetch, configDir({ lines: ['DATABASE_URL=x'], key: null }));
-  assert.equal(result.code, 2);
-  assert.match(result.err, /cannot authenticate as the code reviewer's GitHub App/);
-  assert.match(result.err, /no value for REVIEWER_APP_CLIENT_ID/);
-  assert.match(result.err, /reviewer-app-private-key\.pem is missing/);
-  assert.equal(requests.length, 0);
+test('without the App credentials on this machine it exits 3, a check that could not be made, naming what is missing', async () => {
+  for (const command of ['installed', 'hour']) {
+    const { fetch, requests } = fleet();
+    const result = await run([command, 'owner/project'], fetch, configDir({ lines: ['DATABASE_URL=x'], key: null }));
+    assert.equal(result.code, 3, command);
+    assert.equal(result.out, '', command);
+    assert.match(result.err, /cannot authenticate as the code reviewer's GitHub App/);
+    assert.match(result.err, /no value for REVIEWER_APP_CLIENT_ID/);
+    assert.match(result.err, /reviewer-app-private-key\.pem is missing/);
+    assert.equal(requests.length, 0);
+  }
 });
 
 test('GitHub refusing the App exits 2 with its answer', async () => {

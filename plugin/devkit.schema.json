@@ -78,7 +78,7 @@
           "additionalProperties": { "type": "string" }
         },
         "databases": {
-          "description": "The environment variables that each need a database of their own. Before setup, the code reviewer creates one empty Postgres database per name on the machine it runs on, of that machine's Postgres version, and puts each one's address in its variable for the project's setup, test and nightly check commands, over a value `env` gives the same name. The databases are dropped after the run. A machine that cannot create them fails the run, saying what is missing.",
+          "description": "The environment variables that each need a database of their own. Before setup, the code reviewer creates one empty Postgres database per name on the machine it runs on, of that machine's Postgres version, and puts each one's address in its variable for the project's setup, test and nightly check commands, over a value `env` gives the same name. Each database's name ends in `_test`, for a suite that refuses any other. The databases are dropped after the run. A machine that cannot create them fails the run, saying what is missing.",
           "type": "array",
           "uniqueItems": true,
           "items": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" }

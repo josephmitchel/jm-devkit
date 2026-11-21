@@ -22,7 +22,7 @@ The scripts below are the parts that must not be left to judgement. Run each as 
 | Script | What it does | Exit |
 | --- | --- | --- |
 | `install/kit-commit.mjs` | Prints the kit commit the installed plugin was built from: the last segment of `${CLAUDE_PLUGIN_ROOT}`, a 12-hex SHA prefix (or HEAD, for a plugin loaded from a checkout). | 0, or 2 cannot tell |
-| `install/app.mjs installed <repo>` | Asks GitHub, as the code reviewer's App, whether the App is installed on the repo. Prints `installed` or `not installed`. | 0 installed, 1 not, 2 no credentials or GitHub refused |
+| `install/app.mjs installed <repo>` | Asks GitHub, as the code reviewer's App, whether the App is installed on the repo. Prints `installed` or `not installed`. | 0 installed, 1 not, 2 GitHub refused, 3 no credentials on this machine |
 | `install/discussions.mjs <repo>` | Asks GitHub, as the owner's `gh` login, whether the project has discussions turned on and the code reviewer's discussion category. Prints `ready`, or exactly what the owner must create. | 0 ready, 1 not, 2 gh failed |
 | `generator/generate.mjs <dir> [--check]` | Writes the kit-owned files from `<dir>/devkit.json` and removes the retired ones, printing `wrote <path>` or `removed <path>`; with `--check`, lists the ones behind, and says on stderr which of them are retired. | 0 level, 1 behind, 2 no or invalid `devkit.json` |
 | `install/settings.mjs <dir> [--dry-run]` | Removes the permission rules in `.claude/settings.json` that make an agent ask before a plain `git commit` or `git push`. | 0, or 2 not JSON |
@@ -36,7 +36,7 @@ The scripts below are the parts that must not be left to judgement. Run each as 
 2. If an install pull request is already open (`gh pr list --state open --json headRefName,url` shows a branch starting `devkit-install`), say so with its link and stop: there is one at a time.
 3. `git fetch origin`, then add a **detached scratch worktree** of `origin/<default>` in your scratchpad. Read everything below there, not in the owner's checkout: the plan is against the default branch, and uncommitted work in the checkout is not yours to read into it or carry.
 4. Gather, each into the plan's groups (step 3):
-   - **The App**: `app.mjs installed $REPO`. Exit 2 blocks the plan (below).
+   - **The App**: `app.mjs installed $REPO`. Exit 2 blocks the plan (below). Exit 3 does not: it is a check that could not be made, and goes under "Left for you".
    - **`devkit.json`**: see "Writing devkit.json". Write the proposed file into the scratch worktree; that is a scratch copy, not the project.
    - **Discussions**: `discussions.mjs $REPO`. On exit 1, what it prints goes under "Left for you" as it is. On exit 2, put what it printed on stderr there instead, as a check that could not be made.
    - **Kit-owned files**: `generate.mjs <worktree> --check` with the proposed `devkit.json` in place. Each path it prints is a write, except one that stderr calls retired, which is a removal. See "A project still on GitHub Actions".
@@ -45,7 +45,9 @@ The scripts below are the parts that must not be left to judgement. Run each as 
    - **Permission prompts**: `settings.mjs <worktree> --dry-run`.
    - **Labels**: `label.mjs $REPO --dry-run`.
 
-The plan is **blocked** by anything that stops it being carried out: an invalid `devkit.json`, or the App's credentials missing (so the App cannot be checked). Show the script's message in the plan as it is (it names the file and what is missing, never a value), and stop after the plan: the owner fixes it and runs install again.
+The plan is **blocked** by anything that stops it being carried out: an invalid `devkit.json`, or GitHub refusing the App's credentials. Show the script's message in the plan as it is (it names the file and what is wrong, never a value), and stop after the plan: the owner fixes it and runs install again.
+
+The App's credentials being absent from this machine does not block. They are kept off a machine on purpose where agents work, and nothing install writes needs them: only the check does.
 
 ## 2. Ask only what cannot be inferred
 
@@ -118,6 +120,7 @@ Blocked
 "Left for you" holds each step that is the owner's, and appears whenever there is one:
 
 - **The App**, when `app.mjs installed` says `not installed`. A `gh` login cannot add a repository to an App's installation (GitHub answers 403: only a token authorised by a GitHub App can).
+- **The App, unconfirmed**, when `app.mjs installed` exits 3. Say that this machine does not hold the App's credentials, so whether the App is installed on the project was not checked, and that `code-reviewer projects` on the owner's machine lists the project if it is. Do not print the install link as though the App were missing.
 - **Discussions**, when `discussions.mjs` does not print `ready`. The code reviewer posts each night's summary as a discussion in the project, and a discussion category can only be created in the project's settings on GitHub: GitHub's API has no call for it. The check is what the owner's `gh` login sees. Whether the App has been granted read and write access to Discussions is a separate thing, set once on the App.
 - **The steps after a move**, when the plan removes a code reviewer workflow.
 

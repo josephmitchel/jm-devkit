@@ -183,7 +183,7 @@ describe("running a project's nightly checks in its checkout", () => {
     expect(ended(results)).toEqual(['env: passed']);
     const given = wrote.split('\n');
     expect(given).toContain('LOG_LEVEL=error');
-    expect(given).toContain('APP_DATABASE_URL=postgres://tests:s3cret@db.example:5433/reviewer_test_0123456789abcdef_0');
+    expect(given).toContain('APP_DATABASE_URL=postgres://tests:s3cret@db.example:5433/reviewer_test_0123456789abcdef_0_test');
     expect(wrote).not.toMatch(/reviewer-pw|sk-ant-oat-secret|ghs_secret|the-app-key|REVIEWER_|db\.example:5433\/postgres/);
   });
 

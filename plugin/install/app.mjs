@@ -10,8 +10,9 @@
 //     line per hour taken, `taken <h> <owner/repo> (<where it came from>)`, and one per repository
 //     whose devkit.json could not be read, `skipped <owner/repo>: <why>`.
 //
-// Exit 2 when the App's credentials are not in the secrets file, on bad arguments, or when GitHub
-// refuses the App.
+// Exit 2 on bad arguments or when GitHub refuses the App. Exit 3 when the App's credentials are not
+// on this machine: the question could not be asked, which is not an answer either way. They are kept
+// off a machine on purpose where agents work, so a caller must not treat 3 as "not installed".
 //
 // Install no longer runs `hour`: the owner's machine sweeps every project in one nightly run, so
 // there are no slots. It stays for a project still on GitHub Actions until the last one has moved.
@@ -198,7 +199,7 @@ export async function main(argv, { fetch: fetchFn = globalThis.fetch, env = proc
   } catch (e) {
     if (!(e instanceof SecretsFileError)) throw e;
     err.write(`cannot authenticate as the code reviewer's GitHub App:\n${e.problems.map((p) => `  ${p}\n`).join('')}`);
-    return 2;
+    return 3;
   }
 
   try {
