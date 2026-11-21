@@ -57,6 +57,7 @@ const ASSERTIONS = new Set([
   'items',
   'minItems',
   'uniqueItems',
+  'uniqueItemProperties',
   'contains',
   'const',
   'enum',
@@ -112,6 +113,18 @@ export function validate(schema, value, at) {
       for (const item of value) {
         const key = JSON.stringify(item);
         if (seen.has(key)) errors.push(`${field} lists ${key} more than once`);
+        seen.add(key);
+      }
+    }
+    // Not in JSON Schema itself: no two items may have the same value for a listed property.
+    for (const property of schema.uniqueItemProperties ?? []) {
+      const seen = new Set();
+      const twice = new Set();
+      for (const item of value) {
+        if (!isObject(item) || !(property in item)) continue;
+        const key = JSON.stringify(item[property]);
+        if (seen.has(key) && !twice.has(key)) errors.push(`${field} has more than one item whose ${property} is ${key}`);
+        if (seen.has(key)) twice.add(key);
         seen.add(key);
       }
     }

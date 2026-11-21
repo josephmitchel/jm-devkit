@@ -12,15 +12,23 @@ export interface DevkitConfig {
   $schema?: string;
   modules: Array<'process' | 'web' | 'canvas'>;
   kit?: string;
-  sweep: { hour: number };
+  /** Retired: accepted and ignored. */
+  sweep?: { hour: number };
   reviewer: {
     setup?: string;
     tests: Array<{ name: string; command: string }>;
     env?: Record<string, string>;
+    /** The environment variables that each get an empty database for the run. */
+    databases?: string[];
+    /** Retired: accepted, and read by nothing but the sweep workflow's last form. */
     services?: Record<string, DevkitService>;
     harnessNotes?: string;
     redundancy?: number;
     extraContext?: string;
+  };
+  nightly?: {
+    /** Commands run once a night after the project's sweep, in the order written. */
+    checks?: Array<{ name: string; command: string }>;
   };
 }
 
@@ -44,6 +52,8 @@ export interface JsonSchema {
   items?: JsonSchema;
   minItems?: number;
   uniqueItems?: boolean;
+  /** The kit's own keyword: properties whose value no two items of the array may share. */
+  uniqueItemProperties?: string[];
   contains?: JsonSchema;
   const?: unknown;
   enum?: unknown[];

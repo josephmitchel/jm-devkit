@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
+import { streamChild } from './child.js';
 import type { CommitFacts } from './fix-commit.js';
 import { track } from './heartbeat.js';
 import { positiveIntEnv } from './stages/context.js';
@@ -23,13 +24,22 @@ export const reviewerRoot = projectRoot;
  * reviewer's own node_modules and git config, where one of its scripts could rewrite the live
  * credential helper, and where its test suite resolves modules by walking up into ours.
  */
-function workspaceRoot(): string {
-  const configured = process.env.REVIEWER_WORKSPACE_ROOT?.trim();
+export function workspaceRoot(env: NodeJS.ProcessEnv = process.env): string {
+  const configured = env.REVIEWER_WORKSPACE_ROOT?.trim();
   return configured ? configured : path.join(projectRoot, 'workspaces');
 }
 
 export function workspacePath(repoSlug: string): string {
   return path.join(workspaceRoot(), repoSlug.replace('/', '__'));
+}
+
+/**
+ * Where a project's nightly checks are checked out: a tree of their own, so checks run by hand
+ * never reset the one a review or a sweep of the same project is working in. `checks` is no
+ * project's directory, since those all hold an owner and a name.
+ */
+export function checksWorkspacePath(repoSlug: string): string {
+  return path.join(workspaceRoot(), 'checks', repoSlug.replace('/', '__'));
 }
 
 async function git(cwd: string, args: string[]): Promise<string> {
@@ -43,8 +53,8 @@ export async function prepareWorkspace(
   cloneUrl: string,
   branch: string,
   headSha: string,
+  dir: string = workspacePath(repoSlug),
 ): Promise<string> {
-  const dir = workspacePath(repoSlug);
   if (!fs.existsSync(path.join(dir, '.git'))) {
     fs.mkdirSync(path.dirname(dir), { recursive: true });
     await execFileAsync('git', ['clone', cloneUrl, dir]);
@@ -331,6 +341,52 @@ export async function runRepoCommand(
   } finally {
     activity.done();
   }
+}
+
+/** How a repo command run for its output ended. Both null: it never started. */
+export interface StreamedCommand {
+  exitCode: number | null;
+  signal: string | null;
+  /** Set when it was stopped for running too long: how long it had been given. */
+  timedOutAfterMs: number | null;
+  /** The end of what it wrote, stdout and stderr together. */
+  tail: string;
+}
+
+// How much of a streamed command's output is kept in memory once it has been written out.
+const STREAM_TAIL_CHARS = 16_000;
+// How long a command stopped for running too long has before it is killed outright.
+const STREAM_KILL_AFTER_MS = 5000;
+// How long its output may stay open once it has exited: a process it left behind can hold the pipe.
+const STREAM_CLOSES_WITHIN_MS = 5000;
+
+/**
+ * Each piece of the command's output goes to `write` as it comes, where {@link runRepoCommand}
+ * keeps only a trimmed failure. Same environment (repoCommandEnv); stopped after `timeoutMs`.
+ */
+export function streamRepoCommand(
+  dir: string,
+  command: string,
+  projectEnv: Record<string, string>,
+  write: (chunk: string) => void,
+  timeoutMs: number,
+): Promise<StreamedCommand> {
+  const activity = track(`command "${command.length > 60 ? `${command.slice(0, 57)}...` : command}"`);
+  let tail = '';
+  const wrote = (chunk: string) => {
+    tail = (tail + chunk).slice(-STREAM_TAIL_CHARS);
+    write(chunk);
+  };
+  // Not a group of its own: only the command's shell is signalled when it is stopped for time.
+  const options = { cwd: dir, env: repoCommandEnv(process.env, projectEnv), ownGroup: false, limitMs: timeoutMs, killAfterMs: STREAM_KILL_AFTER_MS, closesWithinMs: STREAM_CLOSES_WITHIN_MS };
+  return streamChild('sh', ['-c', command], options, (chunk) => {
+    activity.output();
+    wrote(chunk);
+  }).then((child) => {
+    if (child.error) wrote(`${child.error.message}\n`);
+    activity.done();
+    return { exitCode: child.exitCode, signal: child.signal, timedOutAfterMs: child.stoppedBy === 'limit' ? timeoutMs : null, tail };
+  });
 }
 
 /** Keep the failure-relevant tail; full logs don't belong in the database or prompts. */

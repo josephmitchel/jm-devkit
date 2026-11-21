@@ -2,6 +2,7 @@ import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { CommitFacts } from './fix-commit.js';
 import { appAuthConfigured, installationToken } from './gh-auth.js';
+import type { DiscussionSetup } from './night-summary.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -210,6 +211,16 @@ export async function getDefaultBranch(repoSlug: string): Promise<string> {
   return (await ghJson<{ default_branch: string }>(['api', `repos/${repoSlug}`])).default_branch;
 }
 
+/** The text of a file on a project's default branch, read without a checkout, or null when it has none. */
+export async function getDefaultBranchFile(repoSlug: string, filePath: string): Promise<string | null> {
+  try {
+    return await gh(['api', `repos/${repoSlug}/contents/${filePath}`, '-H', 'Accept: application/vnd.github.raw+json']);
+  } catch (err) {
+    if (/HTTP 404/.test((err as { stderr?: string }).stderr ?? '')) return null;
+    throw err;
+  }
+}
+
 /**
  * Fire a `workflow_dispatch` so the next queued review starts at once instead of waiting for
  * the scheduled sweep. Dispatches are the one event type GitHub still delivers when the actor
@@ -303,6 +314,27 @@ export async function listOpenIssuesByLabel(repoSlug: string, label: string): Pr
     .sort((a, b) => a.number - b.number);
 }
 
+/**
+ * Every open issue with who opened it, oldest first: what the failure issue is looked for among.
+ * The list endpoint, not search, because search lags behind an issue opened a moment ago.
+ */
+export async function listOpenIssuesWithAuthors(
+  repoSlug: string,
+): Promise<Array<{ number: number; body: string; authorType: string; authorAssociation: string }>> {
+  const rows = await ghJson<
+    Array<{ number: number; body: string | null; user: { type?: string } | null; author_association?: string; pull_request?: unknown }>
+  >(['api', `repos/${repoSlug}/issues?state=open&per_page=100`, '--paginate']);
+  return rows
+    .filter((r) => r.pull_request === undefined || r.pull_request === null)
+    .map((r) => ({
+      number: r.number,
+      body: r.body ?? '',
+      authorType: r.user?.type ?? 'User',
+      authorAssociation: r.author_association ?? 'NONE',
+    }))
+    .sort((a, b) => a.number - b.number);
+}
+
 export async function getIssue(repoSlug: string, number: number): Promise<IssueInfo> {
   return toIssueInfo(await ghJson<RawIssue>(['api', `repos/${repoSlug}/issues/${number}`]));
 }
@@ -383,6 +415,33 @@ export async function swapBlockedByForRelatesTo(dependentNodeId: string, blocker
     'mutation($dep:ID!,$blocker:ID!){ removeBlockedBy(input:{issueId:$dep, blockingIssueId:$blocker}){ clientMutationId } addRelatesTo(input:{issueId:$dep, relatedIssueId:$blocker}){ clientMutationId } }',
     { dep: dependentNodeId, blocker: blockerNodeId },
   );
+}
+
+/** Whether a project has discussions on, and its categories: what creating a discussion needs to know first. */
+export async function getDiscussionSetup(repoSlug: string): Promise<DiscussionSetup> {
+  const [owner, name] = repoSlug.split('/');
+  const data = await ghGraphql<{
+    repository: { id: string; hasDiscussionsEnabled: boolean; discussionCategories: { nodes: Array<{ id: string; name: string }> } };
+  }>(
+    // A repository holds at most 25 categories.
+    'query($o:String!,$r:String!){ repository(owner:$o,name:$r){ id hasDiscussionsEnabled discussionCategories(first:100){ nodes { id name } } } }',
+    { o: owner, r: name },
+  );
+  const { repository } = data;
+  return { repositoryId: repository.id, enabled: repository.hasDiscussionsEnabled, categories: repository.discussionCategories.nodes };
+}
+
+/** Discussions are created only through GraphQL, by the repository's and the category's ids. Returns the discussion's URL. */
+export async function createDiscussion(
+  target: { repositoryId: string; categoryId: string },
+  title: string,
+  body: string,
+): Promise<string> {
+  const data = await ghGraphql<{ createDiscussion: { discussion: { url: string } } }>(
+    'mutation($repo:ID!,$category:ID!,$title:String!,$body:String!){ createDiscussion(input:{repositoryId:$repo, categoryId:$category, title:$title, body:$body}){ discussion { url } } }',
+    { repo: target.repositoryId, category: target.categoryId, title, body },
+  );
+  return data.createDiscussion.discussion.url;
 }
 
 /**

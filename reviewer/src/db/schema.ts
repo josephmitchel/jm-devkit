@@ -1,10 +1,12 @@
 import {
+  type AnyPgColumn,
   bigint,
   boolean,
   integer,
   jsonb,
   pgEnum,
   pgTable,
+  primaryKey,
   serial,
   text,
   timestamp,
@@ -159,6 +161,8 @@ export const sweeps = pgTable('sweeps', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   finishedAt: timestamp('finished_at', { withTimezone: true }),
+  // The discussion this sweep's summary was posted as. Set once, so a sweep is posted once.
+  discussionUrl: text('discussion_url'),
 });
 
 export const reviews = pgTable(
@@ -173,6 +177,8 @@ export const reviews = pgTable(
     state: reviewState('state').notNull().default('pending'),
     currentRoundId: integer('current_round_id'),
     error: text('error'),
+    // How many times in a row the machine's time limit has stopped this review (queue.ts afterReviewRun).
+    timeLimitStops: integer('time_limit_stops').notNull().default(0),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -309,4 +315,93 @@ export const githubArtifacts = pgTable('github_artifacts', {
   roundNo: integer('round_no'),
   payload: jsonb('payload'),
   postedAt: timestamp('posted_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+/**
+ * A database created for a project's tests (`reviewer.databases`). Recorded before it is created
+ * and forgotten once it is dropped, so a run that was killed leaves a note of what it left behind.
+ */
+export const testDatabases = pgTable('test_databases', {
+  name: text('name').primaryKey(),
+  // Whose it is: `review:<id>`, `sweep:<id>` or `checks:<owner/name>` (RunOwner). A resumed review
+  // or sweep has the same owner, and so has a project's next run of its checks.
+  owner: text('owner').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+// `sweep`, `summary`, `checks`: one project's steps in a nightly run; `checks` is also run by
+// hand, as a run of its own. `landed`, `carry-gate`: started by a pass of the poller. `review`:
+// found by a pass and started by the queue.
+export type RunKind = 'nightly' | 'sweep' | 'summary' | 'checks' | 'landed' | 'carry-gate' | 'review';
+// `interrupted`: stopped before its command finished, by its time limit or by the service stopping,
+// or found still `running` by the next run. Its work is taken up again by the next run.
+export type RunState = 'running' | 'succeeded' | 'failed' | 'interrupted';
+
+/**
+ * A run of one of the code reviewer's commands on the machine. `kind` and `state` are text, so a
+ * new kind of run needs no migration.
+ */
+export const runs = pgTable('runs', {
+  // `run-<UTC start time>-<random>` (newRunId). The run's output is the file runOutputPath names.
+  id: text('id').primaryKey(),
+  kind: text('kind').$type<RunKind>().notNull(),
+  // owner/name, not a repos row: a project's first run is recorded before it has one. Null for a
+  // run that is not one project's, such as the nightly run itself.
+  project: text('project'),
+  // The nightly run this one is a step of. Null for every other run, the nightly run included.
+  parentId: text('parent_id').references((): AnyPgColumn => runs.id),
+  state: text('state').$type<RunState>().notNull().default('running'),
+  // Both set only on a run that failed of itself. A nightly run that failed only because a
+  // project's run did has neither. On an interrupted run, `error_type` says what stopped it.
+  stage: text('stage'),
+  errorType: text('error_type'),
+  startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),
+  finishedAt: timestamp('finished_at', { withTimezone: true }),
+});
+
+/**
+ * An event a pass of the poller found in a project, and what became of it. The primary key is the
+ * rule that an event is handled once: a second record of the same event cannot be made.
+ */
+export const pollerEvents = pgTable(
+  'poller_events',
+  {
+    project: text('project').notNull(),
+    // `<name>:<subject>`, such as `merged:12`. The same event always has the same key.
+    event: text('event').notNull(),
+    // How many times its command has been started. A pass takes an event by raising this from
+    // the number it read, so two passes cannot both take it.
+    attempts: integer('attempts').notNull().default(0),
+    attemptedAt: timestamp('attempted_at', { withTimezone: true }),
+    // The run of its last attempt.
+    runId: text('run_id').references(() => runs.id),
+    // Set once the event needs nothing more done: for a command a pass runs, once it has
+    // succeeded; a review's event has its own rule (queue.ts afterReviewRun).
+    handledAt: timestamp('handled_at', { withTimezone: true }),
+    foundAt: timestamp('found_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.project, t.event] })],
+);
+
+/** Where the poller's last pass over a project got to. A project has a row from its first pass. */
+export const pollerProjects = pgTable('poller_projects', {
+  project: text('project').primaryKey(),
+  // GitHub's time at the first pass. Nothing that happened before it is acted on.
+  startedAt: timestamp('started_at', { withTimezone: true }).notNull(),
+  // The newest change to a pull request that a pass has read: the next reads no further back.
+  seenTo: timestamp('seen_to', { withTimezone: true }).notNull(),
+  // The ETag of the listing of pull requests that pass read, sent back to ask "anything since?".
+  pullsEtag: text('pulls_etag'),
+  lastPassAt: timestamp('last_pass_at', { withTimezone: true }).notNull(),
+});
+
+/**
+ * The last answer GitHub gave to a question the poller repeats every pass, with its ETag. No
+ * credential is kept here: a pass mints its tokens and holds them in memory.
+ */
+export const githubAnswers = pgTable('github_answers', {
+  question: text('question').primaryKey(),
+  etag: text('etag'),
+  answer: jsonb('answer').notNull(),
+  askedAt: timestamp('asked_at', { withTimezone: true }).notNull().defaultNow(),
 });

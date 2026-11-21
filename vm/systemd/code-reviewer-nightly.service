@@ -1,0 +1,44 @@
+# The code reviewer's nightly run. Installed by vm/dev-vm-setup.sh; the timer of the same name
+# starts it. By hand: sudo systemctl start --no-block code-reviewer-nightly.service
+[Unit]
+Description=Code reviewer: the nightly run
+Wants=network-online.target
+# After the queue's service: a nightly run that starts during a review waits for that turn to end
+# before its update step touches the code the review runs from.
+After=network-online.target postgresql.service code-reviewer-queue.service
+
+[Service]
+Type=oneshot
+User=reviewer
+Group=reviewer
+
+# The credentials reach the service only here: systemd reads the file as root before it drops to
+# the reviewer user, who cannot read it.
+EnvironmentFile=/etc/code-reviewer/credentials.env
+
+# /var/lib/code-reviewer, the reviewer user's alone: the code reviewer's own checkout (kit), the
+# projects' checkouts with the home their commands are given (workspaces), and the runs' output
+# (state), which is kept out of the checkouts.
+StateDirectory=code-reviewer
+StateDirectoryMode=0700
+# /run/code-reviewer-nightly, there while this unit is active and gone when it ends: the queue's
+# service is not started while it exists.
+RuntimeDirectory=code-reviewer-nightly
+WorkingDirectory=/var/lib/code-reviewer/kit/reviewer
+Environment=REVIEWER_WORKSPACE_ROOT=/var/lib/code-reviewer/workspaces
+Environment=REVIEWER_STATE_DIR=/var/lib/code-reviewer/state
+# The App's own account on GitHub, as the author of anything the code reviewer commits.
+Environment="REVIEWER_GIT_NAME=jm-code-reviewer[bot]"
+Environment="REVIEWER_GIT_EMAIL=338258166+jm-code-reviewer[bot]@users.noreply.github.com"
+
+# Move the checkout to the kit's default branch, install dependencies when the lockfile changed,
+# apply migrations. If that fails the unit fails and no run starts on stale code.
+ExecStartPre=/usr/bin/node bin/update.mjs
+# Not through bin/code-reviewer.mjs: the process systemd signals must be the one that handles it.
+ExecStart=/usr/bin/node --import tsx/esm src/cli.ts nightly
+
+# A night of sweeps takes hours. Each sweep has its own limit, kept by the code reviewer.
+TimeoutStartSec=infinity
+# On stop the nightly run records what it was doing as interrupted, which needs this long.
+KillMode=control-group
+TimeoutStopSec=3min

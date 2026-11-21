@@ -1,9 +1,11 @@
 import { and, eq, notInArray } from 'drizzle-orm';
 import { db, schema } from '../db/client.js';
+import { SetupCommandError } from '../failure-side.js';
 import { getPr } from '../github.js';
 import { prepareWorkspace, runRepoCommand } from '../workspace.js';
 import { MAX_ROUNDS, requireProject, requireWorkspace, type Ctx } from './context.js';
 import { readProjectSetup } from '../project-config.js';
+import { provideTestDatabases } from '../test-databases.js';
 
 export interface ReviewSlotConflict {
   reviewId: number;
@@ -35,6 +37,12 @@ export const ACTIVE_WORK_STATES = new Set([
  * cancelled, never gets to record anything, so this is the only thing that frees the repo.
  */
 const STALE_HOLDER_MS = 7 * 60 * 60 * 1000;
+
+/**
+ * The states in which a review does not hold its project's review slot: finished, stopped, or
+ * still waiting for the slot. A review in any other state holds it.
+ */
+export const OFF_THE_SLOT = ['passed', 'failed', 'pending'] as const;
 
 /** Either this review holds the repo's review slot, or the review that does is named. */
 export type SlotClaim =
@@ -112,7 +120,7 @@ export async function resolveSlot(
     .where(
       and(
         eq(schema.reviews.repoId, repoId),
-        notInArray(schema.reviews.state, ['passed', 'failed', 'pending']),
+        notInArray(schema.reviews.state, [...OFF_THE_SLOT]),
       ),
     );
   const conflicts: ReviewSlotConflict[] = rows
@@ -165,16 +173,18 @@ export async function runSetup(ctx: Ctx): Promise<void> {
   if (!project.setupCommand) return;
   console.log(`running setup: ${project.setupCommand}`);
   const setup = await runRepoCommand(requireWorkspace(ctx), project.setupCommand, project.env);
-  if (!setup.passed) throw new Error(`setup command failed:\n${setup.trimmedOutput}`);
+  if (!setup.passed) throw new SetupCommandError(setup.trimmedOutput);
 }
 
 /**
- * Learn how to set up and test the project from the checkout just prepared. Read on every
- * checkout, not once per review: the PR under review can change its own `devkit.json`.
+ * Learn how to set up and test the project from the checkout just prepared, and create the
+ * databases it names. Read on every checkout, not once per review: the PR under review can change
+ * its own `devkit.json`.
  */
-export function readProject(ctx: Ctx): void {
-  ctx.project = readProjectSetup(requireWorkspace(ctx), ctx.repo);
-  console.log(`project setup read from ${ctx.project.source === 'devkit.json' ? 'devkit.json' : 'the database row'}`);
+export async function readProject(ctx: Ctx): Promise<void> {
+  const project = readProjectSetup(requireWorkspace(ctx), ctx.repo);
+  console.log(`project setup read from ${project.source === 'devkit.json' ? 'devkit.json' : 'the database row'}`);
+  ctx.project = await provideTestDatabases(`review:${ctx.review.id}`, project);
 }
 
 export async function runIntake(ctx: Ctx): Promise<void> {
@@ -242,7 +252,7 @@ export async function runIntake(ctx: Ctx): Promise<void> {
     pr.headSha,
   );
   console.log(`workspace ready at ${ctx.workspaceDir}`);
-  readProject(ctx);
+  await readProject(ctx);
 
   if (!round.testResults) {
     await runSetup(ctx);
