@@ -1,3 +1,4 @@
+import { DevkitConfigError } from '../../plugin/devkit-config.mjs';
 import { UPDATE_STAGES } from '../bin/update.mjs';
 import { reportRun } from './failure-report.js';
 import { lockFault, MACHINE_LOCK, MachineLockError, NIGHTLY_LOCK, tryLock, type Held } from './machine.js';
@@ -22,6 +23,8 @@ import {
 export interface Step {
   project: string;
   kind: 'sweep' | 'summary' | 'checks';
+  /** On a sweep that cannot start: what is wrong with the project's config. */
+  invalidConfig?: string;
 }
 
 // A project's steps, in order. The summary step posts what the sweep before it left, and posts
@@ -30,17 +33,26 @@ const PROJECT_STEPS: Step['kind'][] = ['sweep', 'summary', 'checks'];
 
 /**
  * What a nightly run does, from the projects it found: its steps in order, and a line for each
- * project it leaves alone. A project that names no nightly checks has no checks step.
+ * project it leaves alone. A project that names no nightly checks has no checks step. A project
+ * the machine would handle but for an invalid project config has one step, a sweep that cannot
+ * start, so the project is told; one with no project config is not under the kit and is left alone.
  */
 export function nightlyWork(projects: Project[]): { steps: Step[]; skipped: string[] } {
+  const invalid = (p: Project) => p.state === 'skipped' && p.invalidConfig === true;
   return {
-    steps: projects.flatMap((p) =>
-      p.state !== 'handled'
-        ? []
-        : PROJECT_STEPS.filter((kind) => kind !== 'checks' || p.nightlyChecks > 0).map((kind) => ({ project: p.slug, kind })),
-    ),
-    skipped: projects.filter((p) => p.state !== 'handled').map(projectLine),
+    steps: projects.flatMap((p): Step[] => {
+      if (p.state === 'handled') {
+        return PROJECT_STEPS.filter((kind) => kind !== 'checks' || p.nightlyChecks > 0).map((kind) => ({ project: p.slug, kind }));
+      }
+      return invalid(p) ? [{ project: p.slug, kind: 'sweep', invalidConfig: p.reason }] : [];
+    }),
+    skipped: projects.filter((p) => p.state !== 'handled' && !invalid(p)).map(projectLine),
   };
+}
+
+/** How a step that cannot start is recorded: failed before it began, on the project's side. Null for one that can. */
+export function refusedResult(step: Step): RunResult | null {
+  return step.invalidConfig === undefined ? null : { state: 'failed', stage: 'starting', errorType: DevkitConfigError.name };
 }
 
 export type Outcome = 'succeeded' | 'failed' | 'interrupted';
@@ -206,12 +218,14 @@ export async function recordNightlyNotStarted(stage: string, errorType: string):
 async function takeStep(nightly: Run, step: Step, say: (line: string) => void): Promise<Outcome> {
   try {
     // A project registers itself (ADR 0004): the first night it is met, its row is made here.
-    await ensureProjectRow(step.project);
+    if (!step.invalidConfig) await ensureProjectRow(step.project);
     const run = await startRun({ kind: step.kind, project: step.project, parentId: nightly.id });
     say(`${step.project} ${step.kind} started as ${run.id}`);
-    let result: RunResult;
+    let result = refusedResult(step);
+    // What the project's failure issue quotes is the end of the run's output.
+    if (result) runLog(run)(`${step.project} has a project config that is not valid: ${step.invalidConfig}`);
     try {
-      result = await runCommand(run, [step.kind, step.project]);
+      result ??= await runCommand(run, [step.kind, step.project]);
     } catch (err) {
       result = { state: 'failed', stage: 'starting', errorType: errorType(err) };
     }

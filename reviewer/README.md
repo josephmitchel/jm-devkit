@@ -199,7 +199,10 @@ versa; running both on the same repo at the same moment is not supported.
 the App for the projects (the `projects` command's list), takes the handled ones in name order and
 runs each one's sweep, posts its summary and then runs its nightly checks if it names any, one at a
 time, each as a `sweep`, `summary` or `checks` command in a process of its own. A project that is
-not handled is left alone, with a line saying why. A step that fails is recorded and the run goes
+not handled is left alone, with a line saying why, with one exception: a project the machine would
+handle whose project config is there and not valid is not passed over. Its sweep is recorded as a
+run that failed before it began, with the error type `DevkitConfigError`, which opens the failure
+issue in the project saying what is wrong. A step that fails is recorded and the run goes
 on to the next; the command exits non-zero when any step failed, or when the projects could not be
 found. It needs the App's credentials and the database address in its environment, as `projects`
 and `sweep` do. A handled project needs nothing registered: the nightly run makes its row in the

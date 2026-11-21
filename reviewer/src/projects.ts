@@ -14,7 +14,8 @@ export interface Observed {
 export type ProjectState =
   /** `nightlyChecks`: how many nightly checks its project config names. */
   | { state: 'handled'; nightlyChecks: number }
-  | { state: 'still on Actions' | 'skipped'; reason: string };
+  /** `invalidConfig`: skipped for having a project config the schema rejects, not for having none. */
+  | { state: 'still on Actions' | 'skipped'; reason: string; invalidConfig?: true };
 
 /** Whether the machine handles a project, from what was seen on its default branch. */
 export function projectState(observed: Observed): ProjectState {
@@ -28,7 +29,7 @@ export function projectState(observed: Observed): ProjectState {
     return { state: 'handled', nightlyChecks: config.nightly?.checks?.length ?? 0 };
   } catch (err) {
     if (!(err instanceof DevkitConfigError)) throw err;
-    return { state: 'skipped', reason: err.message };
+    return { state: 'skipped', reason: err.message, invalidConfig: true };
   }
 }
 
