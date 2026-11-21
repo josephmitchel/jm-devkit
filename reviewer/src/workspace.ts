@@ -361,9 +361,8 @@ const STREAM_KILL_AFTER_MS = 5000;
 const STREAM_CLOSES_WITHIN_MS = 5000;
 
 /**
- * Run a repo command for everything it writes: each piece goes to `write` as it comes, where
- * {@link runRepoCommand} keeps only a trimmed failure. The command gets the same environment
- * (see repoCommandEnv), and is stopped once it has run for `timeoutMs`.
+ * Each piece of the command's output goes to `write` as it comes, where {@link runRepoCommand}
+ * keeps only a trimmed failure. Same environment (repoCommandEnv); stopped after `timeoutMs`.
  */
 export function streamRepoCommand(
   dir: string,

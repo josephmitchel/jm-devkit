@@ -15,23 +15,14 @@ import type { Run } from './runs.js';
 import { droppingTestDatabases, provideTestDatabases, type RunOwner } from './test-databases.js';
 import { checksWorkspacePath, prepareWorkspace, runRepoCommand, streamRepoCommand, type StreamedCommand } from './workspace.js';
 
-/**
- * A project's nightly checks (`nightly.checks` in its project config): commands too slow for
- * every pull request, run once a night after the project's sweep, or by hand. No agent runs.
- */
-
-/**
- * The checks a project names, from the text of the project config on its default branch (null:
- * it has none). Read without a checkout, so a project that names none costs nothing more.
- */
+/** Read without a checkout, so a project that names none costs nothing more. */
 export function checksNamed(config: string | null): TestCommand[] {
   return config === null ? [] : (parseDevkitConfig(config).nightly?.checks ?? []).map(({ name, command }) => ({ name, command }));
 }
 
 /**
- * Who a project's checks' test databases belong to. The project, not the run: the checks have no
- * row of their own to resume, so what a killed run left is dropped by the project's next one, or
- * by the next nightly run.
+ * The project, not the run: the checks have no row to resume, so what a killed run left is dropped
+ * by the project's next run of them, or by the next nightly run.
  */
 export function checksOwner(slug: string): RunOwner {
   return `checks:${slug}`;
@@ -45,35 +36,28 @@ export class ChecksRunningError extends Error {
   }
 }
 
-/** How one check ended. */
 export interface CheckResult {
   name: string;
   passed: boolean;
   /** `exit N`, `killed by SIG…`, `stopped after N minutes` or `could not start`. */
   how: string;
-  /** The end of what it wrote. */
   tail: string;
 }
 
-/**
- * What a run of the checks does now, from how the checks run so far ended (`results[i]` is how
- * `checks[i]` ended). They run in the order written. A check that failed costs only itself: the
- * checks after it still run, and the run as a whole ends failed.
- */
+/** A check that failed costs only itself: the checks after it still run, and the run ends failed. */
 export function checksDecision(checks: TestCommand[], results: CheckResult[]): { next: TestCommand } | { done: 'succeeded' | 'failed' } {
   if (results.length < checks.length) return { next: checks[results.length] };
   return { done: results.every((r) => r.passed) ? 'succeeded' : 'failed' };
 }
 
-// What the account may take of the end of a run's output that reaches the project's failure
-// issue (outputTail), which also holds the line naming the type of error.
+// Sized to fit, with the error type's line, inside the end of the output that outputTail sends to
+// the project's failure issue.
 const ACCOUNT_LINES = 36;
 const ACCOUNT_CHARS = 3400;
 
 /**
- * The last thing a run of the checks writes: each check that failed, how, and the end of what it
- * wrote, then the count. The failed checks share the room, so a failing check's output reaches
- * the issue however much the checks after it wrote.
+ * The failed checks share the room, so a failing check's output reaches the issue however much the
+ * checks after it wrote.
  */
 export function checksAccount(results: CheckResult[]): string {
   const failed = results.filter((r) => !r.passed);
@@ -91,7 +75,6 @@ export function checksAccount(results: CheckResult[]): string {
 // A check is in the nightly run because it is slow, so it gets longer than a test suite does.
 const CHECK_TIMEOUT_MS = 30 * 60 * 1000;
 
-/** How long one check may run before it is stopped and counted as failed. */
 export function checkTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
   const set = Number(env.REVIEWER_CHECK_TIMEOUT_MS);
   return Number.isInteger(set) && set > 0 ? set : CHECK_TIMEOUT_MS;
@@ -104,9 +87,8 @@ function checkResult(name: string, ended: StreamedCommand): CheckResult {
 }
 
 /**
- * Run a project's nightly checks in its checkout, which has been set up. Each is one of the
- * project's own commands: it gets `project.env` and none of the code reviewer's credentials (see
- * repoCommandEnv). Everything a check writes goes to `write` as it comes.
+ * Each check is one of the project's own commands: it gets `project.env` and none of the code
+ * reviewer's credentials (repoCommandEnv).
  */
 export async function runChecks(
   checkoutDir: string,
@@ -136,16 +118,12 @@ function enter(stage: (typeof CHECKS_STAGES)[number]): void {
 }
 
 /**
- * One run of a project's nightly checks, as the command a recorded run starts.
+ * The checks get a checkout of their own at the default branch's head as it is now: the head the
+ * sweep audited or a newer one. It is set up the way the sweep's is, with fresh databases, since
+ * the sweep's were dropped when it ended.
  *
- * The checks get a checkout of their own (see checksWorkspacePath) at the default branch's head
- * as it is now, read after the project's sweep has finished: the head the sweep audited or a
- * newer one, never an older. It is made and set up the way the sweep's is: the same reset, the
- * project's setup command, `reviewer.env`, and fresh databases for `reviewer.databases`, since the
- * sweep's were dropped when it ended. Throws {@link NightlyCheckError} when a check failed.
- *
- * One run per project at a time, by the project's checks lock: a second would reset the first's
- * checkout and drop its databases. It throws {@link ChecksRunningError} before touching either.
+ * One run per project at a time: a second would reset the first's checkout and drop its databases,
+ * so it throws {@link ChecksRunningError} before touching either.
  */
 export async function runProjectChecks(slug: string): Promise<void> {
   const lock = await tryLock(checksLockKey(slug), CHECKS_LOCK_CLASS);
@@ -186,19 +164,14 @@ async function checkProject(slug: string): Promise<void> {
   });
 }
 
-/**
- * Run one project's nightly checks by hand: recorded as a run of its own and reported like the
- * step of a nightly run. A project that names none gets no run and no checkout, and nor does one
- * whose checks are already running. The caller has stop signals stop the run
- * (stopCommandsOnSignal), so one stopped by hand ends `interrupted`.
- */
+/** By hand. A project that names no checks, or whose checks are already running, gets no run and no checkout. */
 export async function runChecksOnDemand(slug: string): Promise<'no checks' | 'already running' | Run['state']> {
   if (checksNamed(await getDefaultBranchFile(slug, CONFIG_FILE)).length === 0) {
     console.log(`${slug} names no nightly checks: nothing to run`);
     return 'no checks';
   }
-  // Looked at before a run is recorded, so a second run by hand leaves no run and no report.
-  // The run itself takes the lock, and is the one refused if another got in between.
+  // Before a run is recorded, so a second run by hand leaves no run and no report. The run itself
+  // takes the lock.
   if ((await locksHeld(CHECKS_LOCK_CLASS)).has(checksLockKey(slug))) {
     console.log(new ChecksRunningError(slug).message);
     return 'already running';
@@ -208,7 +181,6 @@ export async function runChecksOnDemand(slug: string): Promise<'no checks' | 'al
     command: { command: 'checks', project: slug, pr: null },
     name,
     started: (run) => `${name} started as ${run.id}`,
-    // The checks need no row of the project's (runProjectChecks).
     needsProjectRow: false,
   });
   return finished.state;

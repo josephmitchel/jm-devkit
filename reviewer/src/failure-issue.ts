@@ -4,29 +4,26 @@ import { isErrorType, RUN_STAGES } from './run-vocabulary.js';
 import { ANSWER_AUTHORITY } from './reply-authority.js';
 
 /**
- * The failure issue: what it says and when it is opened, commented on and closed. There is one
- * open failure issue per place (a project, or the kit's repository) and kind of run. It is not a
- * ticket, so it carries no labels.
+ * One open failure issue per place (a project, or the kit's repository) and kind of run. It is not
+ * a ticket, so it carries no labels.
  */
 
-/** What a report says about the run it is for. */
 export interface RunFacts {
   kind: string;
   stage: string | null;
   errorType: string | null;
   kitCommit: string | null;
-  /** When the run ended, as `Date.toISOString` writes it. */
+  /** As `Date.toISOString` writes it. */
   time: string;
   runId: string;
 }
 
-/** What one place is told about a finished run. Only a failure on the project's side carries output. */
+/** Only a failure on the project's side carries output. */
 export type Report =
   | { outcome: 'failed'; side: 'project'; facts: RunFacts; tail: string }
   | { outcome: 'failed'; side: 'kit'; facts: RunFacts }
   | { outcome: 'succeeded'; side: Side; facts: RunFacts };
 
-/** An open issue in the place a report is for, as GitHub lists it. */
 export interface OpenIssue {
   number: number;
   body: string;
@@ -57,7 +54,7 @@ const TIME = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,3})?Z$/;
 const RUN_ID = /^run-\d{8}T\d{6}Z-[0-9a-f]{6}$/;
 const NOT_RECOGNISED = 'not recognised';
 
-/** The facts in the forms the code reviewer writes them. Each is one of a fixed set of words or matches a fixed pattern. */
+/** Each is one of a fixed set of words or matches a fixed pattern. */
 interface CheckedFacts {
   kind: RunKind;
   stage: string;
@@ -69,8 +66,8 @@ interface CheckedFacts {
 
 /**
  * The only way anything from a run reaches an issue in the kit's repository, which may be public
- * while the run's project is private. Nothing is filtered: a value that is not in its fixed form
- * is dropped whole, so no text a project, a path or an error message supplied can pass.
+ * while the run's project is private. Nothing is filtered: a value not in its fixed form is dropped
+ * whole, so no text a project, a path or an error message supplied can pass.
  */
 function checkedFacts(facts: RunFacts): CheckedFacts {
   const text = (value: unknown, ok: (s: string) => boolean) => (typeof value === 'string' && ok(value) ? value : NOT_RECOGNISED);
@@ -175,9 +172,9 @@ function couldBeOurs(issue: OpenIssue): boolean {
 }
 
 /**
- * What to do in one place about one finished run, given the issues open there. A failure opens the
- * place's failure issue for that kind of run, or comments on the one already open. A success
- * closes it. An issue for another kind of run, or for the other side, is not touched.
+ * A failure opens the place's failure issue for that kind of run, or comments on the one already
+ * open. A success closes it. An issue for another kind of run, or for the other side, is not
+ * touched.
  */
 export function failureIssuePlan(report: Report, open: OpenIssue[]): IssueAction[] {
   const facts = checkedFacts(report.facts);

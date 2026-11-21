@@ -1,9 +1,6 @@
 /**
- * The poller's record of events, against a real Postgres: the rules that keep an event from being
- * handled twice hold in the database, not in the code that asks. Not part of `npm test`: run it
- * with `REVIEWER_TEST_DATABASES_URL=<server> npm run test:postgres`, the address being a role that
- * may create databases. It keeps the code reviewer's state in a scratch database it creates on
- * that server and drops afterwards, so whatever `DATABASE_URL` holds is never opened.
+ * The rules that keep an event from being handled twice hold in the database, not in the code that
+ * asks. Run as locks.postgres.test.ts says.
  */
 import { randomBytes } from 'node:crypto';
 import pg from 'pg';

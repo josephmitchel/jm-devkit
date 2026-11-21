@@ -4,11 +4,10 @@
 Description=Code reviewer: one pass of the poller
 Wants=network-online.target
 After=network-online.target postgresql.service
-# Not before the nightly run's update step has installed the code reviewer's dependencies once:
-# on a machine just set up there is nothing to run yet. A pass skipped this way is not a failure.
+# Not before the nightly run's update step has installed the dependencies once. A pass skipped
+# this way is not a failure.
 ConditionPathExists=/var/lib/code-reviewer/kit/reviewer/node_modules/.installed-from-lockfile
-# A pass finds the reviews to start and does not run them: when it ends, however it ended, the
-# queue takes a turn (code-reviewer-queue.service). A turn already going is left to go on.
+# When a pass ends, however it ended, the queue takes a turn. A turn already going is left to go on.
 OnSuccess=code-reviewer-queue.service
 OnFailure=code-reviewer-queue.service
 
@@ -34,10 +33,8 @@ Environment="REVIEWER_GIT_EMAIL=338258166+jm-code-reviewer[bot]@users.noreply.gi
 # Not through bin/code-reviewer.mjs: the process systemd signals must be the one that handles it.
 ExecStart=/usr/bin/node --import tsx/esm src/cli.ts poll
 
-# A pass takes seconds, or a minute or two when pull requests have merged. One that hung would
-# hold every pass after it, so it is stopped here and the next pass takes up what it left.
+# A pass that hung would hold every pass after it, so it is stopped here and the next takes up what it left.
 TimeoutStartSec=30min
-# On stop every process in the unit gets SIGTERM. The pass then records the command it was on as
-# interrupted, which needs the time allowed here before anything left is killed.
+# On stop the pass records the command it was on as interrupted, which needs this long.
 KillMode=control-group
 TimeoutStopSec=90s

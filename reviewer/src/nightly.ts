@@ -18,7 +18,6 @@ import {
 } from './runs.js';
 import { dropDatabasesLeftBehind } from './test-databases.js';
 
-/** One piece of a nightly run's work: a run of `kind` for one project. */
 export interface Step {
   project: string;
   kind: 'sweep' | 'summary' | 'checks';
@@ -26,15 +25,13 @@ export interface Step {
   invalidConfig?: string;
 }
 
-// A project's steps, in order. The summary step posts what the sweep before it left, and posts
-// nothing when that sweep did not finish. The checks step is only for a project that names checks.
+// In order. The summary posts what the sweep before it left, and nothing when that sweep did not
+// finish.
 const PROJECT_STEPS: Step['kind'][] = ['sweep', 'summary', 'checks'];
 
 /**
- * What a nightly run does, from the projects it found: its steps in order, and a line for each
- * project it leaves alone. A project that names no nightly checks has no checks step. A project
- * the machine would handle but for an invalid project config has one step, a sweep that cannot
- * start, so the project is told; one with no project config is not under the kit and is left alone.
+ * A project with an invalid project config has one step, a sweep that cannot start, so that the
+ * project is told. One with no project config is not under the kit and is left alone.
  */
 export function nightlyWork(projects: Project[]): { steps: Step[]; skipped: string[] } {
   const invalid = (p: Project) => p.state === 'skipped' && p.invalidConfig === true;
@@ -49,7 +46,7 @@ export function nightlyWork(projects: Project[]): { steps: Step[]; skipped: stri
   };
 }
 
-/** How a step that cannot start is recorded: failed before it began, on the project's side. Null for one that can. */
+/** A step that cannot start is recorded as failed before it began, on the project's side. */
 export function refusedResult(step: Step): RunResult | null {
   return step.invalidConfig === undefined ? null : { state: 'failed', stage: 'starting', errorType: DevkitConfigError.name };
 }
@@ -57,12 +54,9 @@ export function refusedResult(step: Step): RunResult | null {
 export type Outcome = 'succeeded' | 'failed' | 'interrupted';
 
 /**
- * What a nightly run does now, from how the steps taken so far ended (`outcomes[i]` is how
- * `steps[i]` ended). A step that failed, or that its time limit stopped, costs only itself: the
- * steps after it still run, and the run as a whole ends failed. Once the service is stopping no
- * further step is taken, and a run that leaves work undone that way ends interrupted. Nor is one
- * taken once the connection holding the machine's lock is lost: the run can no longer say that no
- * other agent job is running, and ends failed with its steps undone.
+ * `outcomes[i]` is how `steps[i]` ended. A step that failed, or that its time limit stopped, costs
+ * only itself. Once the service is stopping, or the connection holding the machine's lock is lost
+ * (the run can no longer say no other agent job is running), no further step is taken.
  */
 export function nightlyDecision(
   steps: Step[],
@@ -79,13 +73,9 @@ export function nightlyDecision(
 
 const LOCK_LOST = "the connection holding the machine's lock was lost";
 
-// How often a nightly run that is waiting for the machine looks again.
 const LOOKS_AGAIN_EVERY_MS = 15_000;
 
-/**
- * Take the machine for the night, waiting for a review that is running to finish first. The wait
- * is at most a review's time limit. Returns null when this process was told to stop meanwhile.
- */
+/** Waits for a review that is running, at most its time limit. Null when this process was told to stop meanwhile. */
 async function takeMachine(say: (line: string) => void): Promise<Held | null> {
   let said = false;
   for (;;) {
@@ -103,14 +93,9 @@ async function takeMachine(say: (line: string) => void): Promise<Held | null> {
 }
 
 /**
- * The whole nightly run: every handled project's steps (its sweep, its summary, its nightly
- * checks), one after another, each in a process of its own. Every run is recorded and reported,
- * and the nightly run ends failed if any part of it did. Told to stop, it stops the step it is
- * on, takes no further step and ends interrupted.
- *
- * It has the machine from its first step to its last. While it is going no review starts (the
- * queue sees its lock), and a review already running is waited for, so the night is put back and
- * never skipped. A second nightly run beside one that is going does not start.
+ * It has the machine from its first step to its last: no review starts meanwhile, and a review
+ * already running is waited for, so the night is put back and never skipped. A second nightly run
+ * beside one that is going does not start.
  */
 export async function runNightly(): Promise<Outcome | 'not started'> {
   const night = await tryLock(NIGHTLY_LOCK);
@@ -129,8 +114,7 @@ async function runWithNightlyLock(night: Held): Promise<Outcome> {
   // Before anything trusts the lock: what follows calls other runs dead on its word.
   const fault = await lockFault(night);
   if (fault) return notStarted(fault);
-  // Before this run records itself, or it would be among them. No other nightly run is going, so
-  // what an earlier one left `running` is dead.
+  // Before this run records itself, or it would be among them.
   const left = await interruptRunsLeftRunning();
   const nightly = await startRun({ kind: 'nightly' });
   const say = runLog(nightly);
@@ -153,7 +137,6 @@ async function runWithNightlyLock(night: Held): Promise<Outcome> {
   }
 }
 
-/** A nightly run that starts no agent job because its lock does not hold: recorded failed, and reported. */
 async function notStarted(fault: Error): Promise<Outcome> {
   const nightly = await startRun({ kind: 'nightly' });
   const say = runLog(nightly);
@@ -179,7 +162,7 @@ async function takeSteps(nightly: Run, say: (line: string) => void, lockLost: ()
     outcomes.push(await takeStep(nightly, decision.next, say));
     decision = nightlyDecision(work.steps, outcomes, stopping(), lockLost());
   }
-  // An error of the run's own, which is what tells it from a night on which only a project's run failed.
+  // An error of the run's own tells it from a night on which only a project's run failed.
   const own = decision.lockLost
     ? { stage: NIGHTLY_STAGES[1], errorType: MachineLockError.name }
     : { stage: null, errorType: decision.done === 'interrupted' ? 'service stopped' : null };
@@ -195,18 +178,13 @@ async function takeSteps(nightly: Run, say: (line: string) => void, lockLost: ()
   return decision.done;
 }
 
-/**
- * How a nightly run that never started is recorded: failed, in the step of bringing the code
- * reviewer up to date that failed. Null when either word is not one of the fixed ones, so the
- * record cannot be made to hold text of a caller's choosing.
- */
+/** Null when either word is not one of the fixed ones, so the record cannot hold text of a caller's choosing. */
 export function notStartedResult(stage: string, errorType: string): RunResult | null {
   const known = (UPDATE_STAGES as readonly string[]).includes(stage);
   if (!known || !HOW_ENDED.test(errorType)) return null;
   return { state: 'failed', stage, errorType };
 }
 
-/** Record and report a nightly run that could not start. Returns false when given nothing it can record. */
 export async function recordNightlyNotStarted(stage: string, errorType: string): Promise<boolean> {
   const result = notStartedResult(stage, errorType);
   if (!result) return false;

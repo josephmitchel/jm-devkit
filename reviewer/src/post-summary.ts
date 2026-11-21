@@ -6,10 +6,7 @@ import { discussionCategory, discussionTarget, summaryPlans, type Night } from '
 
 type Sweep = typeof schema.sweeps.$inferSelect;
 
-/**
- * A project's sweeps that finished since `since`, and its latest whenever that was, in the order
- * they were made, each with the account its synthesis left.
- */
+/** And its latest, whenever that was. In the order they were made, each with the account its synthesis left. */
 async function nightsSince(slug: string, since: Date): Promise<Array<Night & { sweepId: number }>> {
   const [repo] = await db.select().from(schema.repos).where(eq(schema.repos.slug, slug));
   if (!repo) return [];
@@ -39,9 +36,8 @@ async function nightsSince(slug: string, since: Date): Promise<Array<Night & { s
 const LOOKS_BACK_MS = 8 * 24 * 60 * 60 * 1000;
 
 /**
- * What the `summary` command does: post each of the project's recent sweeps that is owed a
- * discussion (summaryPlans), oldest first. Nothing is run again: a post is made from what its
- * sweep recorded, and recorded on that sweep, so it is made once.
+ * Nothing is run again: a post is made from what its sweep recorded, and recorded on that sweep, so
+ * it is made once.
  */
 export async function postSummary(slug: string): Promise<'posted' | 'nothing to post'> {
   // Asked on every night, a quiet one included: a category that is missing stays reported until

@@ -1,16 +1,12 @@
 import { discussionCategory, findDiscussionCategory, missingDiscussionCategory } from '../../plugin/discussion-category.mjs';
 import type { SweepSummary } from './db/schema.js';
 
-/**
- * A night's summary: whether a project's sweep is posted as a discussion in the project, and
- * what the discussion says. All of it is decided from what the sweep left in the database.
- */
+/** All of it is decided from what the sweep left in the database. */
 
-/** One of a project's sweeps, as its row and its round's hold it. */
 export interface Night {
   /** `owner/name`, for the link to what landed. */
   project: string;
-  /** The sweep's state; only a `done` one is posted. */
+  /** Only a `done` one is posted. */
   state: string;
   summary: SweepSummary | null;
   /** The synthesis's account of the night. Null when nothing landed, so nothing was audited. */
@@ -18,11 +14,10 @@ export interface Night {
   baseSha: string;
   headSha: string | null;
   finishedAt: Date | null;
-  /** The discussion this sweep was already posted as. */
   discussionUrl: string | null;
 }
 
-/** The calendar date of a moment where the machine is; `timeZone` is the machine's own when left out. */
+/** `timeZone` is the machine's own when left out. */
 function localDate(at: Date, timeZone?: string): string {
   const parts = new Intl.DateTimeFormat('en-US', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(at);
   const part = (type: string) => parts.find((p) => p.type === type)!.value;
@@ -38,10 +33,7 @@ export type SummaryPlan = { action: 'skip'; why: string } | { action: 'post'; ti
 const VERDICT_WORDS: Record<string, string> = { needs_work: 'needs work', nothing_to_judge: 'nothing to judge', closed: 'closed by hand' };
 const verdict = (v: string) => VERDICT_WORDS[v] ?? v;
 
-/**
- * What the sweep did, one line per kind of thing. The discussion is in the project's own
- * repository, so an issue is given by its number, which GitHub links.
- */
+/** The discussion is in the project's own repository, so an issue is given by its number, which GitHub links. */
 function factLines(night: Night, landed: boolean): string[] {
   const summary: SweepSummary = { judged: [], answered: 0, opened: [], closedByAudit: [], commits: 0, ...night.summary };
   const tickets = summary.tickets ?? [];
@@ -69,10 +61,7 @@ function factLines(night: Night, landed: boolean): string[] {
   return lines;
 }
 
-/**
- * Whether a sweep is posted, and as what. One discussion per sweep, titled with the date it
- * finished; a night on which nothing happened posts nothing.
- */
+/** One discussion per sweep, titled with the date it finished; a night on which nothing happened posts nothing. */
 export function summaryPlan(night: Night | null, timeZone?: string): SummaryPlan {
   const skip = (why: string): SummaryPlan => ({ action: 'skip', why });
   if (night === null) return skip('the project has no sweep yet');
@@ -95,10 +84,9 @@ export type SummaryPlans<N extends Night> =
   | { action: 'post'; posts: Array<{ night: N; title: string; body: string }> };
 
 /**
- * Which of a project's nights are posted now: every sweep that finished in the last seven days,
- * has something to say and has no discussion yet, oldest first, so a night that could not be
- * posted is caught up once it can be. `nights` are the project's sweeps, the latest last; with
- * nothing to post, the reason given is the latest one's.
+ * Every sweep that finished in the last seven days, has something to say and has no discussion yet,
+ * oldest first. `nights` are the project's sweeps, the latest last; with nothing to post, the
+ * reason given is the latest one's.
  */
 export function summaryPlans<N extends Night>(nights: N[], now: Date, timeZone?: string): SummaryPlans<N> {
   const recent = (night: N) => night.finishedAt !== null && now.getTime() - night.finishedAt.getTime() <= CAUGHT_UP_FOR_MS;
@@ -118,17 +106,13 @@ export function summaryPlans<N extends Night>(nights: N[], now: Date, timeZone?:
 // install's check reads them too.
 export { discussionCategory };
 
-/** What GitHub says about a project's discussions. */
 export interface DiscussionSetup {
   repositoryId: string;
   enabled: boolean;
   categories: Array<{ id: string; name: string }>;
 }
 
-/**
- * The project has discussions off, or no category of the configured name. Its message is what
- * the owner reads in the project's failure issue, so it says what to create and where.
- */
+/** Its message is what the owner reads in the project's failure issue, so it says what to create and where. */
 export class MissingDiscussionCategoryError extends Error {
   constructor(project: string, category: string, enabled: boolean) {
     super(missingDiscussionCategory(project, category, enabled));
@@ -136,7 +120,6 @@ export class MissingDiscussionCategoryError extends Error {
   }
 }
 
-/** The ids GitHub needs to create a discussion in the project's category of that name. */
 export function discussionTarget(project: string, setup: DiscussionSetup, category: string): { repositoryId: string; categoryId: string } {
   const found = findDiscussionCategory(setup, category);
   if (!found) throw new MissingDiscussionCategoryError(project, category.trim(), setup.enabled);

@@ -4,8 +4,8 @@ import { pool } from './db/client.js';
 import { why } from './log.js';
 
 /**
- * Every Postgres advisory lock the code reviewer takes: the keys, and the one way a lock is taken,
- * tried, seen and let go. Each is held on a connection of its own, so a holder that dies lets go.
+ * Every Postgres advisory lock the code reviewer takes. Each is held on a connection of its own, so
+ * a holder that dies lets go.
  *
  * They are session locks: they do not hold through a pooler that shares sessions, so whoever takes
  * one to start agent jobs under it first shows that it holds ({@link lockFault}).
@@ -13,15 +13,14 @@ import { why } from './log.js';
 
 // 'code': arbitrary but stable, so every process picks the same locks.
 export const LOCK_CLASS = 0x636f6465;
-/** Held while migrations are applied, so two processes that start together do not both apply one. */
+/** So two processes that start together do not both apply a migration. */
 export const MIGRATE_LOCK = 1;
-/** Held for the whole of a pass of the poller: passes do not overlap. */
+/** Held for the whole of a pass of the poller. */
 export const PASS_LOCK = 2;
 /**
- * Held by whoever is running an agent job on the machine: a review, or the nightly run for its
- * sweeps. With the next, it keeps agent jobs to one at a time; `machineFor` in queue.ts says who
- * may take which. Only the `nightly` and `queue` commands take them. `sweep` and `run` do not: a
- * project still on GitHub Actions runs them against the same database and must not wait.
+ * Held by whoever is running an agent job on the machine. Only the `nightly` and `queue` commands
+ * take it and the next (`machineFor` in queue.ts says who may). `sweep` and `run` do not: a project
+ * still on GitHub Actions runs them against the same database and must not wait.
  */
 export const MACHINE_LOCK = 3;
 /** Held by a nightly run from its start to its end, its wait for the machine included. */
@@ -31,9 +30,9 @@ export const NIGHTLY_LOCK = 4;
 export const CHECKS_LOCK_CLASS = 0x63686b73; // 'chks'
 
 /**
- * The key of the lock held by a run of one project's nightly checks, in {@link CHECKS_LOCK_CLASS}.
- * Two runs share a checkout and the project's test databases, so one goes at a time. Two projects
- * whose names hash alike (one chance in two thousand million) could not run their checks at once.
+ * Two runs of a project's checks share a checkout and its test databases, so one goes at a time.
+ * Two projects whose names hash alike (one chance in two thousand million) could not run their
+ * checks at once.
  */
 export function checksLockKey(slug: string): number {
   return createHash('sha256').update(slug.toLowerCase()).digest().readUInt32BE(0) >>> 1;
@@ -41,25 +40,23 @@ export function checksLockKey(slug: string): number {
 
 export interface Held {
   release(): Promise<void>;
-  /** Whether the connection holding the lock has been lost, and the lock with it. */
   lost(): boolean;
-  /** Try the lock from a second connection while it is held here. Takes and lets go of nothing. */
+  /** Tries the lock from a second connection while it is held here. Takes and lets go of nothing. */
   probe(): Promise<LockProbe>;
 }
 
-/** What was seen when a held lock was tried from a second connection. A session is a backend's pid. */
+/** A session is a backend's pid. */
 export interface LockProbe {
   holderSession: number;
-  /** The holder's session when asked again afterwards. */
   holderSessionAfter: number;
   secondSession: number;
   secondTook: boolean;
 }
 
 /**
- * Whether a lock held on this database address keeps a second taker out. It does not through a
- * pooler that shares sessions: there two connections can be one session, which is given the same
- * lock twice, and one connection's statements can run in different sessions.
+ * A lock does not hold through a pooler that shares sessions: two connections can be one session,
+ * which is given the same lock twice, and one connection's statements can run in different
+ * sessions.
  */
 export function lockHolds(probe: LockProbe): { holds: true } | { holds: false; why: string } {
   if (probe.secondTook) return { holds: false, why: 'a second connection was given the lock while it was held' };
@@ -68,7 +65,6 @@ export function lockHolds(probe: LockProbe): { holds: true } | { holds: false; w
   return { holds: true };
 }
 
-/** The machine's lock does not hold, so "one agent job at a time" cannot be kept on this address. */
 export class MachineLockError extends Error {
   constructor(why: string) {
     super(`the machine's lock does not hold on this database (${why}): DATABASE_URL must be a direct address, not a pooled one`);
@@ -76,7 +72,7 @@ export class MachineLockError extends Error {
   }
 }
 
-/** The fault in a lock that is held, or null when it holds. To be asked before any agent job is started under it. */
+/** To be asked before any agent job is started under the lock. */
 export async function lockFault(held: Held): Promise<MachineLockError | null> {
   const proof = lockHolds(await held.probe());
   return proof.holds ? null : new MachineLockError(proof.why);
@@ -86,12 +82,11 @@ export async function lockFault(held: Held): Promise<MachineLockError | null> {
 // unseen. Asked something every minute it is kept, and its loss is seen.
 const KEPT_ALIVE_EVERY_MS = 60_000;
 
-/** Take a lock if nobody holds it. It is held until released, or until this process ends. */
+/** Null when somebody holds it. */
 export function tryLock(key: number, lockClass: number = LOCK_CLASS): Promise<Held | null> {
   return hold(key, lockClass, false);
 }
 
-/** Take a lock, waiting for whoever holds it to let go. */
 export async function takeLock(key: number, lockClass: number = LOCK_CLASS): Promise<Held> {
   return (await hold(key, lockClass, true))!;
 }
@@ -152,7 +147,7 @@ async function hold(key: number, lockClass: number, wait: boolean): Promise<Held
   };
 }
 
-/** Which locks of a class are held right now, by any process: the machine's unless said. Reading takes none of them. */
+/** By any process. Reading takes none of them. */
 export async function locksHeld(lockClass: number = LOCK_CLASS): Promise<Set<number>> {
   const { rows } = await pool.query(
     `select objid::int8 as key from pg_locks

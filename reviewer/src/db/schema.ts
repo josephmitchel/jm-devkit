@@ -338,9 +338,8 @@ export type RunKind = 'nightly' | 'sweep' | 'summary' | 'checks' | 'landed' | 'c
 export type RunState = 'running' | 'succeeded' | 'failed' | 'interrupted';
 
 /**
- * A run of one of the code reviewer's commands on the machine: a nightly run, one of a project's
- * steps in it, a command a pass of the poller started, a review the queue started, or a project's
- * nightly checks run by hand. `kind` and `state` are text, so a new kind of run needs no migration.
+ * A run of one of the code reviewer's commands on the machine. `kind` and `state` are text, so a
+ * new kind of run needs no migration.
  */
 export const runs = pgTable('runs', {
   // `run-<UTC start time>-<random>` (newRunId). The run's output is the file runOutputPath names.
@@ -361,14 +360,12 @@ export const runs = pgTable('runs', {
 });
 
 /**
- * An event a pass of the poller found in a project, such as a merged pull request, and what
- * became of it. The primary key is the rule that an event is handled once: a second record of
- * the same event cannot be made, whichever pass tries.
+ * An event a pass of the poller found in a project, and what became of it. The primary key is the
+ * rule that an event is handled once: a second record of the same event cannot be made.
  */
 export const pollerEvents = pgTable(
   'poller_events',
   {
-    // owner/name, as in `runs`.
     project: text('project').notNull(),
     // `<name>:<subject>`, such as `merged:12`. The same event always has the same key.
     event: text('event').notNull(),
@@ -378,9 +375,8 @@ export const pollerEvents = pgTable(
     attemptedAt: timestamp('attempted_at', { withTimezone: true }),
     // The run of its last attempt.
     runId: text('run_id').references(() => runs.id),
-    // Set once the event needs nothing more done. For a command a pass runs, that is once it has
-    // succeeded, and only then; a review's event has its own rule (queue.ts afterReviewRun). Null:
-    // still to be handled.
+    // Set once the event needs nothing more done: for a command a pass runs, once it has
+    // succeeded; a review's event has its own rule (queue.ts afterReviewRun).
     handledAt: timestamp('handled_at', { withTimezone: true }),
     foundAt: timestamp('found_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -400,9 +396,8 @@ export const pollerProjects = pgTable('poller_projects', {
 });
 
 /**
- * The last answer GitHub gave to a question the poller repeats every pass, with the ETag sent
- * back to ask "anything since?": which installations, which repositories, what a default branch
- * holds. No credential is kept here: a pass mints its tokens and holds them in memory.
+ * The last answer GitHub gave to a question the poller repeats every pass, with its ETag. No
+ * credential is kept here: a pass mints its tokens and holds them in memory.
  */
 export const githubAnswers = pgTable('github_answers', {
   question: text('question').primaryKey(),

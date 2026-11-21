@@ -190,14 +190,12 @@ async function main() {
     }
     case 'poll': {
       if (rest.length > 0) return usageExit();
-      // A pass told to stop stops the command it is on and records it, as the nightly run does.
       stopCommandsOnSignal();
       if ((await runPass()) === 'failed') process.exitCode = 1;
       break;
     }
     case 'queue': {
       if (rest.length > 0) return usageExit();
-      // A turn told to stop stops the review it is on, which is then recorded as stopped.
       stopCommandsOnSignal();
       const outcome = await runQueueTurn();
       if (outcome === 'failed' || outcome === 'interrupted') process.exitCode = 1;

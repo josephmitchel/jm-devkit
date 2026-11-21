@@ -25,18 +25,16 @@ import { AGENT_KINDS, commandArgs, interruptRunsLeftRunning, runLine, stopping, 
 import { OFF_THE_SLOT } from './stages/intake.js';
 
 /**
- * One turn of the queue: if the machine is free, start the next queued review and see it through.
- * Everything that decides is in queue.ts; this file reads and writes the database around it. A
- * pass of the poller finds the events and leaves them on record; the machine starts a turn after
- * every pass, so a review that could not start on one turn is looked at again on the next.
+ * Everything that decides is in queue.ts; this file reads and writes the database around it. The
+ * machine starts a turn after every pass of the poller.
  */
 
 export type TurnOutcome = 'nothing started' | 'succeeded' | 'failed' | 'interrupted';
 
 /**
- * Take one turn: at most one review does any work, and the turn lasts as long as it does. A
- * review that is turned away from its project's slot did none and took a moment, so the turn goes
- * on to the next job, and a project with reviews waiting for its slot does not hold up another's.
+ * At most one review does any work, and the turn lasts as long as it does. A review that is turned
+ * away did none, so the turn goes on to the next job: a project with reviews waiting for its slot
+ * does not hold up another's.
  */
 export async function runQueueTurn(say: (line: string) => void = console.log): Promise<TurnOutcome> {
   const nightlyGoing = async () => (await locksHeld()).has(NIGHTLY_LOCK);
@@ -75,8 +73,8 @@ export async function runQueueTurn(say: (line: string) => void = console.log): P
 }
 
 /**
- * The queue's decision from what is on record now. Whether a queued project is still handled is
- * read from what the last pass saw, which a turn follows by moments; GitHub is not asked again.
+ * Whether a queued project is still handled is read from what the last pass kept, which a turn
+ * follows by moments; GitHub is not asked again.
  */
 async function decide(machine: Machine): Promise<QueueDecision> {
   const events = await queuedEvents();
@@ -85,7 +83,6 @@ async function decide(machine: Machine): Promise<QueueDecision> {
   return queueDecision(events, await slotsHeld(), machine, new Date(), noLongerHandled(queuedFor, lastSeen));
 }
 
-/** Every event still to be handled, with how the run of its last attempt ended. */
 async function queuedEvents(): Promise<QueuedEvent[]> {
   const rows = await db
     .select({ event: schema.pollerEvents, runState: schema.runs.state })
@@ -102,7 +99,6 @@ async function queuedEvents(): Promise<QueuedEvent[]> {
   }));
 }
 
-/** For each project, the pull requests whose reviews hold its review slot. */
 async function slotsHeld(): Promise<Map<string, number[]>> {
   const rows = await db
     .select({ project: schema.repos.slug, pr: schema.reviews.prNumber })
@@ -114,7 +110,6 @@ async function slotsHeld(): Promise<Map<string, number[]>> {
   return slots;
 }
 
-/** A pull request's review as the verdict wants it, or null when it has none. */
 async function reviewOnRecord(project: string, pr: number): Promise<{ id: number; state: string; timeLimitStops: number } | null> {
   const [row] = await db
     .select({ id: schema.reviews.id, state: schema.reviews.state, timeLimitStops: schema.reviews.timeLimitStops })
@@ -125,9 +120,8 @@ async function reviewOnRecord(project: string, pr: number): Promise<{ id: number
 }
 
 /**
- * Record as interrupted the agent jobs an earlier turn left `running`, and for each do what its
- * work needs before it is taken up again: a review killed mid-stage is recorded as stopped, which
- * frees its project's slot. Its event is then tried again like any interrupted one.
+ * A review killed mid-stage is recorded as stopped, which frees its project's slot. Its event is
+ * then tried again like any interrupted one.
  */
 async function recordDeadRuns(say: (line: string) => void): Promise<void> {
   for (const run of await interruptRunsLeftRunning(leftByQueue)) {
@@ -146,10 +140,9 @@ const VERDICT_WORDS = {
 } as const;
 
 /**
- * Run one job as a recorded run of its own kind. Whether its event is then handled is not whether
- * the command exited 0: {@link afterReviewRun} says, from how the run ended and where it left the
- * review. Every event the job covers is handled with it. A job that is `refused` is recorded as a
- * run that failed with that error before it began, and its command is never started.
+ * Whether the event is then handled is not whether the command exited 0: {@link afterReviewRun}
+ * says. Every event the job covers is handled with it. A `refused` job is recorded as a run that
+ * failed with that error before it began.
  */
 async function runJob(job: Job, say: (line: string) => void, refused: Error | null = null): Promise<{ outcome: TurnOutcome; verdict: EventVerdict | null }> {
   if (!(await takeEvent(job))) {
@@ -187,7 +180,6 @@ async function runJob(job: Job, say: (line: string) => void, refused: Error | nu
   return { outcome: finished.state === 'running' ? 'failed' : finished.state, verdict };
 }
 
-/** What `status` shows of the queue: the decision as it stands, the agent jobs running, and the machine. */
 export async function queueStatusFacts(): Promise<{ decision: QueueDecision; running: RunningJob[]; machine: Machine }> {
   const held = await locksHeld();
   const machine: Machine = { agentJobRunning: held.has(MACHINE_LOCK), nightlyGoing: held.has(NIGHTLY_LOCK) };

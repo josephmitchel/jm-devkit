@@ -3,9 +3,8 @@
 [Unit]
 Description=Code reviewer: the nightly run
 Wants=network-online.target
-# After the queue's service: a nightly run started while a review is running waits for that turn
-# of the queue to end before its update step touches the code the review runs from. The wait is
-# at most a review's time limit, and the night is put back, never skipped.
+# After the queue's service: a nightly run that starts during a review waits for that turn to end
+# before its update step touches the code the review runs from.
 After=network-online.target postgresql.service code-reviewer-queue.service
 
 [Service]
@@ -13,8 +12,8 @@ Type=oneshot
 User=reviewer
 Group=reviewer
 
-# The credentials reach the service only here. systemd reads the file as root before it drops to
-# the reviewer user, who cannot read it. vm/dev-vm-setup.sh names what it must hold.
+# The credentials reach the service only here: systemd reads the file as root before it drops to
+# the reviewer user, who cannot read it.
 EnvironmentFile=/etc/code-reviewer/credentials.env
 
 # /var/lib/code-reviewer, the reviewer user's alone: the code reviewer's own checkout (kit), the
@@ -40,7 +39,6 @@ ExecStart=/usr/bin/node --import tsx/esm src/cli.ts nightly
 
 # A night of sweeps takes hours. Each sweep has its own limit, kept by the code reviewer.
 TimeoutStartSec=infinity
-# On stop every process in the unit gets SIGTERM. The nightly run then records what it was doing
-# as interrupted, which needs the time allowed here before anything left is killed.
+# On stop the nightly run records what it was doing as interrupted, which needs this long.
 KillMode=control-group
 TimeoutStopSec=3min

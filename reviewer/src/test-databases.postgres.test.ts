@@ -1,10 +1,4 @@
-/**
- * Creating and dropping a project's test databases, against a real Postgres. Not part of
- * `npm test`: run it with `REVIEWER_TEST_DATABASES_URL=<server> npm run test:postgres`, the
- * address being a role that may create databases. It keeps the code reviewer's own state in a
- * scratch database it creates on that server and drops afterwards, so whatever `DATABASE_URL`
- * holds is never opened.
- */
+/** Creating and dropping a project's test databases for real. Run as locks.postgres.test.ts says. */
 import { randomBytes } from 'node:crypto';
 import pg from 'pg';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';

@@ -14,11 +14,11 @@ import { TEST_DATABASES_SETTING, withoutTestDatabaseAddresses } from './test-dat
 import { reviewerRoot } from './workspace.js';
 
 /**
- * Reporting a finished run: which places are told what, and the telling. Call {@link reportRun}
- * with every run once it has been recorded as finished; nothing else decides where a failure goes.
+ * Call {@link reportRun} with every run once it has been recorded as finished; nothing else decides
+ * where a failure goes.
  */
 
-/** A report and the place it is for: a project, or the kit's repository, as `owner/name`. */
+/** The place is a project or the kit's repository, as `owner/name`. */
 export interface ReportForPlace {
   place: string;
   report: Report;
@@ -26,10 +26,10 @@ export interface ReportForPlace {
 
 /** What the machine knows about a run that is being reported, beyond its row. */
 export interface RunContext {
-  /** The kit's own repository, where failures on the code reviewer's side go. */
+  /** Where failures on the code reviewer's side go. */
   kitRepository: string;
   kitCommit: string | null;
-  /** The end of the run's output. Only a failure on the project's side sends it anywhere. */
+  /** Only a failure on the project's side sends it anywhere. */
   tail: string;
   /** The runs this one was made of: each project's run, for a nightly run. */
   parts: Run[];
@@ -49,9 +49,8 @@ const TAIL_LINES = 40;
 const TAIL_CHARS = 4000;
 
 /**
- * The last lines of a run's output, short enough for an issue. This is the one place a run's
- * output is made ready to leave the machine, so it is where the addresses of the run's test
- * databases are taken out, before the cut: a cut through an address would leave part of it.
+ * The one place a run's output is made ready to leave the machine, so the addresses of its test
+ * databases are taken out here, before the cut: a cut through an address would leave part of it.
  */
 export function outputTail(output: string, testDatabaseServer: string | undefined = process.env[TEST_DATABASES_SETTING]): string {
   const safe = withoutTestDatabaseAddresses(output, testDatabaseServer);
@@ -60,10 +59,9 @@ export function outputTail(output: string, testDatabaseServer: string | undefine
 }
 
 /**
- * How a run ended of itself. A run that failed with no error of its own failed only because a
- * part of it did, and each part is reported on its own. A run its time limit stopped is a failure
- * on the code reviewer's side. A run interrupted any other way (the service stopping, a restart),
- * or still running, is neither a failure nor a success: it opens nothing and closes nothing.
+ * A run that failed with no error of its own failed only because a part of it did, and each part is
+ * reported on its own. A run its time limit stopped is a failure on the code reviewer's side. A run
+ * interrupted any other way, or still running, is neither: it opens nothing and closes nothing.
  */
 function ownOutcome(run: Run): 'succeeded' | 'failed' | null {
   if (run.state === 'succeeded') return 'succeeded';
@@ -73,14 +71,13 @@ function ownOutcome(run: Run): 'succeeded' | 'failed' | null {
 }
 
 /**
- * The reports a finished run sends. A failure goes to one place: the project when the fault is the
- * project's, the kit's repository otherwise, and only the first carries the project's output. A
- * success goes to the project and to the kit's repository, so either's failure issue for that
- * kind of run is closed.
+ * A failure goes to one place: the project when the fault is the project's, the kit's repository
+ * otherwise, and only the first carries output. A success goes to both, so either's failure issue
+ * for that kind of run is closed.
  *
- * A run that is part of another leaves the kit's repository to the run it is part of, which says a
- * kind of run succeeded only when one did and none failed on the code reviewer's side. Otherwise
- * one project's success would close the issue another project's failure had just commented on.
+ * A run that is part of another leaves the kit's repository to that run, which says a kind of run
+ * succeeded only when one did and none failed on the code reviewer's side. Otherwise one project's
+ * success would close the issue another project's failure had just commented on.
  */
 export function reportsFor(run: Run, context: RunContext): ReportForPlace[] {
   const outcome = ownOutcome(run);
@@ -111,7 +108,6 @@ export function reportsFor(run: Run, context: RunContext): ReportForPlace[] {
   ];
 }
 
-/** A report as the `failure-issue` command reads it from its input. */
 export function parseReport(text: string): Report {
   let value: unknown;
   try {
@@ -133,10 +129,7 @@ export function parseReport(text: string): Report {
   return report as Report;
 }
 
-/**
- * What the `failure-issue` command does: read the issues open in one repository, and open,
- * comment on or close its failure issue. Returns a line for each thing done.
- */
+/** Returns a line for each thing done. */
 export async function fileReport(place: string, report: Report): Promise<string[]> {
   const done: string[] = [];
   for (const step of failureIssuePlan(report, await listOpenIssuesWithAuthors(place))) {
@@ -155,9 +148,8 @@ export async function fileReport(place: string, report: Report): Promise<string[
 const SEND_TIMEOUT_MS = 5 * 60 * 1000;
 
 /**
- * Hand one report to a `failure-issue` command aimed at its repository. A process of its own
- * because App auth is one repository per process, and the kit's repository is not the project's.
- * The process is given the report and nothing else about the run.
+ * A process of its own: App auth is one repository per process, and the kit's repository is not the
+ * project's. It is given the report and nothing else about the run.
  */
 function sendReport(place: string, report: Report): Promise<string[]> {
   return new Promise((resolve, reject) => {
@@ -183,7 +175,7 @@ function sendReport(place: string, report: Report): Promise<string[]> {
   });
 }
 
-/** How reportRun reaches the machine and GitHub. Replaced in tests. */
+/** Replaced in tests. */
 export interface Reporter {
   kitRepository(): string;
   kitCommit(): string | null;
@@ -213,11 +205,9 @@ const onTheMachine: Reporter = {
 };
 
 /**
- * Report a finished run: open, comment on or close the failure issue in each place the run
- * concerns. The one function to call with a finished run, whatever started it.
- *
- * It never throws and never changes the run: a report that cannot be made is a line in the run's
- * log and nothing more. `say` is that log; left out, the lines go to the run's own output file.
+ * The one function to call with a finished run, whatever started it. It never throws and never
+ * changes the run: a report that cannot be made is a line in the log. `say` is that log; left out,
+ * the lines go to the run's own output file.
  */
 export async function reportRun(run: Run, say?: (line: string) => void, reporter: Reporter = onTheMachine): Promise<void> {
   const note = (line: string) => {

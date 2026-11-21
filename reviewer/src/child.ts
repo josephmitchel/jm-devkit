@@ -1,10 +1,9 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 
-/** How a streamed command ended. `exitCode` and `signal` both null: it never started, and `error` says why. */
+/** `exitCode` and `signal` both null: it never started, and `error` says why. */
 export interface ChildEnded {
   exitCode: number | null;
   signal: string | null;
-  /** What stopped it before it had finished, when something did: its time limit, or the caller. */
   stoppedBy: 'limit' | 'caller' | null;
   error: Error | null;
 }
@@ -14,7 +13,7 @@ export interface ChildOptions {
   env: NodeJS.ProcessEnv;
   /** Lead a process group of its own, so that whatever it started is signalled with it. */
   ownGroup: boolean;
-  /** It is stopped once it has run this long. Null: no limit. */
+  /** Null: no limit. */
   limitMs: number | null;
   /** How long it has, once told to stop, before it is killed outright. */
   killAfterMs: number;
@@ -35,9 +34,8 @@ function signal(child: ChildProcess, ownGroup: boolean, name: NodeJS.Signals): v
 }
 
 /**
- * Run a command for everything it writes: each piece goes to `onOutput` as it comes. It is told
- * to stop (SIGTERM, then SIGKILL) at its time limit, or when the caller uses the `stop` that
- * `onStart` is handed. Resolves once it has exited and its output has closed.
+ * It is told to stop (SIGTERM, then SIGKILL) at its time limit, or when the caller uses the `stop`
+ * that `onStart` is handed. Resolves once it has exited and its output has closed.
  */
 export function streamChild(
   file: string,

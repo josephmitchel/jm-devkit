@@ -4,18 +4,16 @@ import { ensureProjectRow } from './project-row.js';
 import { errorType } from './run-vocabulary.js';
 import { commandKind, finishRun, runCommand, runLine, runLog, startRun, type ProjectCommand, type Run, type RunResult } from './runs.js';
 
-/** One of the code reviewer's commands, to be run for a project as a recorded run. */
 export interface RecordedStep {
   command: ProjectCommand;
   /** The nightly run it is a step of. */
   parentId?: string;
   /** What the log calls it: `acme/widgets sweep`, `acme/widgets merged:12`. */
   name: string;
-  /** The line that says it started. */
   started(run: Run): string;
-  /** Whether the command needs the project's row (ADR 0004: the first run makes it). */
+  /** ADR 0004: the first run that needs the project's row makes it. */
   needsProjectRow: boolean;
-  /** A step that cannot start: its run is recorded with this result and `why`, and no command is run. */
+  /** Recorded with this result and `why`; no command is run. */
   refused?: { why: string; result: RunResult } | null;
   /** Once the run is on record, before its command starts. */
   onStart?(run: Run): Promise<void>;
@@ -27,9 +25,8 @@ export interface RecordedStep {
 }
 
 /**
- * The one way a command becomes a recorded run: start the run, run its command, record how it
- * ended, report it. A command that could not be started at all ends the run failed in `starting`.
- * Lines go to `say`, or to the run's own log when none is given. Throws only when the run could
+ * The one way a command becomes a recorded run. A command that could not be started ends the run
+ * failed in `starting`. Lines go to `say`, or to the run's own log. Throws only when the run could
  * not be recorded (the database, the state directory).
  */
 export async function takeRecordedStep(step: RecordedStep, say?: (line: string) => void): Promise<Run> {
@@ -58,10 +55,7 @@ export async function takeRecordedStep(step: RecordedStep, say?: (line: string) 
   return finished;
 }
 
-/**
- * {@link takeRecordedStep} for a caller with more steps to take: a step whose run could not be
- * recorded is a line in the log and null, and costs only itself.
- */
+/** For a caller with more steps to take: a step whose run could not be recorded is a line in the log and null. */
 export async function takeRecordedStepOrSayWhy(step: RecordedStep, say: (line: string) => void): Promise<Run | null> {
   try {
     return await takeRecordedStep(step, say);

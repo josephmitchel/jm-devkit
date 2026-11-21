@@ -5,38 +5,32 @@ import type { CommentSeen, PullRequestSeen } from './poller.js';
 import type { Observed } from './projects.js';
 
 /**
- * What a pass of the poller asks GitHub. A pass runs every few minutes and nearly always finds
- * nothing, so every question it repeats is asked conditionally: the ETag of the last answer is
- * sent back, and an answer of "unchanged" (304) costs none of the App's rate limit. The last
- * answers and their ETags are kept between passes, in the database. No credential is: a pass
- * mints its installation tokens and holds them in memory until it ends.
+ * A pass runs every few minutes and nearly always finds nothing, so every question it repeats is
+ * asked conditionally: the ETag of the last answer is sent back, and "unchanged" (304) costs none
+ * of the App's rate limit. The answers and ETags are kept between passes. No credential is: a pass
+ * mints its tokens and holds them in memory.
  *
- * GitHub ties an ETag to who asked. If that is the installation, a pass is told "unchanged" with
- * its new token. If it is the token, the lists are answered in full every pass, and that is
- * accepted: an answer in full is read like any other, and the cost is a request per list.
+ * GitHub ties an ETag to who asked. If that is the token and not the installation, the lists are
+ * answered in full every pass, which is accepted: the cost is a request per list.
  */
 
 const API = 'https://api.github.com';
 
-/** The last answer to a question a pass repeats, and the ETag GitHub gave with it. */
 export interface Remembered {
   etag: string | null;
   answer: unknown;
 }
 
-/** Where answers are kept between passes. */
 export interface Memory {
   recall(question: string): Promise<Remembered | null>;
   keep(question: string, remembered: Remembered): Promise<void>;
 }
 
-/** How a pass reaches GitHub, and what it has to do it with. */
 export interface GitHubAccess {
   fetch: typeof fetch;
   credentials: { clientId: string; privateKey: string };
   memory: Memory;
   now(): Date;
-  /** Counted as it goes: every request, and those answered "unchanged". */
   tally: { asked: number; unchanged: number };
 }
 
@@ -51,7 +45,6 @@ interface Request {
   auth: string;
   accept?: string;
   method?: 'GET' | 'POST';
-  /** The ETag of the answer already held, when there is one. */
   etag?: string | null;
 }
 
@@ -81,8 +74,8 @@ async function ask(github: GitHubAccess, request: Request): Promise<Answer> {
 }
 
 /**
- * Ask a question whose last answer is kept. Told "unchanged", the kept answer stands. Otherwise
- * `read` makes the answer from what GitHub sent, and it is kept with its ETag for the next pass.
+ * Told "unchanged", the kept answer stands. Otherwise `read` makes the answer, which is kept with
+ * its ETag for the next pass.
  */
 async function remembered<T>(
   github: GitHubAccess,
@@ -108,7 +101,7 @@ const pageOf = (question: string, page: number) => `${question}?page=${page}`;
 
 const pagePath = (path: string, page: number) => `${path}${path.includes('?') ? '&' : '?'}per_page=100&page=${page}`;
 
-/** Every item of a list served a page at a time. `page` gives one page, or null when there is none. */
+/** `page` gives one page, or null when there is none. */
 async function allPages<T>(page: (n: number) => Promise<{ items: T[]; full: boolean } | null>): Promise<T[]> {
   const all: T[] = [];
   for (let n = 1; ; n++) {
@@ -119,7 +112,7 @@ async function allPages<T>(page: (n: number) => Promise<{ items: T[]; full: bool
   }
 }
 
-/** A list GitHub serves a hundred at a time, each page a question of its own. */
+/** Each page is a question of its own. */
 function rememberedPages<T>(github: GitHubAccess, question: string, request: Request, items: (body: string) => T[]): Promise<T[]> {
   return allPages(async (n) => {
     const path = pagePath(request.path, n);
@@ -132,21 +125,19 @@ function rememberedPages<T>(github: GitHubAccess, question: string, request: Req
   });
 }
 
-/** A project the App is installed on, as this pass saw its default branch. */
 export interface ProjectRead {
   slug: string;
-  /** A token for the project's installation, minted by this pass and held in memory only. */
+  /** Minted by this pass and held in memory only. */
   token: string;
   observed: Observed;
-  /** Whether the default branch was read this pass, and not told "unchanged". */
+  /** Read this pass, not told "unchanged". */
   fresh: boolean;
 }
 
 /**
- * Every project the App is installed on and what its default branch holds, asked so that a pass
- * over an unchanged GitHub is told "unchanged" throughout. A project's two files are read again
- * only when its default branch has moved. A project whose default branch could not be read is
- * returned apart: it is neither handled nor skipped on an answer that did not come.
+ * A project's two files are read again only when its default branch has moved. A project whose
+ * default branch could not be read is returned apart: it is neither handled nor skipped on an
+ * answer that did not come.
  */
 export async function projectsSeen(github: GitHubAccess): Promise<{ projects: ProjectRead[]; unread: Array<{ slug: string; why: string }> }> {
   const jwt = appJwt(github.credentials, github.now().getTime());
@@ -177,10 +168,7 @@ export async function projectsSeen(github: GitHubAccess): Promise<{ projects: Pr
 
 const NO_FILES: Observed = { config: null, sweepWorkflow: false };
 
-/**
- * The projects as the last pass saw them, from the answers it kept: no request is made. For
- * whoever must know between passes whether the machine still handles a project.
- */
+/** From the answers the last pass kept: no request is made. */
 export async function projectsLastSeen(memory: Memory): Promise<Array<{ slug: string } & Observed>> {
   const kept = <T>(question: string): Promise<T[]> =>
     allPages(async (n) => {
@@ -198,9 +186,9 @@ export async function projectsLastSeen(memory: Memory): Promise<Array<{ slug: st
 }
 
 /**
- * What a project's default branch holds. The question repeated each pass is only "which commit is
- * its head", whose ETag is the commit itself, whatever credential asks. The two files are read
- * again only when that commit is not the one they were last read at, however GitHub answered.
+ * The question repeated each pass is only which commit is the head, whose ETag is the commit
+ * itself, whatever credential asks. The two files are read again only when that commit is not the
+ * one they were last read at.
  */
 async function defaultBranch(github: GitHubAccess, slug: string, token: string): Promise<{ observed: Observed; fresh: boolean }> {
   const question = defaultBranchOf(slug);
@@ -226,7 +214,7 @@ async function defaultBranch(github: GitHubAccess, slug: string, token: string):
   return { observed, fresh: true };
 }
 
-/** A new token for an installation. It is this pass's alone and is never written anywhere. */
+/** This pass's alone, and never written anywhere. */
 async function mintToken(github: GitHubAccess, installation: number, jwt: string): Promise<string> {
   const path = `/app/installations/${installation}/access_tokens`;
   const answer = await ask(github, { path, auth: jwt, method: 'POST' });
@@ -234,18 +222,16 @@ async function mintToken(github: GitHubAccess, installation: number, jwt: string
   return (JSON.parse(answer.body) as { token: string }).token;
 }
 
-/** Where a pass's reading of a project's pull requests starts from. */
 export interface ListingPosition {
-  /** The ETag of the listing the last pass read, or null before any. */
+  /** Null before any. */
   etag: string | null;
-  /** The newest change the last pass saw, or null on a first pass. */
+  /** Null on a first pass. */
   seenTo: Date | null;
 }
 
 /**
- * A project's pull requests, most recently changed first: null when nothing about any of them
- * has changed since the listing `position.etag` came with. One listing covers every state, so a
- * merge, a label, a new head and a comment all change it.
+ * Null when nothing has changed since the listing `position.etag` came with. One listing covers
+ * every state, so a merge, a label, a new head and a comment all change it.
  */
 export async function pullRequestsSeen(
   github: GitHubAccess,
@@ -292,10 +278,8 @@ function listed(body: string): PullRequestSeen[] {
 }
 
 /**
- * What has been said on a pull request since `since`: its comments, and the reviews submitted on
- * it with something written, which is the other way a reply arrives (github.ts `listRepliesSince`
- * reads the same two). Not asked conditionally: a pass asks only when the pull request has
- * changed and its review is waiting.
+ * Comments, and submitted reviews with something written, the other way a reply arrives. Not asked
+ * conditionally: a pass asks only when the pull request has changed and its review is waiting.
  */
 export async function commentsSeen(github: GitHubAccess, slug: string, token: string, pr: number, since: Date): Promise<CommentSeen[]> {
   const pages = <T>(path: string): Promise<T[]> =>

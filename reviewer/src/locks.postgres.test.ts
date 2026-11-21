@@ -1,10 +1,9 @@
 /**
- * The machine's locks and the queue's turn, against a real Postgres: one agent job at a time is a
- * rule only if a second session is really refused, which a stand-in with one session cannot show.
- * Not part of `npm test`: run it with `REVIEWER_TEST_DATABASES_URL=<server> npm run test:postgres`,
- * the address being a role that may create databases. It keeps the code reviewer's state in a
- * scratch database it creates on that server and drops afterwards, so whatever `DATABASE_URL`
- * holds is never opened. No test here starts a review: every turn it takes finds the machine taken.
+ * One agent job at a time is a rule only if a second session is really refused, which a stand-in
+ * with one session cannot show. Not part of `npm test`; run it with
+ * `REVIEWER_TEST_DATABASES_URL=<server> npm run test:postgres`, as a role that may create
+ * databases. State is kept in a scratch database made on that server and dropped afterwards;
+ * `DATABASE_URL` is never opened. No test here starts a review.
  */
 import { randomBytes } from 'node:crypto';
 import pg from 'pg';
