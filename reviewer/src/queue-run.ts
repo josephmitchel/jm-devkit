@@ -2,7 +2,7 @@ import { and, eq, inArray, isNull, notInArray } from 'drizzle-orm';
 
 import { db, schema } from './db/client.js';
 import { reportRun } from './failure-report.js';
-import { locksHeld, MACHINE_LOCK, NIGHTLY_LOCK, tryLock } from './machine.js';
+import { lockFault, locksHeld, MACHINE_LOCK, NIGHTLY_LOCK, tryLock } from './machine.js';
 import { takeEvent } from './poller-pass.js';
 import { commandFor } from './poller.js';
 import { ensureProjectRow } from './project-row.js';
@@ -18,7 +18,7 @@ import {
   type QueuedEvent,
   type RunningJob,
 } from './queue.js';
-import { errorType, finishRun, interruptRunsLeftRunning, runCommand, runLine, startRun, stopping, tidyAfterInterruption, type RunResult } from './runs.js';
+import { errorType, finishRun, interruptRunsLeftRunning, runCommand, runLine, runLog, startRun, stopping, tidyAfterInterruption, type RunResult } from './runs.js';
 import { OFF_THE_SLOT } from './stages/intake.js';
 
 /**
@@ -43,12 +43,15 @@ export async function runQueueTurn(say: (line: string) => void = console.log): P
   // touched while a nightly run is going: it may be waiting to take it.
   const machine = (await nightlyGoing()) ? null : await tryLock(MACHINE_LOCK);
   try {
+    // Before anything trusts the lock: no agent job is started under one that does not hold.
+    const fault = machine && (await lockFault(machine));
+    if (fault) say(fault.message);
     // With the machine held no agent job has a process, so a review still `running` has died.
-    if (machine) await recordDeadRuns(say);
+    if (machine && !fault) await recordDeadRuns(say);
     const turnedAway = new Set<string>();
     for (;;) {
       // Looked at afresh before each job: a nightly run that has started since comes first.
-      const seen: Machine = { agentJobRunning: machine === null, nightlyGoing: await nightlyGoing() };
+      const seen: Machine = { agentJobRunning: machine === null, nightlyGoing: await nightlyGoing(), lockLost: machine?.lost() ?? false };
       const decision = queueDecision(await queuedEvents(), await slotsHeld(), seen, new Date());
       const next = decision.start;
       // A job turned away twice in one turn would be turned away for ever: leave it for the next.
@@ -61,7 +64,7 @@ export async function runQueueTurn(say: (line: string) => void = console.log): P
         );
         return 'nothing started';
       }
-      const ran = await runJob(next, say);
+      const ran = await runJob(next, say, fault);
       if (ran.verdict !== 'waits for the slot') return ran.outcome;
       turnedAway.add(`${next.project} ${next.event}`);
     }
@@ -133,9 +136,10 @@ const VERDICT_WORDS = {
 /**
  * Run one job as a recorded run of its own kind. Whether its event is then handled is not whether
  * the command exited 0: {@link afterReviewRun} says, from how the run ended and where it left the
- * review. Every event the job covers is handled with it.
+ * review. Every event the job covers is handled with it. A job that is `refused` is recorded as a
+ * run that failed with that error before it began, and its command is never started.
  */
-async function runJob(job: Job, say: (line: string) => void): Promise<{ outcome: TurnOutcome; verdict: EventVerdict | null }> {
+async function runJob(job: Job, say: (line: string) => void, refused: Error | null = null): Promise<{ outcome: TurnOutcome; verdict: EventVerdict | null }> {
   if (!(await takeEvent(job))) {
     say(`${job.project} ${job.event}: already taken by another turn`);
     return { outcome: 'nothing started', verdict: null };
@@ -152,6 +156,10 @@ async function runJob(job: Job, say: (line: string) => void): Promise<{ outcome:
     );
     let result: RunResult;
     try {
+      if (refused) {
+        runLog(run)(refused.message);
+        throw refused;
+      }
       result = await runCommand(run, job.args);
     } catch (err) {
       result = { state: 'failed', stage: 'starting', errorType: errorType(err) };

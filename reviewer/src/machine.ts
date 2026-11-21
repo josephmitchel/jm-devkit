@@ -10,7 +10,8 @@ import { LOCK_CLASS } from './migrate.js';
  * queue. `sweep` and `run` themselves do not, because a project still on GitHub Actions runs them
  * against the same database and must not wait for this machine.
  *
- * They are session locks: they do not hold through a pooler that shares sessions.
+ * They are session locks: they do not hold through a pooler that shares sessions, so whoever takes
+ * one to start agent jobs under it first shows that it holds ({@link lockFault}).
  */
 
 /** Held by whoever is running an agent job on the machine: a review, or the nightly run for its sweeps. */
@@ -20,29 +21,74 @@ export const NIGHTLY_LOCK = 4;
 
 export interface Held {
   release(): Promise<void>;
+  /** Whether the connection holding the lock has been lost, and the lock with it. */
+  lost(): boolean;
+  /** Try the lock from a second connection while it is held here. Takes and lets go of nothing. */
+  probe(): Promise<LockProbe>;
+}
+
+/** What was seen when a held lock was tried from a second connection. A session is a backend's pid. */
+export interface LockProbe {
+  holderSession: number;
+  /** The holder's session when asked again afterwards. */
+  holderSessionAfter: number;
+  secondSession: number;
+  secondTook: boolean;
+}
+
+/**
+ * Whether a lock held on this database address keeps a second taker out. It does not through a
+ * pooler that shares sessions: there two connections can be one session, which is given the same
+ * lock twice, and one connection's statements can run in different sessions.
+ */
+export function lockHolds(probe: LockProbe): { holds: true } | { holds: false; why: string } {
+  if (probe.secondTook) return { holds: false, why: 'a second connection was given the lock while it was held' };
+  if (probe.secondSession === probe.holderSession) return { holds: false, why: 'two connections share one database session' };
+  if (probe.holderSessionAfter !== probe.holderSession) return { holds: false, why: 'the connection holding the lock changed database session' };
+  return { holds: true };
+}
+
+/** The machine's lock does not hold, so "one agent job at a time" cannot be kept on this address. */
+export class MachineLockError extends Error {
+  constructor(why: string) {
+    super(`the machine's lock does not hold on this database (${why}): DATABASE_URL must be a direct address, not a pooled one`);
+    this.name = 'MachineLockError';
+  }
+}
+
+/** The fault in a lock that is held, or null when it holds. To be asked before any agent job is started under it. */
+export async function lockFault(held: Held): Promise<MachineLockError | null> {
+  const proof = lockHolds(await held.probe());
+  return proof.holds ? null : new MachineLockError(proof.why);
 }
 
 // A connection idle for hours is one a network drops, and a dropped connection drops its lock
-// unseen. Asked something every minute it is kept, and its loss is at least said.
+// unseen. Asked something every minute it is kept, and its loss is seen.
 const KEPT_ALIVE_EVERY_MS = 60_000;
 
 /** Take a lock if nobody holds it. It is held until released, or until this process ends. */
 export async function tryLock(key: number): Promise<Held | null> {
   const client = await pool.connect();
-  const lost = (err: unknown) =>
+  let isLost = false;
+  const lost = (err: unknown) => {
+    isLost = true;
     console.warn(`the connection holding lock ${key} was lost (${err instanceof Error ? err.message : String(err)}): the lock is no longer held`);
+  };
   // Without a listener a connection dropped while it is checked out ends the process.
   client.on('error', lost);
   const letGo = (broken: boolean) => {
     client.off('error', lost);
     client.release(broken);
   };
+  const session = async () => Number((await client.query('select pg_backend_pid() as session')).rows[0].session);
+  let holderSession: number;
   try {
     const { rows } = await client.query('select pg_try_advisory_lock($1, $2) as held', [LOCK_CLASS, key]);
     if (!rows[0].held) {
       letGo(false);
       return null;
     }
+    holderSession = await session();
   } catch (err) {
     letGo(true);
     throw err;
@@ -58,6 +104,17 @@ export async function tryLock(key: number): Promise<Held | null> {
       } catch {
         // A connection that cannot unlock is closed, which unlocks.
         letGo(true);
+      }
+    },
+    lost: () => isLost,
+    async probe() {
+      const second = await pool.connect();
+      try {
+        const { rows } = await second.query('select pg_try_advisory_lock($1, $2) as took, pg_backend_pid() as session', [LOCK_CLASS, key]);
+        if (rows[0].took) await second.query('select pg_advisory_unlock($1, $2)', [LOCK_CLASS, key]);
+        return { holderSession, holderSessionAfter: await session(), secondSession: Number(rows[0].session), secondTook: rows[0].took === true };
+      } finally {
+        second.release();
       }
     },
   };

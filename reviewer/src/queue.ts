@@ -15,6 +15,8 @@ export interface Machine {
   agentJobRunning: boolean;
   /** A nightly run is going: working, or waiting for a review to finish. */
   nightlyGoing: boolean;
+  /** The asker held the machine's lock and the connection holding it has been lost. */
+  lockLost?: boolean;
 }
 
 /**
@@ -26,6 +28,7 @@ export function machineFor(asker: 'nightly run' | 'review', machine: Machine): {
   if (asker === 'nightly run') {
     return machine.agentJobRunning ? { take: false, why: 'a review is running: the nightly run starts when it has finished' } : { take: true };
   }
+  if (machine.lockLost) return { take: false, why: "the connection holding the machine's lock was lost: nothing more starts this turn" };
   if (machine.nightlyGoing) return { take: false, why: 'the nightly run has the machine' };
   if (machine.agentJobRunning) return { take: false, why: 'another agent job is running' };
   return { take: true };

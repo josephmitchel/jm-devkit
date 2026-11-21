@@ -1,6 +1,6 @@
 import { UPDATE_STAGES } from '../bin/update.mjs';
 import { reportRun } from './failure-report.js';
-import { MACHINE_LOCK, NIGHTLY_LOCK, tryLock, type Held } from './machine.js';
+import { lockFault, MACHINE_LOCK, MachineLockError, NIGHTLY_LOCK, tryLock, type Held } from './machine.js';
 import { ensureProjectRow } from './project-row.js';
 import { listProjects, projectLine, type Project } from './projects.js';
 import { machineFor } from './queue.js';
@@ -8,6 +8,7 @@ import {
   errorType,
   finishRun,
   interruptRunsLeftRunning,
+  NIGHTLY_STAGES,
   runCommand,
   runLine,
   runLog,
@@ -48,14 +49,24 @@ export type Outcome = 'succeeded' | 'failed' | 'interrupted';
  * What a nightly run does now, from how the steps taken so far ended (`outcomes[i]` is how
  * `steps[i]` ended). A step that failed, or that its time limit stopped, costs only itself: the
  * steps after it still run, and the run as a whole ends failed. Once the service is stopping no
- * further step is taken, and a run that leaves work undone that way ends interrupted.
+ * further step is taken, and a run that leaves work undone that way ends interrupted. Nor is one
+ * taken once the connection holding the machine's lock is lost: the run can no longer say that no
+ * other agent job is running, and ends failed with its steps undone.
  */
-export function nightlyDecision(steps: Step[], outcomes: Outcome[], stopping = false): { next: Step } | { done: Outcome } {
+export function nightlyDecision(
+  steps: Step[],
+  outcomes: Outcome[],
+  stopping = false,
+  lockLost = false,
+): { next: Step } | { done: Outcome; lockLost?: true } {
   const undone = outcomes.length < steps.length || outcomes.includes('interrupted');
   if (stopping && undone) return { done: 'interrupted' };
+  if (lockLost && outcomes.length < steps.length) return { done: 'failed', lockLost: true };
   if (outcomes.length < steps.length) return { next: steps[outcomes.length] };
   return { done: outcomes.every((o) => o === 'succeeded') ? 'succeeded' : 'failed' };
 }
+
+const LOCK_LOST = "the connection holding the machine's lock was lost";
 
 // How often a nightly run that is waiting for the machine looks again.
 const LOOKS_AGAIN_EVERY_MS = 15_000;
@@ -96,13 +107,16 @@ export async function runNightly(): Promise<Outcome | 'not started'> {
     return 'not started';
   }
   try {
-    return await theNight();
+    return await theNight(night);
   } finally {
     await night.release();
   }
 }
 
-async function theNight(): Promise<Outcome> {
+async function theNight(night: Held): Promise<Outcome> {
+  // Before anything trusts the lock: what follows calls other runs dead on its word.
+  const fault = await lockFault(night);
+  if (fault) return notStarted(fault);
   // Before this run records itself, or it would be among them. No other nightly run is going, so
   // what an earlier one left `running` is dead.
   const left = await interruptRunsLeftRunning();
@@ -119,35 +133,48 @@ async function theNight(): Promise<Outcome> {
     return 'interrupted';
   }
   try {
-    return await takeSteps(nightly, say);
+    return await takeSteps(nightly, say, () => machine.lost() || night.lost());
   } finally {
     await machine.release();
   }
 }
 
-async function takeSteps(nightly: Run, say: (line: string) => void): Promise<Outcome> {
+/** A nightly run that starts no agent job because its lock does not hold: recorded failed, and reported. */
+async function notStarted(fault: Error): Promise<Outcome> {
+  const nightly = await startRun({ kind: 'nightly' });
+  const say = runLog(nightly);
+  say(`nightly run ${nightly.id} not started: ${fault.message}`);
+  await reportRun(await finishRun(nightly, { state: 'failed', stage: 'starting', errorType: errorType(fault) }), say);
+  return 'failed';
+}
+
+async function takeSteps(nightly: Run, say: (line: string) => void, lockLost: () => boolean): Promise<Outcome> {
   let work: ReturnType<typeof nightlyWork>;
   try {
     work = nightlyWork(await listProjects());
   } catch (err) {
     say(`could not find the projects: ${err instanceof Error ? err.message : String(err)}`);
-    await reportRun(await finishRun(nightly, { state: 'failed', stage: 'finding the projects', errorType: errorType(err) }), say);
+    await reportRun(await finishRun(nightly, { state: 'failed', stage: NIGHTLY_STAGES[0], errorType: errorType(err) }), say);
     return 'failed';
   }
   for (const line of work.skipped) say(line);
 
   const outcomes: Outcome[] = [];
-  let decision = nightlyDecision(work.steps, outcomes, stopping());
+  let decision = nightlyDecision(work.steps, outcomes, stopping(), lockLost());
   while ('next' in decision) {
     outcomes.push(await takeStep(nightly, decision.next, say));
-    decision = nightlyDecision(work.steps, outcomes, stopping());
+    decision = nightlyDecision(work.steps, outcomes, stopping(), lockLost());
   }
-  const stopped = decision.done === 'interrupted';
-  const finished = await finishRun(nightly, { state: decision.done, stage: null, errorType: stopped ? 'service stopped' : null });
+  // An error of the run's own, which is what tells it from a night on which only a project's run failed.
+  const own = decision.lockLost
+    ? { stage: NIGHTLY_STAGES[1], errorType: MachineLockError.name }
+    : { stage: null, errorType: decision.done === 'interrupted' ? 'service stopped' : null };
+  const finished = await finishRun(nightly, { state: decision.done, ...own });
   const count = (outcome: Outcome) => outcomes.filter((o) => o === outcome).length;
   say(
     `nightly run ${nightly.id} ${decision.done}: of ${work.steps.length} project run(s), ` +
-      `${count('failed')} failed, ${count('interrupted')} interrupted, ${work.steps.length - outcomes.length} not started`,
+      `${count('failed')} failed, ${count('interrupted')} interrupted, ${work.steps.length - outcomes.length} not started` +
+      (decision.lockLost ? ` (${LOCK_LOST})` : ''),
   );
   // After every project, so the kit's repository hears of a kind of run once for the whole night.
   await reportRun(finished, say);

@@ -121,6 +121,15 @@ describe('what a nightly run does next', () => {
     expect(nightlyDecision(steps, [], true)).toEqual({ done: 'interrupted' });
   });
 
+  it("takes no further step once the connection holding the machine's lock is lost, and ends failed for that reason", () => {
+    expect(nightlyDecision(steps, ['succeeded'], false, true)).toEqual({ done: 'failed', lockLost: true });
+    expect(nightlyDecision(steps, [], false, true)).toEqual({ done: 'failed', lockLost: true });
+  });
+
+  it('ends as it would have when the lock was lost after the last step had finished', () => {
+    expect(nightlyDecision(steps, ['succeeded', 'succeeded', 'succeeded'], false, true)).toEqual({ done: 'succeeded' });
+  });
+
   it('ends as it would have when the stop came after the last step had finished', () => {
     expect(nightlyDecision(steps, ['succeeded', 'succeeded', 'succeeded'], true)).toEqual({ done: 'succeeded' });
     expect(nightlyDecision(steps, ['succeeded', 'failed', 'succeeded'], true)).toEqual({ done: 'failed' });

@@ -48,6 +48,14 @@ describe('who has the machine when a review and the nightly run both want it', (
     expect(machineFor('review', { agentJobRunning: true, nightlyGoing: false })).toEqual({ take: false, why: 'another agent job is running' });
   });
 
+  it("is nobody's once the connection holding its lock is lost: the turn can no longer say it has the machine", () => {
+    expect(machineFor('review', { ...FREE, lockLost: true })).toMatchObject({ take: false });
+    expect(decide([queued('labelled:12', '11:00:00')], { ...FREE, lockLost: true })).toMatchObject({
+      start: null,
+      waiting: [{ why: "the connection holding the machine's lock was lost: nothing more starts this turn" }],
+    });
+  });
+
   it('is the nightly run once it is going, even in a moment when the machine is free: the review waits for the night to be over', () => {
     expect(machineFor('review', { agentJobRunning: false, nightlyGoing: true })).toEqual({ take: false, why: 'the nightly run has the machine' });
     expect(machineFor('review', { agentJobRunning: true, nightlyGoing: true })).toEqual({ take: false, why: 'the nightly run has the machine' });

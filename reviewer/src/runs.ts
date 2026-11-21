@@ -43,11 +43,13 @@ export const CHECKS_STAGES = ['setup', 'checking'] as const;
 const STAGE_LINE = /=== (?:sweep |checks )?state: (\w+) ===|resuming (?:sweep|review) \d+ for \S+ in state (\w+)/g;
 // Only these count as a stage, so a line in a project's output cannot name one of its choosing.
 const STAGES = new Set<string>([...schema.sweepState.enumValues, ...schema.reviewState.enumValues, ...CHECKS_STAGES]);
+/** The stages of a nightly run itself, apart from its projects' runs. */
+export const NIGHTLY_STAGES = ['finding the projects', 'working through the projects'] as const;
 /**
- * Every stage a run can be recorded as having stopped in: the ones above, the two before any of
- * them, and the steps of bringing the code reviewer up to date before a nightly run.
+ * Every stage a run can be recorded as having stopped in: the ones above, `starting` before any
+ * of them, the nightly run's own, and the steps of bringing the code reviewer up to date before it.
  */
-export const RUN_STAGES: ReadonlySet<string> = new Set([...STAGES, 'starting', 'finding the projects', ...UPDATE_STAGES]);
+export const RUN_STAGES: ReadonlySet<string> = new Set([...STAGES, 'starting', ...NIGHTLY_STAGES, ...UPDATE_STAGES]);
 
 /** An error's class name, and nothing a message or a project could put there. */
 export function errorType(err: unknown): string {

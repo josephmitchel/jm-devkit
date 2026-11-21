@@ -63,6 +63,20 @@ describe("the machine's lock", () => {
     await next!.release();
   });
 
+  it('is shown to hold on a direct address: tried from a second connection while it is held, it is refused', async () => {
+    const held = await machine.tryLock(machine.MACHINE_LOCK);
+    const probe = await held!.probe();
+    expect(probe.secondTook).toBe(false);
+    expect(probe.secondSession).not.toBe(probe.holderSession);
+    expect(probe.holderSessionAfter).toBe(probe.holderSession);
+    expect(await machine.lockFault(held!)).toBeNull();
+    // The proof took nothing and let go of nothing.
+    expect(await machine.locksHeld()).toEqual(new Set([machine.MACHINE_LOCK]));
+    expect(held!.lost()).toBe(false);
+    await held!.release();
+    expect(await machine.locksHeld()).toEqual(new Set());
+  });
+
   it("is apart from the nightly run's: holding one does not take the other", async () => {
     const night = await machine.tryLock(machine.NIGHTLY_LOCK);
     const job = await machine.tryLock(machine.MACHINE_LOCK);

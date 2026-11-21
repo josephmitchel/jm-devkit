@@ -439,6 +439,15 @@ and the nightly checks run no agents and take neither lock. Nor do `sweep` and `
 a project still on Actions runs them against the same database. The locks are taken by the
 `nightly` and `queue` commands, so a `sweep` or `run` started by hand is outside the rule.
 
+The locks belong to a database session, so they hold only on a direct address. Before the nightly
+run or a turn of the queue starts any agent job it tries the lock it holds from a second
+connection (`lockFault` in `src/machine.ts`). If the second is given the lock, or the two
+connections turn out to share a session, no agent job is started: the nightly run, or the review
+that was next, is recorded as failed with the error type `MachineLockError`, which opens the
+failure issue in the kit's repository. If the connection holding the lock is lost while a run is
+going, that run starts nothing further: a nightly run ends failed with the same error type and its
+remaining steps not started, and a turn of the queue leaves what is queued for the next turn.
+
 **The queue is the record.** A queued review is its event in `poller_events`, not yet handled.
 `queueDecision` in `src/queue.ts` says which starts next: the one found first, across projects.
 Events that ask for the same command are one job, so a label and two replies on one pull request
@@ -529,7 +538,9 @@ The credentials reach the service only through its environment, from
 service drops to the `reviewer` user. The setup creates it when it is missing and never changes or
 prints one that exists. It holds one `NAME=value` per line, with no quotes:
 
-- `DATABASE_URL`: the code reviewer's own database. The setup fills it in.
+- `DATABASE_URL`: the code reviewer's own database. The setup fills it in. It must be a direct
+  address, not a pooled one: the locks that keep agent jobs to one at a time are held by a
+  database session, and a pooler that shares sessions gives the same lock to two takers.
 - `REVIEWER_TEST_DATABASES_URL`: where projects' test databases are created. The setup fills it in.
 - `CLAUDE_CODE_OAUTH_TOKEN`: the Claude subscription's token, from `claude setup-token`.
 - `REVIEWER_APP_CLIENT_ID`: the App's client id.
