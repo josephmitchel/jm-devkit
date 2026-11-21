@@ -20,7 +20,7 @@ import {
   type RunningJob,
 } from './queue.js';
 import { takeRecordedStepOrSayWhy } from './recorded-step.js';
-import { errorType, interruptRunsLeftRunning, runLine, stopping, tidyAfterInterruption } from './runs.js';
+import { AGENT_KINDS, errorType, interruptRunsLeftRunning, runLine, stopping, tidyAfterInterruption } from './runs.js';
 import { OFF_THE_SLOT } from './stages/intake.js';
 
 /**
@@ -196,7 +196,7 @@ export async function queueStatusFacts(): Promise<{ decision: QueueDecision; run
     .select({ run: schema.runs, event: schema.pollerEvents })
     .from(schema.runs)
     .leftJoin(schema.pollerEvents, eq(schema.pollerEvents.runId, schema.runs.id))
-    .where(and(eq(schema.runs.state, 'running'), inArray(schema.runs.kind, ['review', 'sweep'])))
+    .where(and(eq(schema.runs.state, 'running'), inArray(schema.runs.kind, [...AGENT_KINDS])))
     .orderBy(schema.runs.startedAt);
   const running = new Map<string, RunningJob>();
   for (const { run, event } of rows) {

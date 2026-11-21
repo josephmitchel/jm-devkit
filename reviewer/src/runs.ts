@@ -88,8 +88,14 @@ export function runResult(runId: string, ended: Ended): RunResult {
   return { state: 'failed', stage, errorType };
 }
 
-// The commands that run agents.
-const AGENT_JOBS = new Set(['sweep', 'run']);
+/**
+ * The kinds of run that run agents. They go one at a time on the machine: a pass of the poller
+ * leaves them to the queue, and the nightly run has the machine for its sweeps. They get the long
+ * time limit.
+ */
+export const AGENT_KINDS: ReadonlySet<RunKind> = new Set<RunKind>(['sweep', 'review']);
+// A command is recorded as a run of the kind it is named for, but for a review's.
+const kindOfCommand = (command: string) => (command === 'run' ? 'review' : command) as RunKind;
 // What a run on GitHub Actions was given (`timeout-minutes: 330`).
 const AGENT_JOB_LIMIT_MS = 5.5 * 60 * 60 * 1000;
 // The commands that run no agents and only talk to GitHub and the database. They finish in
@@ -103,7 +109,7 @@ const SHORT_STEP_LIMIT_MS = 10 * 60 * 1000;
  */
 export function timeLimitMs(args: string[], env: NodeJS.ProcessEnv = process.env): number | null {
   if (SHORT_STEPS.has(args[0])) return SHORT_STEP_LIMIT_MS;
-  if (!AGENT_JOBS.has(args[0])) return null;
+  if (!AGENT_KINDS.has(kindOfCommand(args[0]))) return null;
   const set = Number(env.REVIEWER_AGENT_JOB_LIMIT_MS);
   return Number.isInteger(set) && set > 0 ? set : AGENT_JOB_LIMIT_MS;
 }

@@ -1,7 +1,7 @@
 import type { RunKind, pollerEvents, pollerProjects } from './db/schema.js';
 import type { Project } from './projects.js';
 import { countsAsReply } from './reply-authority.js';
-import { runLine, runOutputPath, type Run } from './runs.js';
+import { AGENT_KINDS, runLine, runOutputPath, type Run } from './runs.js';
 
 /**
  * The poller's pass as a decision: from what a pass saw on GitHub and what the database says was
@@ -218,13 +218,6 @@ const EVENTS: Record<string, EventRule> = {
   },
 };
 
-/**
- * The kinds of run that run agents. A pass finds their events and puts them on record, and does
- * not run them: a review can take hours and a pass must stay short. The queue starts them, one at
- * a time on the machine (queue.ts).
- */
-export const AGENT_JOB_KINDS: ReadonlySet<RunKind> = new Set<RunKind>(['review']);
-
 /** The kinds of run that are started for an event, by a pass or by the queue. */
 export const EVENT_RUN_KINDS: ReadonlySet<RunKind> = new Set(Object.values(EVENTS).map((rule) => rule.kind));
 
@@ -294,7 +287,7 @@ export function passDecision(
     for (const { event, attempts } of [...again, ...found.map((event) => ({ event, attempts: 0 }))]) {
       const command = commandFor(project.slug, event, attempts);
       if (!command) continue;
-      if (!AGENT_JOB_KINDS.has(command.kind)) decision.commands.push(command);
+      if (!AGENT_KINDS.has(command.kind)) decision.commands.push(command);
       else if (found.includes(event)) decision.queued.push(command);
     }
     const newest = Math.max(before.seenTo.getTime(), ...(pullRequests ?? []).map((pr) => pr.updatedAt.getTime()));
@@ -310,7 +303,7 @@ export function passDecision(
  * pass that found it and is not counted here: the queue has the rule for those (leftByQueue).
  */
 export function leftByPasses(rows: Run[]): Run[] {
-  const waitedFor = new Set<string>(Object.values(EVENTS).map((rule) => rule.kind).filter((kind) => !AGENT_JOB_KINDS.has(kind)));
+  const waitedFor = new Set<string>(Object.values(EVENTS).map((rule) => rule.kind).filter((kind) => !AGENT_KINDS.has(kind)));
   return rows.filter((r) => r.state === 'running' && r.parentId === null && waitedFor.has(r.kind));
 }
 

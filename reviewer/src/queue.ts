@@ -1,7 +1,7 @@
 import type { RunKind, RunState } from './db/schema.js';
-import { AGENT_JOB_KINDS, commandFor, retryDelayMs } from './poller.js';
+import { commandFor, retryDelayMs } from './poller.js';
 import type { Project } from './projects.js';
-import type { Run, RunResult } from './runs.js';
+import { AGENT_KINDS, type Run, type RunResult } from './runs.js';
 
 /**
  * The queue of agent jobs as decisions: who has the machine, which queued review starts next, and
@@ -130,7 +130,7 @@ export function queueDecision(
   const oldestFirst = [...events].sort((a, b) => a.foundAt.getTime() - b.foundAt.getTime() || a.event.localeCompare(b.event));
   for (const event of oldestFirst) {
     const command = commandFor(event.project, event.event, event.attempts);
-    if (!command || !AGENT_JOB_KINDS.has(command.kind)) continue;
+    if (!command || !AGENT_KINDS.has(command.kind)) continue;
     const key = [event.project, ...command.args].join(' ');
     const same = jobs.get(key);
     if (same) same.job.covers.push(event.event);
@@ -195,7 +195,7 @@ export function timeLimitStopsAfter(result: Pick<RunResult, 'state' | 'stage' | 
  * them is still recorded as working and holds its project's slot until it is recorded as stopped.
  */
 export function leftByQueue(rows: Run[]): Run[] {
-  return rows.filter((r) => r.state === 'running' && r.parentId === null && AGENT_JOB_KINDS.has(r.kind));
+  return rows.filter((r) => r.state === 'running' && r.parentId === null && AGENT_KINDS.has(r.kind));
 }
 
 /** An agent job that is running, with its command line when the record of events has it. */
