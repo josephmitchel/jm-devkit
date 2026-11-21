@@ -109,7 +109,9 @@ it has just made (so a PR that changes it is set up and tested as it says):
 
 The code reviewer validates the file with the kit's one small interpreter of the schema's keywords
 (`plugin/devkit-config.mjs`, which the generator uses too), so the schema stays the one
-definition; its tests fail if the schema starts using a keyword the interpreter does not enforce.
+definition; its tests fail if the schema starts using a keyword the interpreter does not enforce. One
+keyword is the kit's own, `uniqueItemProperties`: no two items of a list may share the value of a
+named property, which is how two nightly checks of the same name are refused.
 
 ### Test databases
 
@@ -229,7 +231,9 @@ record anything. An interrupted sweep resumes from its own state the next time i
 Every run is a row in the `runs` table with a run id (`run-<UTC start time>-<random>`, which names
 no project): the nightly run itself, and under it one row for each project's sweep and one for its
 summary, with how it ended and, when it failed, the stage it stopped in and the type of error.
-`code-reviewer status` lists the five most recent nightly runs with each project's result.
+`code-reviewer status` lists the five most recent nightly runs with each project's result, and
+after them the five most recent runs started by hand (a project's nightly checks run on demand),
+which are part of no nightly run.
 
 Everything a run's command wrote is kept in a file named by the run id, `runs/<run id>.log` under
 the code reviewer's state directory: `REVIEWER_STATE_DIR`, or `~/.local/state/code-reviewer` when
@@ -472,7 +476,10 @@ remaining steps not started, and a turn of the queue leaves what is queued for t
 `queueDecision` in `src/queue.ts` says which starts next: the one found first, across projects.
 Events that ask for the same command are one job, so a label and two replies on one pull request
 are one run. A review found while an agent job is running stays queued and is looked at again on
-the next turn.
+the next turn. A review queued for a project the machine no longer handles (its sweep workflow is
+back, its project config is gone, or the App was removed) is not started: it stays queued, with
+that reason in `status`, and starts if the project is handled again. Whether it is handled is
+read from what the last pass kept (`projectsLastSeen`), not asked of GitHub again.
 
 **Handled does not mean exit 0.** `run --once` exits 0 when the review passed, when it now waits
 for answers, and when it was turned away because another review holds its project's review slot.

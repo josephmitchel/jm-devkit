@@ -138,9 +138,29 @@ describe('a turn of the queue with a review on record', () => {
   const say = (line: string) => void lines.push(line);
   const event = async () => (await state.pool.query('select event, attempts, run_id, handled_at from poller_events')).rows;
 
+  // What a pass keeps of a project it found handled: the queue starts nothing for any other.
+  const handled = async (slug: string) => {
+    const { inDatabase } = await import('./poller-pass.js');
+    const config = JSON.stringify({ modules: ['process'], reviewer: { tests: [{ name: 'unit', command: 'npm test' }] } });
+    await inDatabase.keep('app/installations?page=1', { etag: null, answer: { list: [11], full: false } });
+    await inDatabase.keep('installation/11/repositories?page=1', { etag: null, answer: { list: [slug], full: false } });
+    await inDatabase.keep(`repos/${slug}/default-branch`, { etag: null, answer: { head: 'a'.repeat(40), observed: { config, sweepWorkflow: false } } });
+  };
+
   beforeEach(async () => {
     lines.length = 0;
+    await state.pool.query('delete from github_answers');
+    await handled('acme/widgets');
     await state.pool.query("insert into poller_events (project, event) values ('acme/widgets', 'labelled:12')");
+  });
+
+  it('starts nothing for a project the last pass no longer found, and leaves its review queued with the reason', async () => {
+    await state.pool.query('delete from github_answers');
+    expect(await queue.runQueueTurn(say)).toBe('nothing started');
+    expect(lines).toEqual([
+      "1 job(s) left queued: acme/widgets labelled:12 (the machine no longer handles its project (the code reviewer's App is no longer installed on it))",
+    ]);
+    expect(await event()).toEqual([{ event: 'labelled:12', attempts: 0, run_id: null, handled_at: null }]);
   });
 
   it('starts nothing while another agent job has the machine, and leaves the review queued as it was', async () => {

@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 
-import { commentsSeen, projectsSeen, pullRequestsSeen, type Asking, type Remembered } from './poller-github.js';
+import { commentsSeen, projectsLastSeen, projectsSeen, pullRequestsSeen, type Asking, type Remembered } from './poller-github.js';
 
 const { privateKey } = crypto.generateKeyPairSync('rsa', {
   modulusLength: 2048,
@@ -462,5 +462,38 @@ describe('reading what has been said on a pull request', () => {
     const { asking, token, made } = await reading({ comments: { 'acme/widgets#12': many } });
     expect(await commentsSeen(asking, 'acme/widgets', token, 12, at('11:00:00'))).toHaveLength(150);
     expect(made().filter((r) => r.includes('/comments'))).toHaveLength(2);
+  });
+});
+
+describe('what the last pass saw of the projects, read back without asking GitHub', () => {
+  it("is each project the App is installed on with what its default branch held, and costs no request", async () => {
+    const { asking, made } = setUp(world());
+    await projectsSeen(asking);
+    made();
+    expect(await projectsLastSeen(asking.memory)).toEqual([
+      { slug: 'acme/widgets', config: CONFIG, sweepWorkflow: false },
+      { slug: 'acme/gadgets', config: CONFIG, sweepWorkflow: true },
+      { slug: 'Zenith/anvils', config: null, sweepWorkflow: false },
+    ]);
+    expect(made()).toEqual([]);
+  });
+
+  it('follows the passes: a project that gains the sweep workflow, and one the App is removed from', async () => {
+    const w = world();
+    const { asking } = setUp(w);
+    await projectsSeen(asking);
+    later(w, 3);
+    w.heads['acme/widgets'] = 'd'.repeat(40);
+    w.files['acme/widgets'][WORKFLOW] = 'name: nightly sweep\n';
+    w.installations[12] = [];
+    await projectsSeen(asking);
+    expect(await projectsLastSeen(asking.memory)).toEqual([
+      { slug: 'acme/widgets', config: CONFIG, sweepWorkflow: true },
+      { slug: 'acme/gadgets', config: CONFIG, sweepWorkflow: true },
+    ]);
+  });
+
+  it('is nothing before any pass', async () => {
+    expect(await projectsLastSeen(setUp(world()).asking.memory)).toEqual([]);
   });
 });

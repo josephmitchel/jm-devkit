@@ -1,5 +1,6 @@
 import type { RunKind, RunState } from './db/schema.js';
 import { AGENT_JOB_KINDS, commandFor, retryDelayMs } from './poller.js';
+import type { Project } from './projects.js';
 import type { Run, RunResult } from './runs.js';
 
 /**
@@ -32,6 +33,21 @@ export function machineFor(asker: 'nightly run' | 'review', machine: Machine): {
   if (machine.nightlyGoing) return { take: false, why: 'the nightly run has the machine' };
   if (machine.agentJobRunning) return { take: false, why: 'another agent job is running' };
   return { take: true };
+}
+
+/**
+ * Why the machine no longer handles each of `projects` that it does not, from the projects as the
+ * last pass saw them. A project is queued for only while it is handled, so one that is missing
+ * from what the pass saw has had the App removed.
+ */
+export function noLongerHandled(projects: string[], lastSeen: Project[]): Map<string, string> {
+  const why = new Map<string, string>();
+  for (const slug of projects) {
+    const seen = lastSeen.find((p) => p.slug === slug);
+    if (!seen) why.set(slug, "the code reviewer's App is no longer installed on it");
+    else if (seen.state !== 'handled') why.set(slug, `${seen.state}: ${seen.reason.replace(/\s+/g, ' ')}`);
+  }
+  return why;
 }
 
 /** An agent job's event, as the record of events has it. */
@@ -98,14 +114,17 @@ function notYet(first: QueuedEvent, args: string[], holders: number[], now: Date
 /**
  * What the queue does now: the one job to start, if any, and why every other waits. `events` are
  * the unhandled events on record; `slots` gives, for a project, the pull requests whose reviews
- * hold its review slot. Events that ask for the same command are one job, so a label and three
- * replies on one pull request are one run. Jobs are taken in the order found, across projects.
+ * hold its review slot; `notHandled` gives, for a project the machine no longer handles, why
+ * ({@link noLongerHandled}), and no job of such a project starts. Events that ask for the same
+ * command are one job, so a label and three replies on one pull request are one run. Jobs are
+ * taken in the order found, across projects.
  */
 export function queueDecision(
   events: QueuedEvent[],
   slots: ReadonlyMap<string, number[]>,
   machine: Machine,
   now: Date,
+  notHandled: ReadonlyMap<string, string> = new Map(),
 ): QueueDecision {
   const jobs = new Map<string, { job: Job; first: QueuedEvent }>();
   const oldestFirst = [...events].sort((a, b) => a.foundAt.getTime() - b.foundAt.getTime() || a.event.localeCompare(b.event));
@@ -121,7 +140,8 @@ export function queueDecision(
   const decision: QueueDecision = { start: null, waiting: [] };
   const turn = machineFor('review', machine);
   for (const { job, first } of jobs.values()) {
-    const why = notYet(first, job.args, slots.get(job.project) ?? [], now);
+    const left = notHandled.get(job.project);
+    const why = left === undefined ? notYet(first, job.args, slots.get(job.project) ?? [], now) : `the machine no longer handles its project (${left})`;
     if (why !== null) decision.waiting.push({ job, why });
     else if (!turn.take) decision.waiting.push({ job, why: turn.why });
     else if (decision.start !== null) decision.waiting.push({ job, why: 'its turn comes after the job ahead of it' });

@@ -3,12 +3,15 @@ import { and, eq, inArray, isNull, notInArray } from 'drizzle-orm';
 import { db, schema } from './db/client.js';
 import { reportRun } from './failure-report.js';
 import { lockFault, locksHeld, MACHINE_LOCK, NIGHTLY_LOCK, tryLock } from './machine.js';
-import { takeEvent } from './poller-pass.js';
+import { projectsLastSeen } from './poller-github.js';
+import { inDatabase, takeEvent } from './poller-pass.js';
 import { commandFor } from './poller.js';
 import { ensureProjectRow } from './project-row.js';
+import { classifyProjects } from './projects.js';
 import {
   afterReviewRun,
   leftByQueue,
+  noLongerHandled,
   queueDecision,
   timeLimitStopsAfter,
   type EventVerdict,
@@ -52,7 +55,7 @@ export async function runQueueTurn(say: (line: string) => void = console.log): P
     for (;;) {
       // Looked at afresh before each job: a nightly run that has started since comes first.
       const seen: Machine = { agentJobRunning: machine === null, nightlyGoing: await nightlyGoing(), lockLost: machine?.lost() ?? false };
-      const decision = queueDecision(await queuedEvents(), await slotsHeld(), seen, new Date());
+      const decision = await decide(seen);
       const next = decision.start;
       // A job turned away twice in one turn would be turned away for ever: leave it for the next.
       if (!next || !machine || stopping() || turnedAway.has(`${next.project} ${next.event}`)) {
@@ -71,6 +74,17 @@ export async function runQueueTurn(say: (line: string) => void = console.log): P
   } finally {
     await machine?.release();
   }
+}
+
+/**
+ * The queue's decision from what is on record now. Whether a queued project is still handled is
+ * read from what the last pass saw, which a turn follows by moments; GitHub is not asked again.
+ */
+async function decide(machine: Machine): Promise<QueueDecision> {
+  const events = await queuedEvents();
+  const queuedFor = [...new Set(events.map((e) => e.project))];
+  const lastSeen = queuedFor.length === 0 ? [] : classifyProjects(await projectsLastSeen(inDatabase));
+  return queueDecision(events, await slotsHeld(), machine, new Date(), noLongerHandled(queuedFor, lastSeen));
 }
 
 /** Every event still to be handled, with how the run of its last attempt ended. */
@@ -198,5 +212,5 @@ export async function queueStatusFacts(): Promise<{ decision: QueueDecision; run
   for (const { run, event } of rows) {
     running.set(run.id, { run, args: event ? (commandFor(event.project, event.event, event.attempts)?.args ?? null) : null });
   }
-  return { decision: queueDecision(await queuedEvents(), await slotsHeld(), machine, new Date()), running: [...running.values()], machine };
+  return { decision: await decide(machine), running: [...running.values()], machine };
 }

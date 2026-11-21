@@ -3,7 +3,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { and, asc, desc, eq, inArray } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, notInArray } from 'drizzle-orm';
 
 import { UPDATE_STAGES } from '../bin/update.mjs';
 
@@ -177,6 +177,17 @@ export function nightlyStatus(rows: Run[], outputPath: (runId: string) => string
       ...rows.filter((r) => r.parentId === nightly.id).map((part) => `    ${runLine(part, outputPath)}`),
     ]),
   ];
+}
+
+/**
+ * The `status` section for the runs no other section shows: those that are part of no nightly run
+ * and were started for no event, such as a project's nightly checks run by hand. `eventKinds` are
+ * the kinds of run a pass or the queue starts, which the poller's section shows with their events.
+ */
+export function otherRunsStatus(rows: Run[], eventKinds: ReadonlySet<RunKind>, outputPath: (runId: string) => string = runOutputPath): string[] {
+  const byHand = rows.filter((r) => r.parentId === null && r.kind !== 'nightly' && !eventKinds.has(r.kind));
+  if (byHand.length === 0) return ['runs started by hand: none yet'];
+  return ['runs started by hand', ...byHand.map((r) => `  ${runLine(r, outputPath)}`)];
 }
 
 /**
@@ -387,4 +398,14 @@ export async function recentNightlyRuns(limit: number): Promise<Run[]> {
     .where(inArray(schema.runs.parentId, nightlies.map((n) => n.id)))
     .orderBy(asc(schema.runs.startedAt));
   return [...nightlies, ...parts];
+}
+
+/** The most recent runs that are part of no other run and are of none of `kinds`, newest first. */
+export async function recentRunsOnTheirOwn(kinds: RunKind[], limit: number, project?: string): Promise<Run[]> {
+  return db
+    .select()
+    .from(schema.runs)
+    .where(and(isNull(schema.runs.parentId), notInArray(schema.runs.kind, kinds), project ? eq(schema.runs.project, project) : undefined))
+    .orderBy(desc(schema.runs.startedAt))
+    .limit(limit);
 }

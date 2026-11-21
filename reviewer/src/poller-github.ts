@@ -100,6 +100,12 @@ async function remembered<T>(
   return { answer: fresh, fresh: true };
 }
 
+// The questions whose answers are kept, by the names they are kept under.
+const INSTALLATIONS = 'app/installations';
+const repositoriesOf = (installation: number) => `installation/${installation}/repositories`;
+const defaultBranchOf = (slug: string) => `repos/${slug}/default-branch`;
+const pageOf = (question: string, page: number) => `${question}?page=${page}`;
+
 /** A list GitHub serves a hundred at a time, each page a question of its own. */
 async function rememberedPages<T>(
   asking: Asking,
@@ -110,7 +116,7 @@ async function rememberedPages<T>(
   const all: T[] = [];
   for (let page = 1; ; page++) {
     const path = `${request.path}${request.path.includes('?') ? '&' : '?'}per_page=100&page=${page}`;
-    const got = await remembered(asking, `${question}?page=${page}`, { ...request, path }, (body) => {
+    const got = await remembered(asking, pageOf(question, page), { ...request, path }, (body) => {
       const list = items(body);
       return { list, full: list.length === 100 };
     });
@@ -138,7 +144,7 @@ export interface ProjectRead {
  */
 export async function projectsSeen(asking: Asking): Promise<{ projects: ProjectRead[]; unread: Array<{ slug: string; why: string }> }> {
   const jwt = appJwt(asking.credentials, asking.now().getTime());
-  const installations = await rememberedPages(asking, 'app/installations', { path: '/app/installations', auth: jwt }, (body) =>
+  const installations = await rememberedPages(asking, INSTALLATIONS, { path: '/app/installations', auth: jwt }, (body) =>
     (JSON.parse(body) as Array<{ id: number }>).map((i) => i.id),
   );
   const projects: ProjectRead[] = [];
@@ -147,7 +153,7 @@ export async function projectsSeen(asking: Asking): Promise<{ projects: ProjectR
     const token = await mintToken(asking, id, jwt);
     const slugs = await rememberedPages(
       asking,
-      `installation/${id}/repositories`,
+      repositoriesOf(id),
       { path: '/installation/repositories', auth: token },
       (body) => (JSON.parse(body) as { repositories: Array<{ full_name: string }> }).repositories.map((r) => r.full_name),
     );
@@ -166,12 +172,36 @@ export async function projectsSeen(asking: Asking): Promise<{ projects: ProjectR
 const NO_FILES: Observed = { config: null, sweepWorkflow: false };
 
 /**
+ * The projects as the last pass saw them, from the answers it kept: no request is made. For
+ * whoever must know between passes whether the machine still handles a project.
+ */
+export async function projectsLastSeen(memory: Memory): Promise<Array<{ slug: string } & Observed>> {
+  const kept = async <T>(question: string): Promise<T[]> => {
+    const all: T[] = [];
+    for (let page = 1; ; page++) {
+      const answer = (await memory.recall(pageOf(question, page)))?.answer as { list: T[]; full: boolean } | undefined;
+      if (!answer) return all;
+      all.push(...answer.list);
+      if (!answer.full) return all;
+    }
+  };
+  const projects: Array<{ slug: string } & Observed> = [];
+  for (const installation of await kept<number>(INSTALLATIONS)) {
+    for (const slug of await kept<string>(repositoriesOf(installation))) {
+      const branch = (await memory.recall(defaultBranchOf(slug)))?.answer as { observed: Observed } | undefined;
+      projects.push({ slug, ...(branch?.observed ?? NO_FILES) });
+    }
+  }
+  return projects;
+}
+
+/**
  * What a project's default branch holds. The question repeated each pass is only "which commit is
  * its head", whose ETag is the commit itself, whatever credential asks. The two files are read
  * again only when that commit is not the one they were last read at, however GitHub answered.
  */
 async function defaultBranch(asking: Asking, slug: string, token: string): Promise<{ observed: Observed; fresh: boolean }> {
-  const question = `repos/${slug}/default-branch`;
+  const question = defaultBranchOf(slug);
   const kept = (await asking.memory.recall(question)) as { etag: string | null; answer: { head: string; observed: Observed } } | null;
   let head;
   try {

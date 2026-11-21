@@ -16,14 +16,14 @@ import { postFailureNotice } from './stages/report.js';
 import { runMigrations } from './migrate.js';
 import { recordNightlyNotStarted, runNightly } from './nightly.js';
 import { runChecksOnDemand, runProjectChecks } from './nightly-checks.js';
-import { pollerStatus } from './poller.js';
+import { EVENT_RUN_KINDS, pollerStatus } from './poller.js';
 import { forgetReviewEvents, pollerStatusRows, runPass } from './poller-pass.js';
 import { queueStatus } from './queue.js';
 import { queueStatusFacts, runQueueTurn } from './queue-run.js';
 import { listProjects, projectLine } from './projects.js';
 import { runReview } from './review-loop.js';
 import { cloneUrl } from './project-row.js';
-import { errorTypeLine, nightlyStatus, recentNightlyRuns, stopCommandsOnSignal } from './runs.js';
+import { errorTypeLine, nightlyStatus, otherRunsStatus, recentNightlyRuns, recentRunsOnTheirOwn, stopCommandsOnSignal } from './runs.js';
 import { runSweep } from './sweep/loop.js';
 import { runLanded } from './landed.js';
 import { dropTestDatabases } from './test-databases.js';
@@ -90,7 +90,8 @@ Usage:
       --redundancy <n>                          auditors per characteristic (default 1)
   code-reviewer repo set <owner/repo> [opts]    update repo config (same options)
   code-reviewer status [owner/repo]             show reviews and their states, the recent
-                                                nightly runs with each project's result, what
+                                                nightly runs with each project's result, the
+                                                recent runs started by hand, what
                                                 the poller's last passes found, and the queue:
                                                 the agent job running and the reviews waiting
   code-reviewer reset <owner/repo> <pr#>        delete a review's state (concerns/policies kept)
@@ -538,6 +539,8 @@ async function showStatus(slug?: string): Promise<void> {
   const runs = await recentNightlyRuns(5);
   const shown = slug ? runs.filter((r) => r.project === null || r.project === slug) : runs;
   console.log(`\n${nightlyStatus(shown).join('\n')}`);
+  const byHand = await recentRunsOnTheirOwn(['nightly', ...EVENT_RUN_KINDS], 5, slug);
+  console.log(`\n${otherRunsStatus(byHand, EVENT_RUN_KINDS).join('\n')}`);
   const poller = await pollerStatusRows(slug);
   console.log(`\n${pollerStatus(poller.projects, poller.events).join('\n')}`);
   // The whole machine's, whichever project was asked for: one queue serves them all.

@@ -225,6 +225,9 @@ const EVENTS: Record<string, EventRule> = {
  */
 export const AGENT_JOB_KINDS: ReadonlySet<RunKind> = new Set<RunKind>(['review']);
 
+/** The kinds of run that are started for an event, by a pass or by the queue. */
+export const EVENT_RUN_KINDS: ReadonlySet<RunKind> = new Set(Object.values(EVENTS).map((rule) => rule.kind));
+
 /** The command for a recorded event, or null when no rule knows its key. */
 export function commandFor(project: string, event: string, attempts: number): Command | null {
   const [name, ...subject] = event.split(':');

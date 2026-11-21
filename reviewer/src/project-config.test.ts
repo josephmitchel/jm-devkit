@@ -200,6 +200,15 @@ describe('readProjectSetup with a malformed devkit.json', () => {
     expect(setupError()).toContain('nightly.checks lists {"name":"canvas","command":"npm run canvas:check"} more than once');
   });
 
+  it('names a second nightly check of the same name, though its command differs: results are reported by name', () => {
+    const canvas = { name: 'canvas', command: 'npm run canvas:check' };
+    writeConfig({ ...valid, nightly: { checks: [canvas, { name: 'links', command: 'npm run check:links' }, { name: 'canvas', command: 'npm run canvas:all' }] } });
+    expect(setupError()).toContain('nightly.checks has more than one item whose name is "canvas"');
+    // Two names for one command are two checks.
+    const twoNames = { modules: ['process'], reviewer: { tests: valid.reviewer.tests }, nightly: { checks: [canvas, { ...canvas, name: 'boards' }] } };
+    expect(() => parseDevkitConfig(JSON.stringify(twoNames))).not.toThrow();
+  });
+
   it('names a missing section and modules without the process module', () => {
     writeConfig({ modules: ['web'], sweep: { hour: 1 } });
     const message = setupError();

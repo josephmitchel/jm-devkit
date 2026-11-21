@@ -8,6 +8,7 @@ import {
   leftByNightlyRuns,
   newRunId,
   nightlyStatus,
+  otherRunsStatus,
   runOutputPath,
   runResult,
   timeLimitMs,
@@ -356,5 +357,50 @@ describe('the recent nightly runs in status', () => {
 
   it('says so when there has been no nightly run', () => {
     expect(nightlyStatus([], outputAt)).toEqual(['nightly runs: none yet']);
+  });
+});
+
+describe('what status shows of the runs that are part of no nightly run and were started for no event', () => {
+  const outputAt = (runId: string) => `/var/lib/code-reviewer/runs/${runId}.log`;
+  const startedForEvents = new Set(['landed', 'carry-gate', 'review'] as const);
+  const row = (id: string, fields: Partial<Run>): Run => ({
+    id,
+    kind: 'checks',
+    project: 'acme/widgets',
+    parentId: null,
+    state: 'succeeded',
+    stage: null,
+    errorType: null,
+    startedAt: new Date('2026-11-20T10:00:00Z'),
+    finishedAt: new Date('2026-11-20T10:05:00Z'),
+    ...fields,
+  });
+
+  it("lists a project's nightly checks run by hand, with how each ended", () => {
+    const rows = [
+      row('run-20261120T100000Z-aaaaaa', {}),
+      row('run-20261119T100000Z-bbbbbb', { state: 'failed', stage: 'checking', errorType: 'NightlyCheckError' }),
+    ];
+    expect(otherRunsStatus(rows, startedForEvents, outputAt)).toEqual([
+      'runs started by hand',
+      '  acme/widgets checks [succeeded] run-20261120T100000Z-aaaaaa',
+      '  acme/widgets checks [failed in checking: NightlyCheckError] run-20261119T100000Z-bbbbbb' +
+        ', output: /var/lib/code-reviewer/runs/run-20261119T100000Z-bbbbbb.log',
+    ]);
+  });
+
+  it('leaves out what the other sections show: nightly runs, their parts, and the runs a pass or the queue started', () => {
+    const rows = [
+      row('run-20261120T031502Z-aaaaaa', { kind: 'nightly', project: null }),
+      row('run-20261120T031503Z-bbbbbb', { parentId: 'run-20261120T031502Z-aaaaaa' }),
+      row('run-20261120T101500Z-cccccc', { kind: 'landed' }),
+      row('run-20261120T101600Z-dddddd', { kind: 'review' }),
+      row('run-20261120T110000Z-eeeeee', {}),
+    ];
+    expect(otherRunsStatus(rows, startedForEvents, outputAt)).toEqual(['runs started by hand', '  acme/widgets checks [succeeded] run-20261120T110000Z-eeeeee']);
+  });
+
+  it('says so when there is none', () => {
+    expect(otherRunsStatus([], startedForEvents, outputAt)).toEqual(['runs started by hand: none yet']);
   });
 });

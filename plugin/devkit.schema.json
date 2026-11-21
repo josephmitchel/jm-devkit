@@ -152,9 +152,10 @@
       "additionalProperties": false,
       "properties": {
         "checks": {
-          "description": "The project's nightly checks: commands too slow to run on every pull request, run once a night instead. They run after the project's sweep, in the order written, in a fresh checkout of the default branch at its head, after `reviewer.setup`, with `reviewer.env` and databases of their own for `reviewer.databases`, and without the code reviewer's own credentials. No agent runs. A check that fails does not stop the checks after it, and opens an issue in the project with the end of its output; the issue is closed when a later night's checks all pass. A project that lists none gets no checkout and no run.",
+          "description": "The project's nightly checks: commands too slow to run on every pull request, run once a night instead. They run after the project's sweep, in the order written, in a fresh checkout of the default branch at its head, after `reviewer.setup`, with `reviewer.env` and databases of their own for `reviewer.databases`, and without the code reviewer's own credentials. No agent runs. A check that fails does not stop the checks after it, and opens an issue in the project with the end of its output; the issue is closed when a later night's checks all pass. A project that lists none gets no checkout and no run. No two checks may have the same name: a check's result is reported by its name.",
           "type": "array",
           "uniqueItems": true,
+          "uniqueItemProperties": ["name"],
           "items": {
             "type": "object",
             "required": ["name", "command"],

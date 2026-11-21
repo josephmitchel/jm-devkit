@@ -6,12 +6,14 @@ import {
   afterReviewRun,
   leftByQueue,
   machineFor,
+  noLongerHandled,
   queueDecision,
   queueStatus,
   timeLimitStopsAfter,
   type Machine,
   type QueuedEvent,
 } from './queue.js';
+import { classifyProjects } from './projects.js';
 import type { Run } from './runs.js';
 
 const at = (time: string) => new Date(`2026-11-20T${time}Z`);
@@ -38,6 +40,34 @@ const noSlotsHeld = new Map<string, number[]>();
 const decide = (events: QueuedEvent[], machine: Machine = FREE, slots: ReadonlyMap<string, number[]> = noSlotsHeld) =>
   queueDecision(events, slots, machine, NOW);
 const started = (decision: ReturnType<typeof decide>) => decision.start && `${decision.start.project} ${decision.start.event}`;
+
+describe('a review queued for a project the machine no longer handles', () => {
+  const config = JSON.stringify({ modules: ['process'], reviewer: { tests: [{ name: 'unit', command: 'npm test' }] } });
+  const lastSeen = classifyProjects([
+    { slug: 'acme/widgets', config, sweepWorkflow: true },
+    { slug: 'acme/gadgets', config, sweepWorkflow: false },
+    { slug: 'acme/bare', config: null, sweepWorkflow: false },
+  ]);
+
+  it('is known from what the last pass saw: back on Actions, without a project config, or without the App', () => {
+    expect(noLongerHandled(['acme/widgets', 'acme/gadgets', 'acme/bare', 'Zenith/anvils'], lastSeen)).toEqual(
+      new Map([
+        ['acme/widgets', 'still on Actions: its default branch has .github/workflows/nightly-sweep.yml'],
+        ['acme/bare', 'skipped: its default branch has no devkit.json'],
+        ['Zenith/anvils', "the code reviewer's App is no longer installed on it"],
+      ]),
+    );
+  });
+
+  it('is not started: its event stays queued with that reason, and the next job is not held up', () => {
+    const events = [queued('labelled:12', '11:00:00'), queued('labelled:3', '11:05:00', { project: 'acme/gadgets' })];
+    const decision = queueDecision(events, noSlotsHeld, FREE, NOW, noLongerHandled(['acme/widgets', 'acme/gadgets'], lastSeen));
+    expect(started(decision)).toBe('acme/gadgets labelled:3');
+    expect(decision.waiting.map(({ job, why }) => `${job.project} ${job.event}: ${why}`)).toEqual([
+      'acme/widgets labelled:12: the machine no longer handles its project (still on Actions: its default branch has .github/workflows/nightly-sweep.yml)',
+    ]);
+  });
+});
 
 describe('who has the machine when a review and the nightly run both want it', () => {
   it('is the review when nothing else is going', () => {

@@ -65,7 +65,8 @@ export async function runPass(say: (line: string) => void = console.log): Promis
   return outcome;
 }
 
-const inDatabase: Memory = {
+/** The answers kept between passes, in the database. */
+export const inDatabase: Memory = {
   async recall(question) {
     const [row] = await db.select().from(schema.githubAnswers).where(eq(schema.githubAnswers.question, question));
     return row ? { etag: row.etag, answer: row.answer } : null;
