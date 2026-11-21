@@ -71,6 +71,7 @@ const KNOWN_ERROR_TYPES = new Set([
   'DrizzleQueryError',
   'GitHubError',
   'MachineLockError',
+  'ChecksRunningError',
 ]);
 const FIXED_ERROR_FORM = /^(?:exit \d{1,3}|killed by SIG[A-Z0-9]{2,8}|could not start|time limit)$/;
 const COMMIT = /^[0-9a-f]{40}$/;

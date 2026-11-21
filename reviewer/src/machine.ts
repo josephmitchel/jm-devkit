@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import { pool } from './db/client.js';
 import { LOCK_CLASS } from './migrate.js';
 
@@ -18,6 +20,18 @@ import { LOCK_CLASS } from './migrate.js';
 export const MACHINE_LOCK = 3;
 /** Held by a nightly run from its start to its end, its wait for the machine included. */
 export const NIGHTLY_LOCK = 4;
+
+// A class of its own for the locks that are one per project, so no project's key can be a lock above.
+export const CHECKS_LOCK_CLASS = 0x63686b73; // 'chks'
+
+/**
+ * The key of the lock held by a run of one project's nightly checks, in {@link CHECKS_LOCK_CLASS}.
+ * Two runs share a checkout and the project's test databases, so one goes at a time. Two projects
+ * whose names hash alike (one chance in two thousand million) would only wait for each other.
+ */
+export function checksLockKey(slug: string): number {
+  return createHash('sha256').update(slug.toLowerCase()).digest().readUInt32BE(0) >>> 1;
+}
 
 export interface Held {
   release(): Promise<void>;
@@ -67,7 +81,7 @@ export async function lockFault(held: Held): Promise<MachineLockError | null> {
 const KEPT_ALIVE_EVERY_MS = 60_000;
 
 /** Take a lock if nobody holds it. It is held until released, or until this process ends. */
-export async function tryLock(key: number): Promise<Held | null> {
+export async function tryLock(key: number, lockClass: number = LOCK_CLASS): Promise<Held | null> {
   const client = await pool.connect();
   let isLost = false;
   const lost = (err: unknown) => {
@@ -83,7 +97,7 @@ export async function tryLock(key: number): Promise<Held | null> {
   const session = async () => Number((await client.query('select pg_backend_pid() as session')).rows[0].session);
   let holderSession: number;
   try {
-    const { rows } = await client.query('select pg_try_advisory_lock($1, $2) as held', [LOCK_CLASS, key]);
+    const { rows } = await client.query('select pg_try_advisory_lock($1, $2) as held', [lockClass, key]);
     if (!rows[0].held) {
       letGo(false);
       return null;
@@ -99,7 +113,7 @@ export async function tryLock(key: number): Promise<Held | null> {
     async release() {
       clearInterval(keptAlive);
       try {
-        await client.query('select pg_advisory_unlock($1, $2)', [LOCK_CLASS, key]);
+        await client.query('select pg_advisory_unlock($1, $2)', [lockClass, key]);
         letGo(false);
       } catch {
         // A connection that cannot unlock is closed, which unlocks.
@@ -110,8 +124,8 @@ export async function tryLock(key: number): Promise<Held | null> {
     async probe() {
       const second = await pool.connect();
       try {
-        const { rows } = await second.query('select pg_try_advisory_lock($1, $2) as took, pg_backend_pid() as session', [LOCK_CLASS, key]);
-        if (rows[0].took) await second.query('select pg_advisory_unlock($1, $2)', [LOCK_CLASS, key]);
+        const { rows } = await second.query('select pg_try_advisory_lock($1, $2) as took, pg_backend_pid() as session', [lockClass, key]);
+        if (rows[0].took) await second.query('select pg_advisory_unlock($1, $2)', [lockClass, key]);
         return { holderSession, holderSessionAfter: await session(), secondSession: Number(rows[0].session), secondTook: rows[0].took === true };
       } finally {
         second.release();
@@ -120,13 +134,13 @@ export async function tryLock(key: number): Promise<Held | null> {
   };
 }
 
-/** Which of the machine's locks are held right now, by any process. Reading takes none of them. */
-export async function locksHeld(): Promise<Set<number>> {
+/** Which locks of a class are held right now, by any process: the machine's unless said. Reading takes none of them. */
+export async function locksHeld(lockClass: number = LOCK_CLASS): Promise<Set<number>> {
   const { rows } = await pool.query(
     `select objid::int8 as key from pg_locks
       where locktype = 'advisory' and granted and classid = $1::oid and objsubid = 2
         and database = (select oid from pg_database where datname = current_database())`,
-    [LOCK_CLASS],
+    [lockClass],
   );
   return new Set(rows.map((row) => Number(row.key)));
 }

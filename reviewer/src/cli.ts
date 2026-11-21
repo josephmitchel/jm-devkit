@@ -45,6 +45,7 @@ Usage:
                                                 its devkit.json) now, in a fresh checkout of its
                                                 default branch; recorded and reported as the
                                                 nightly run's step is, and exits 1 when one fails
+                                                or when the project's checks are already running
   code-reviewer nightly                         the whole nightly run: for every project the
                                                 machine handles, in name order, one at a time, its
                                                 sweep, its summary and then its nightly checks if

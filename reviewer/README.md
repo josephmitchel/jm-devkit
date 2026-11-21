@@ -283,6 +283,12 @@ and reported the same way, and exits 1 when a check failed.
   quotes. Being a kind of run of their own, the checks never change the sweep's result, and their
   failure issue is beside the sweep's: each is closed only by a success of its own kind. The run
   as a whole has no time limit: the setup command and each check have their own.
+- **One run per project at a time.** The nightly step and a run by hand share the checkout and
+  the project's test databases, so a run of the checks holds a lock of the project's own (a
+  Postgres advisory lock, `checksLockKey` in `src/machine.ts`). A second run by hand while one is
+  going says so, records nothing and exits 1. A nightly step that meets a run by hand fails
+  before it touches anything, with the error type `ChecksRunningError`, on the code reviewer's
+  side.
 - **Output.** Everything a check writes goes to the run's output file and the journal, as a
   sweep's output does.
 

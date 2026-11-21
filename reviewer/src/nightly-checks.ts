@@ -7,6 +7,7 @@ import { reportRun } from './failure-report.js';
 import { NightlyCheckError, SetupCommandError } from './failure-side.js';
 import { getBranchHead, getDefaultBranch, getDefaultBranchFile } from './github.js';
 import { markStage } from './heartbeat.js';
+import { CHECKS_LOCK_CLASS, checksLockKey, locksHeld, tryLock } from './machine.js';
 import { readProjectSetup, type ProjectRow, type ProjectSetup } from './project-config.js';
 import { cloneUrl } from './project-row.js';
 import { errorType, finishRun, runCommand, runLine, runLog, startRun, type CHECKS_STAGES, type Run, type RunResult } from './runs.js';
@@ -32,6 +33,14 @@ export function checksNamed(config: string | null): TestCommand[] {
  */
 export function checksOwner(slug: string): RunOwner {
   return `checks:${slug}`;
+}
+
+/** Another run of the same project's checks is going. This one has touched nothing. */
+export class ChecksRunningError extends Error {
+  constructor(slug: string) {
+    super(`another run of ${slug}'s nightly checks is going: this one starts nothing and touches nothing`);
+    this.name = 'ChecksRunningError';
+  }
 }
 
 /** How one check ended. */
@@ -138,8 +147,21 @@ function enter(stage: (typeof CHECKS_STAGES)[number]): void {
  * newer one, never an older. It is made and set up the way the sweep's is: the same reset, the
  * project's setup command, `reviewer.env`, and fresh databases for `reviewer.databases`, since the
  * sweep's were dropped when it ended. Throws {@link NightlyCheckError} when a check failed.
+ *
+ * One run per project at a time, by the project's checks lock: a second would reset the first's
+ * checkout and drop its databases. It throws {@link ChecksRunningError} before touching either.
  */
 export async function runProjectChecks(slug: string): Promise<void> {
+  const lock = await tryLock(checksLockKey(slug), CHECKS_LOCK_CLASS);
+  if (!lock) throw new ChecksRunningError(slug);
+  try {
+    await checkProject(slug);
+  } finally {
+    await lock.release();
+  }
+}
+
+async function checkProject(slug: string): Promise<void> {
   const [repo] = await db.select().from(schema.repos).where(eq(schema.repos.slug, slug));
   const branch = await getDefaultBranch(slug);
   const head = await getBranchHead(slug, branch);
@@ -170,13 +192,20 @@ export async function runProjectChecks(slug: string): Promise<void> {
 
 /**
  * Run one project's nightly checks by hand: recorded as a run of its own and reported like the
- * step of a nightly run. A project that names none gets no run and no checkout. The caller has
- * stop signals stop the run (stopCommandsOnSignal), so one stopped by hand ends `interrupted`.
+ * step of a nightly run. A project that names none gets no run and no checkout, and nor does one
+ * whose checks are already running. The caller has stop signals stop the run
+ * (stopCommandsOnSignal), so one stopped by hand ends `interrupted`.
  */
-export async function runChecksOnDemand(slug: string): Promise<'no checks' | Run['state']> {
+export async function runChecksOnDemand(slug: string): Promise<'no checks' | 'already running' | Run['state']> {
   if (checksNamed(await getDefaultBranchFile(slug, CONFIG_FILE)).length === 0) {
     console.log(`${slug} names no nightly checks: nothing to run`);
     return 'no checks';
+  }
+  // Looked at before a run is recorded, so a second run by hand leaves no run and no report.
+  // The run itself takes the lock, and is the one refused if another got in between.
+  if ((await locksHeld(CHECKS_LOCK_CLASS)).has(checksLockKey(slug))) {
+    console.log(new ChecksRunningError(slug).message);
+    return 'already running';
   }
   const run = await startRun({ kind: 'checks', project: slug });
   const say = runLog(run);

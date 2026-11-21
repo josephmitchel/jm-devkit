@@ -86,6 +86,23 @@ describe("the machine's lock", () => {
     await night!.release();
   });
 
+  it("is apart from a project's checks lock, which is held by one run at a time and stands in no other project's way", async () => {
+    const widgets = machine.checksLockKey('acme/widgets');
+    const first = await machine.tryLock(widgets, machine.CHECKS_LOCK_CLASS);
+    expect(first).not.toBeNull();
+    expect(await machine.tryLock(widgets, machine.CHECKS_LOCK_CLASS)).toBeNull();
+    expect(await machine.locksHeld(machine.CHECKS_LOCK_CLASS)).toEqual(new Set([widgets]));
+    expect(await machine.locksHeld()).toEqual(new Set());
+    const gadgets = await machine.tryLock(machine.checksLockKey('acme/gadgets'), machine.CHECKS_LOCK_CLASS);
+    const job = await machine.tryLock(machine.MACHINE_LOCK);
+    expect(gadgets).not.toBeNull();
+    expect(job).not.toBeNull();
+    await job!.release();
+    await gadgets!.release();
+    await first!.release();
+    expect(await machine.locksHeld(machine.CHECKS_LOCK_CLASS)).toEqual(new Set());
+  });
+
   it('can be seen to be held without being taken, and is seen free once it is let go', async () => {
     expect(await machine.locksHeld()).toEqual(new Set());
     const night = await machine.tryLock(machine.NIGHTLY_LOCK);
