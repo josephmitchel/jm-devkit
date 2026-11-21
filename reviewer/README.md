@@ -218,7 +218,8 @@ A nightly run has the machine for the night. If a review is running when it star
 that review to finish and then goes; while it is going no review starts, and a second nightly run
 does not start beside it (see "The queue of reviews").
 
-A sweep has five and a half hours, as a run on GitHub Actions had. One that runs longer is stopped,
+A sweep has five and a half hours, as a run on GitHub Actions had, and the summary step, which
+runs no agents, has ten minutes. One that runs longer is stopped,
 with the agents and commands it started, and the run goes on to the next step. Told to stop
 (SIGTERM, as when its service is stopped), the nightly run stops the step it is on and takes no
 further step. Either way the run is recorded as `interrupted`, with what stopped it, and so is a
@@ -382,8 +383,10 @@ holds only reviewed code, and carries the gate if it does.
   by hand.
 - A `carry-gate` that failed is tried again like a `landed` that failed. It asks GitHub for the
   head at that moment, so a retry after the head has moved on decides for the newer head.
-- `carry-gate` runs no agents. It runs inside the pass like `landed`, has no time limit of its own
-  and waits for no sweep or review.
+- `carry-gate` runs no agents. It runs inside the pass like `landed` and waits for no sweep or
+  review. Like `landed` and the nightly summary it has ten minutes, so one call to GitHub that
+  hangs cannot hold a pass or the night; one stopped by that limit is recorded as `interrupted`
+  and tried again like a failure.
 - GitHub's listing gives no time for a head, only for the pull request's last change. A pull
   request not changed since the project's first pass is left alone. One whose head moved before
   the first pass and which is commented on after it has `carry-gate` run once for that head.

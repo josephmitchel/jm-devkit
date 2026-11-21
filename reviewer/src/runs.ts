@@ -88,14 +88,21 @@ export function runResult(runId: string, ended: Ended): RunResult {
   return { state: 'failed', stage, errorType };
 }
 
-// The commands that run agents. The others have no limit of this kind: they finish in seconds,
-// or, for a project's nightly checks, each check has a limit of its own.
+// The commands that run agents.
 const AGENT_JOBS = new Set(['sweep', 'run']);
 // What a run on GitHub Actions was given (`timeout-minutes: 330`).
 const AGENT_JOB_LIMIT_MS = 5.5 * 60 * 60 * 1000;
+// The commands that run no agents and only talk to GitHub and the database. They finish in
+// seconds; the limit is for a call that hangs.
+const SHORT_STEPS = new Set(['landed', 'carry-gate', 'summary']);
+const SHORT_STEP_LIMIT_MS = 10 * 60 * 1000;
 
-/** How long one of the code reviewer's commands may run before it is stopped, or null for no limit. */
+/**
+ * How long one of the code reviewer's commands may run before it is stopped, or null for no
+ * limit: a project's nightly checks have none as a whole, since each check has its own.
+ */
 export function timeLimitMs(args: string[], env: NodeJS.ProcessEnv = process.env): number | null {
+  if (SHORT_STEPS.has(args[0])) return SHORT_STEP_LIMIT_MS;
   if (!AGENT_JOBS.has(args[0])) return null;
   const set = Number(env.REVIEWER_AGENT_JOB_LIMIT_MS);
   return Number.isInteger(set) && set > 0 ? set : AGENT_JOB_LIMIT_MS;

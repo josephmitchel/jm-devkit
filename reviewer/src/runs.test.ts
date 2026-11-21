@@ -161,9 +161,18 @@ describe("a command's time limit", () => {
     expect(timeLimitMs(['run', 'acme/widgets', '42', '--once'], {})).toBe(19_800_000);
   });
 
-  it('is none for a command that runs no agents', () => {
-    expect(timeLimitMs(['landed', 'acme/widgets', '42'], {})).toBeNull();
-    expect(timeLimitMs(['carry-gate', 'acme/widgets', '42'], {})).toBeNull();
+  it('is ten minutes for a step that runs no agents and only talks to GitHub, so one call that hangs cannot hold a pass or the night', () => {
+    expect(timeLimitMs(['landed', 'acme/widgets', '42'], {})).toBe(600_000);
+    expect(timeLimitMs(['carry-gate', 'acme/widgets', '42'], {})).toBe(600_000);
+    expect(timeLimitMs(['summary', 'acme/widgets'], {})).toBe(600_000);
+  });
+
+  it("is none for a project's nightly checks as a whole: each check has a limit of its own", () => {
+    expect(timeLimitMs(['checks', 'acme/widgets'], {})).toBeNull();
+  });
+
+  it('is not the agent jobs\' setting for a step that runs no agents', () => {
+    expect(timeLimitMs(['landed', 'acme/widgets', '42'], { REVIEWER_AGENT_JOB_LIMIT_MS: '2000' })).toBe(600_000);
   });
 
   it('can be set for the machine, and a setting that is no number of milliseconds is ignored', () => {
