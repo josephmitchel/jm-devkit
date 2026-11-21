@@ -294,7 +294,7 @@ cat <<EOF
 Done. Left to do by hand:
   - $AGENT_USER: sign in to Claude Code (run 'claude' and follow /login) and to GitHub (gh auth login).
     Its database addresses use the local socket, for example:
-      postgresql:///vices_demo?host=/var/run/postgresql
+      postgresql:///widgets_demo?host=/var/run/postgresql
   - $REVIEWER_USER: do NOT sign in to anything as this user. Its credentials reach the code
     reviewer's services only from $CREDENTIALS_FILE, which root alone can read.
 EOF
