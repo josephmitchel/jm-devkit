@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { BUNDLE_FILES, bundleName, isBundle, makeBundle, openBundle, parseBundleName, publicKeyIsSet } from './bundle.mjs';
+import { BUNDLE_FILES, bundleName, isBundle, makeBundle, newWorkDir, openBundle, parseBundleName, publicKeyIsSet } from './bundle.mjs';
 import { run as realRun } from './run.mjs';
 import { archiveOf, machine, registered, tempDir } from './test-helpers.mjs';
 
@@ -84,6 +84,23 @@ test('a bundle that fails leaves nothing in the work directory and no bundle', (
     /^Error: could not encrypt sample's bundle: age: no recipient in .*backup-public-key$/);
   assert.deepEqual(fs.readdirSync(workDir), []);
   assert.ok(!fs.existsSync(paths.nightlyDir));
+});
+
+test('a run\'s work directory is its own and root\'s alone, and making one removes those of runs that are gone', () => {
+  const paths = machine();
+  const killed = path.join(paths.backupWorkDir, '999999999-AbCdEf');
+  const going = path.join(paths.backupWorkDir, `${process.pid}-AbCdEf`);
+  for (const dir of [killed, going]) fs.mkdirSync(path.join(dir, 'sample'), { recursive: true });
+  const umask = process.umask(0o022);
+  let workDir;
+  try {
+    workDir = newWorkDir(paths);
+  } finally {
+    process.umask(umask);
+  }
+  assert.match(path.relative(paths.backupWorkDir, workDir), new RegExp(`^${process.pid}-[^/]+$`));
+  assert.equal(fs.statSync(workDir).mode & 0o777, 0o700);
+  assert.deepEqual(fs.readdirSync(paths.backupWorkDir).sort(), [path.basename(going), path.basename(workDir)].sort());
 });
 
 const DUMP = Buffer.from([0x50, 0xff, 0x00, 0xfe]);

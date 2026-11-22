@@ -1,9 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { isBundle, openBundle } from '../bundle.mjs';
+import { isBundle, newWorkDir, openBundle } from '../bundle.mjs';
 import { databasePassword, dumpDatabase, dumpFault, restoreDatabase, setDatabasePassword } from '../database.mjs';
-import { HEALTH_TIME_LIMIT_SECONDS, answersHealthy } from '../health.mjs';
+import { mustAnswerHealthy } from '../health.mjs';
 import { serviceName } from '../paths.mjs';
 import { registrationOf } from '../registry.mjs';
 import { deployConfigOf, stampOf } from '../releases.mjs';
@@ -91,9 +91,7 @@ function restore(world, { name, file, bundled, withSettings }) {
         out.write(`Starting ${serviceName(name)}\n`);
         startService(world, name);
         step = 'health';
-        const { port, healthPath } = answers;
-        out.write(`Asking ${healthPath} on port ${port}, for ${HEALTH_TIME_LIMIT_SECONDS} seconds at most\n`);
-        if (!answersHealthy(world, answers)) throw new Error(`${healthPath} on port ${port} did not answer with success within ${HEALTH_TIME_LIMIT_SECONDS} seconds`);
+        mustAnswerHealthy(world, answers);
       }
     } catch (e) {
       err.write([
@@ -145,12 +143,6 @@ function stoppedAgain(world, name) {
   } catch {
     return false;
   }
-}
-
-/** A directory for the bundle's files, named as a backup run's is, so the next backup removes what a killed restore left. */
-function newWorkDir(paths) {
-  fs.mkdirSync(paths.backupWorkDir, { recursive: true, mode: 0o700 });
-  return fs.mkdtempSync(path.join(paths.backupWorkDir, `${process.pid}-`));
 }
 
 /** Copy the app's settings file as it is to `keep`, root's alone. Returns `keep`, or null when the app has no settings file. */

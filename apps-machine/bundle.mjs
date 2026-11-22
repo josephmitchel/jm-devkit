@@ -41,6 +41,28 @@ function must(done, what) {
   if (done.code !== 0) throw new Error(`could not ${what}: ${done.stderr.trim()}`);
 }
 
+const isRunning = (pid) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return e.code === 'EPERM';
+  }
+};
+
+/**
+ * A directory of a run's own for a bundle's unencrypted files, root's alone and named for its
+ * process, after removing those of runs that were killed before they could. The caller removes it.
+ */
+export function newWorkDir(paths) {
+  fs.mkdirSync(paths.backupWorkDir, { recursive: true, mode: 0o700 });
+  for (const name of fs.readdirSync(paths.backupWorkDir)) {
+    const owner = /^(\d+)-/.exec(name);
+    if (owner && !isRunning(Number(owner[1]))) fs.rmSync(path.join(paths.backupWorkDir, name), { recursive: true, force: true });
+  }
+  return fs.mkdtempSync(path.join(paths.backupWorkDir, `${process.pid}-`));
+}
+
 /**
  * Make an app's bundle for `date` in the machine's nightly directory, root's alone, replacing one of
  * the same date. Everything unencrypted is written under `workDir` and removed before this returns

@@ -1,8 +1,19 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { HEALTH_ANSWER_SECONDS, HEALTH_TIME_LIMIT_SECONDS, answersHealthy } from './health.mjs';
-import { commandLines, fakeRun, machine } from './test-helpers.mjs';
+import { HEALTH_ANSWER_SECONDS, HEALTH_TIME_LIMIT_SECONDS, answersHealthy, mustAnswerHealthy } from './health.mjs';
+import { commandLines, fakeRun, machine, sink } from './test-helpers.mjs';
+
+test('a command that needs the app to answer says what it asks and for how long, and fails when no answer comes', () => {
+  const asked = 'Asking /healthz on port 3000, for 90 seconds at most\n';
+  const healthy = { run: fakeRun().run, paths: machine(), out: sink() };
+  mustAnswerHealthy(healthy, { port: 3000, healthPath: '/healthz' });
+  assert.equal(healthy.out.text, asked);
+  const silent = { run: fakeRun(() => ({ code: 124 })).run, paths: machine(), out: sink() };
+  assert.throws(() => mustAnswerHealthy(silent, { port: 3000, healthPath: '/healthz' }),
+    /^Error: \/healthz on port 3000 did not answer with success within 90 seconds$/);
+  assert.equal(silent.out.text, asked);
+});
 
 test('an app whose health path answers with success in time is healthy', () => {
   const { run, calls } = fakeRun();
