@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { stampOf } from '../releases.mjs';
 import { Interrupted } from '../run.mjs';
 import { appsMachine, backupPrograms, fakeRun, filesUnder, machine, mode, offsitePrograms, openedBundle, registered, sink } from '../test-helpers.mjs';
 import { bundleEveryApp } from './backup.mjs';
@@ -470,5 +471,72 @@ test('a storage that cannot be listed or pruned means no alive request, and the 
     assert.equal(result.err, message);
     assert.deepEqual(result.requests, [], verb);
     assert.ok(result.stored.has(`${STORAGE}/sample-2026-11-21.tar.age`), verb);
+  }
+});
+
+/** The name a deploy or a restore gave what it kept on a day, at noon unless a time is given: the machine's own time. */
+const keptOn = (year, month, day, ...time) => stampOf(new Date(year, month - 1, day, ...(time.length > 0 ? time : [12])));
+
+function holding(dir, ...names) {
+  fs.mkdirSync(dir, { recursive: true });
+  for (const name of names) fs.writeFileSync(path.join(dir, name), 'kept');
+  return names.map((name) => path.join(dir, name));
+}
+
+test('what a deploy or a restore kept before the thirty days ending today is removed for every registered app, but for the newest of each, and nothing else is touched', async () => {
+  const paths = machineWithKey('sample', 'example_app');
+  const old = [
+    ...holding(paths.deployDumps('sample'), `${keptOn(2026, 9, 1)}.dump`, `${keptOn(2026, 10, 22, 23, 59, 59)}.dump`),
+    ...holding(paths.restoreDumps('sample'), `${keptOn(2026, 8, 1)}.dump`, `${keptOn(2026, 8, 1)}.env`, `${keptOn(2026, 8, 2)}.dump`),
+  ];
+  const stays = [
+    ...holding(paths.deployDumps('sample'), `${keptOn(2026, 10, 23, 0, 0, 0)}.dump`, `${keptOn(2026, 11, 20)}.dump`, 'notes.txt', `${keptOn(2020, 1, 1)}.txt`, 'sample-2020-01-01.dump'),
+    ...holding(paths.restoreDumps('sample'), `${keptOn(2026, 9, 15)}.dump`, `${keptOn(2026, 9, 15)}.env`, 'notes.txt'),
+    ...holding(paths.deployDumps('example_app'), `${keptOn(2025, 1, 1)}.dump`),
+    ...holding(paths.deployDumps('unregistered'), `${keptOn(2020, 1, 1)}.dump`, `${keptOn(2020, 1, 2)}.dump`),
+    ...holding(paths.restoreDumps('unregistered'), `${keptOn(2020, 1, 1)}.dump`, `${keptOn(2020, 1, 2)}.dump`),
+    ...holding(paths.nightlyDir, `${keptOn(2020, 1, 1)}.dump`, `${keptOn(2020, 1, 2)}.dump`),
+    ...holding(path.join(paths.backupWorkDir, `${process.pid}-AbCdEf`), `${keptOn(2020, 1, 1)}.dump`, `${keptOn(2020, 1, 2)}.dump`),
+    ...holding(paths.backupDir, `${keptOn(2020, 1, 1)}.dump`, `${keptOn(2020, 1, 2)}.dump`),
+  ];
+  const result = await backup(paths);
+  assert.equal(result.err, '');
+  assert.equal(result.code, 0);
+  for (const file of old) assert.ok(!fs.existsSync(file), `${file} is still there`);
+  for (const file of stays) assert.ok(fs.existsSync(file), `${file} is gone`);
+  assert.deepEqual(result.out.split('\n').slice(-8), [
+    'sample: uploaded sample-2026-11-21.tar.age',
+    ...old.map((file) => `sample: removed ${file}, older than 30 days`),
+    'The alive request was made.',
+    '',
+  ]);
+});
+
+test('an app with no bundle tonight, on a machine whose uploads are not set up, still gives up what its deploys and restores kept', async () => {
+  const paths = machineWithKey('sample');
+  fs.rmSync(paths.backupStorage);
+  const [oldDump, newDump] = holding(paths.deployDumps('sample'), `${keptOn(2026, 1, 1)}.dump`, `${keptOn(2026, 1, 2)}.dump`);
+  const [oldRestore, newRestore] = holding(paths.restoreDumps('sample'), `${keptOn(2026, 1, 1)}.dump`, `${keptOn(2026, 1, 2)}.dump`);
+  const result = await backup(paths, { respond: () => ({ code: 1, stderr: 'pg_dump: failed\n' }) });
+  assert.equal(result.code, 1);
+  assert.match(result.err, /\nerror: no bundle was made for sample; uploads are not set up: [^;]+\n$/);
+  assert.deepEqual([oldDump, newDump, oldRestore, newRestore].map((file) => fs.existsSync(file)), [false, true, false, true]);
+  assert.equal(result.out, [oldDump, oldRestore].map((file) => `sample: removed ${file}, older than 30 days\n`).join(''));
+});
+
+test('a kept dump that cannot be removed means no alive request, and the run fails with what the system said, after the bundles are uploaded', { skip: process.getuid() === 0 && 'root removes a file from any directory' }, async () => {
+  const paths = machineWithKey('sample');
+  const [old] = holding(paths.deployDumps('sample'), `${keptOn(2026, 1, 1)}.dump`, `${keptOn(2026, 1, 2)}.dump`);
+  fs.chmodSync(paths.deployDumps('sample'), 0o500);
+  try {
+    const result = await backup(paths);
+    assert.equal(result.code, 1);
+    assert.match(result.err, /^error: EACCES.*\n$/);
+    assert.ok(result.err.includes(old), result.err);
+    assert.deepEqual(result.requests, []);
+    assert.ok(result.stored.has(`${STORAGE}/sample-2026-11-21.tar.age`));
+    assert.ok(fs.existsSync(old));
+  } finally {
+    fs.chmodSync(paths.deployDumps('sample'), 0o700);
   }
 });

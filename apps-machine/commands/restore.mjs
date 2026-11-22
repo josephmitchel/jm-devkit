@@ -3,8 +3,8 @@ import path from 'node:path';
 
 import { isBundle, newWorkDir, openBundle } from '../bundle.mjs';
 import { databasePassword, dumpDatabase, dumpFault, restoreDatabase, setDatabasePassword } from '../database.mjs';
-import { privateDir } from '../files.mjs';
 import { mustAnswerHealthy } from '../health.mjs';
+import { newKeptName } from '../kept.mjs';
 import { serviceName } from '../paths.mjs';
 import { registrationOf } from '../registry.mjs';
 import { deployConfigOf, stampOf } from '../releases.mjs';
@@ -121,14 +121,6 @@ function restore(world, { name, file, bundled, withSettings }) {
   } finally {
     if (workDir) fs.rmSync(workDir, { recursive: true, force: true });
   }
-}
-
-/** A name in `dir` no earlier restore has used, so a dump kept there is never written over: least of all the one being restored. */
-function newKeptName(dir, stamp) {
-  privateDir(dir);
-  let name = stamp;
-  for (let n = 2; fs.existsSync(path.join(dir, `${name}.dump`)); n += 1) name = `${stamp}-${n}`;
-  return path.join(dir, name);
 }
 
 /** The deploy section the running release was deployed with, which says where the app answers. */

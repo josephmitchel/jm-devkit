@@ -2,9 +2,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { makeBundle, newWorkDir, parseBundleName, publicKeyIsSet } from '../bundle.mjs';
+import { keptByDeploys, keptByRestores } from '../kept.mjs';
 import { aliveAddressOf, bundlesOnStorage, removeFromStorage, requestAlive, storageOf, uploadBundle } from '../offsite.mjs';
 import { readRegistry } from '../registry.mjs';
-import { DAYS_KEPT_ON_MACHINE, expiredOnMachine, expiredOnStorage } from '../retention.mjs';
+import { DAYS_KEPT_DUMPS_LAST, DAYS_KEPT_ON_MACHINE, expiredKeptDumps, expiredOnMachine, expiredOnStorage } from '../retention.mjs';
 import { Interrupted } from '../run.mjs';
 import { UsageError } from '../usage.mjs';
 
@@ -83,6 +84,19 @@ function pruneStorage(world, storage, uploaded, today) {
   }
 }
 
+/** What the deploys and the restores of every registered app kept goes after its thirty days, whether or not the app has a bundle tonight. */
+function removeExpiredKept({ paths, out }, today) {
+  for (const { name: app } of readRegistry(paths)) {
+    for (const kept of [keptByDeploys(paths, app), keptByRestores(paths, app)]) {
+      const dated = kept.map((one) => ({ ...one, date: localDate(one.time) }));
+      for (const file of expiredKeptDumps(dated, today).flatMap((one) => one.files)) {
+        fs.rmSync(file);
+        out.write(`${app}: removed ${file}, older than ${DAYS_KEPT_DUMPS_LAST} days\n`);
+      }
+    }
+  }
+}
+
 /** The request whose absence is the alarm: made only by a night in which nothing went wrong. */
 function sayAlive(world) {
   const address = aliveAddressOf(world.paths);
@@ -107,6 +121,11 @@ export function command(args, world) {
     pruneStorage(world, storage, uploaded, night.date);
   } catch (e) {
     if (e instanceof Interrupted) throw e;
+    problems.push(e.message);
+  }
+  try {
+    removeExpiredKept(world, night.date);
+  } catch (e) {
     problems.push(e.message);
   }
   if (problems.length > 0) throw new Error(problems.join('; '));

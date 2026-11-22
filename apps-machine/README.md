@@ -47,8 +47,8 @@ The Node and Postgres versions, and the other steps this script shares with the 
 | `/var/lib/apps-machine/backups/` | Database dumps and backup bundles, root's alone (mode 0700). |
 | `/var/lib/apps-machine/backups/nightly/` | The nights' encrypted bundles, `<name>-<date>.tar.age`. The backup removes an app's after seven days. |
 | `/var/lib/apps-machine/backups/work/` | A directory per backup run or restore for what is unencrypted on the way, removed when the run ends. Empty between runs. |
-| `/var/lib/apps-machine/backups/deploys/<name>/` | The dump each deploy of an app took before it changed anything, as `<time>.dump`. Nothing removes these. |
-| `/var/lib/apps-machine/backups/restores/<name>/` | What each restore of an app replaced: the database as `<time>.dump`, and the settings file as `<time>.env` when `--settings` replaced it. Nothing removes these. |
+| `/var/lib/apps-machine/backups/deploys/<name>/` | The dump each deploy of an app took before it changed anything, as `<time>.dump`. The backup removes them after thirty days, but for the newest. |
+| `/var/lib/apps-machine/backups/restores/<name>/` | What each restore of an app replaced: the database as `<time>.dump`, and the settings file as `<time>.env` when `--settings` replaced it. The backup removes them after thirty days, but for the newest. |
 | `/etc/sudoers.d/apps-machine-logs` | The rule that lets the admin account run `apps-machine logs` without a password. The setup script writes it. |
 
 ## The commands
@@ -127,7 +127,7 @@ It ends with `<name> is running <commit>.`
 
 A release is a directory in `/var/lib/apps-machine/apps/<name>/releases/`, named for when its deploy began (UTC) and its commit: `20261121T143005Z-<commit>`. Beside it, `<that name>.json` is root's record of the `deploy` section it was deployed with. The release is a shallow clone, so a project's commands can ask git which commit they are building. Once it is the app's, root runs no git in it.
 
-The dump has the time of its deploy's release in its name. It is in `pg_dump`'s custom format, for `pg_restore`. No command removes these dumps: clear old ones by hand.
+The dump has the time of its deploy's release in its name. It is in `pg_dump`'s custom format, for `pg_restore`. The nightly backup removes these dumps once they are thirty days old, always leaving the newest: the rule is "What a deploy or a restore kept" under `backup`.
 
 The health check gives the app 90 seconds from its start. It asks again every second, gives each ask 30 seconds to be answered, and takes only a 2xx status as success: a redirect is not. The service restarts an app that exits, five seconds later, so an app that fails at start is tried again within the limit.
 
@@ -188,6 +188,7 @@ The private key is never on the machine, so the machine can make a bundle and ca
 - Seven days of bundles are kept. Once an app has its bundle for the night, its bundles dated before the seven days ending today are removed. An app whose bundle was not made keeps the ones it has.
 - Each bundle made is then uploaded to the storage under its own name. One that does not upload does not stop the others: the run prints what `rclone` said, and exits 1 naming every app whose bundle is not on the storage.
 - Only the night's own bundles are uploaded. A bundle that did not upload is not tried again by a later night: it stays on the machine for its seven days, and running `sudo apps-machine backup` again the same day makes and uploads that day's bundles afresh.
+- What the deploys and the restores of each registered app kept is removed after thirty days ("What a deploy or a restore kept", below).
 - The alive request is made last, once, and only by a night in which nothing went wrong. Its absence is the alarm.
 
 #### The storage
@@ -227,6 +228,18 @@ On the storage each app keeps the bundles of the thirty days ending today, and t
 
 As on the machine, an app's old bundles go only once tonight's is on the storage. An app that is no longer registered keeps what it has there, and nothing in the folder that is not a bundle is touched. If the storage cannot be listed or a bundle cannot be removed, the run says so and exits 1.
 
+#### What a deploy or a restore kept
+
+A deploy dumps the database before it changes anything, into `/var/lib/apps-machine/backups/deploys/<name>/`, and a restore keeps what it replaced in `/var/lib/apps-machine/backups/restores/<name>/`. Each night's run, after the uploads, removes from both directories of every registered app what was kept before the thirty days ending today, and prints each file it removes.
+
+- The newest in each directory always stays, however old: an app deployed once a year still has the dump of its last deploy.
+- A restore's dump and the settings file kept with it, `<time>.dump` and `<time>.env`, are one thing: they stay or go together.
+- It runs for every registered app, whether or not the app has a bundle tonight and whether or not uploads are set up. These files are not copies of the night's bundle, so a night that failed has no reason to hold them.
+- Only files these commands name are removed: `<time>.dump` in the first directory, and `<time>.dump` and `<time>.env` in the second, with the `<time>-2` a second restore in one second is named. Anything else there is left alone, as are the directories of an app that is no longer registered.
+- A file that cannot be removed fails the run: it exits 1 with what the system said, and makes no alive request. The night's bundles are made and uploaded before this.
+
+A file's age is the time in its name, taken as the machine's local date, as the bundles' dates are.
+
 #### The alive request
 
 A machine that is off or broken cannot report its own failure, so a missed night is noticed from outside: after a night in which nothing went wrong, the run requests an address once, and a service that expects that request each day tells the owner when it has not come.
@@ -242,7 +255,7 @@ The file holds one line, the `https` address the service gave for this check; li
 - tell the owner by a way that reaches him off the machine, such as mail or a notification on his phone, when the request is overdue;
 - run somewhere that does not go down with the owner's machines.
 
-The request is not made when an app has no bundle for the night, when a bundle did not upload, when uploads are not set up, or when the storage could not be pruned. So an alert means: read `journalctl -u apps-machine-backup.service`. With no app registered there is nothing to back up, and the request is made.
+The request is not made when an app has no bundle for the night, when a bundle did not upload, when uploads are not set up, when the storage could not be pruned, or when something a deploy or a restore kept could not be removed. So an alert means: read `journalctl -u apps-machine-backup.service`. With no app registered there is nothing to back up, and the request is made.
 
 With no address set the backup runs, warns that nothing is watching it and exits 0. If the request itself fails, the run exits 1 and says so.
 
@@ -378,7 +391,7 @@ The dump taken before the database is replaced is `/var/lib/apps-machine/backups
 sudo apps-machine restore sample /var/lib/apps-machine/backups/restores/sample/20261121T143005Z.dump
 ```
 
-With `--settings`, the settings file that was replaced is kept beside it as `<time>.env`; putting that back is `sudo install -m 600 <that file> /etc/apps-machine/settings/<name>.env`. Nothing removes these files, the seven-day rule included: remove them by hand once the restore is known to be right.
+With `--settings`, the settings file that was replaced is kept beside it as `<time>.env`; putting that back is `sudo install -m 600 <that file> /etc/apps-machine/settings/<name>.env`. The nightly backup removes what a restore kept once it is thirty days old, a dump and its settings file together, always leaving the newest: the rule is "What a deploy or a restore kept" under `backup`.
 
 #### When it fails part-way
 
@@ -419,6 +432,6 @@ For whoever changes the commands. They are plain Node modules with no dependenci
 - `health.mjs` asks an app's health path until it answers or the time limit passes, and `loopback.mjs` checks who listens on an app's port and where the app's user listens.
 - `vm/verify-units.sh` puts the backup's service and timer, and an app's service as `service.mjs` writes it, through `systemd-analyze verify`. CI runs it, and it runs anywhere systemd is, without sudo.
 - `commands/deploy.mjs` is a list of named steps, `STEPS`, each a function of the world and the deploy so far, with what the command does when that step fails. `deployPrograms` in the test helpers stands in for the programs a deploy runs. A test holds the two tables under "deploy" above to `STEPS`.
-- `bundle.mjs` names, makes and opens a backup bundle, says whether the public key is set, and makes a run's own work directory. `retention.mjs` is the two rules for which bundles are given up, on the machine and on the storage, as functions of a list of bundles and today's date.
+- `bundle.mjs` names, makes and opens a backup bundle, says whether the public key is set, and makes a run's own work directory. `retention.mjs` is the rules for what is given up, as functions of a dated list and today's date: which bundles, on the machine and on the storage, and which of what a deploy or a restore kept. `kept.mjs` names and lists what a deploy or a restore kept.
 - `offsite.mjs` reads where the bundles go and the alive address, uploads, lists and removes bundles on the storage with `rclone`, and makes the alive request with `curl`.
-- `commands/backup.mjs` bundles every app, uploads, prunes and makes the alive request; `commands/restore.mjs` checks the file and the app, then stops, dumps, replaces and starts; `commands/logs.mjs` hands the app's journal to the terminal.
+- `commands/backup.mjs` bundles every app, uploads, prunes the bundles and what deploys and restores kept, and makes the alive request; `commands/restore.mjs` checks the file and the app, then stops, dumps, replaces and starts; `commands/logs.mjs` hands the app's journal to the terminal.

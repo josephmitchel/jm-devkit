@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { GITHUB_HOST_KEYS } from './github-host-keys.mjs';
-import { KEPT_RELEASES, commitOf, deployConfigOf, fetchDefaultBranch, makeRelease, projectConfigAt, pruneReleases, releasesOf, stampOf } from './releases.mjs';
+import { KEPT_RELEASES, commitOf, deployConfigOf, fetchDefaultBranch, makeRelease, projectConfigAt, pruneReleases, releasesOf, stampOf, timeOfStamp } from './releases.mjs';
 import { run as realRun } from './run.mjs';
 import { pointServiceAt, servicePointsAt } from './service.mjs';
 import { DEPLOY_SECTION as CONFIG, commandLines, fakeRun, machine, mode, registered, tempDir } from './test-helpers.mjs';
@@ -34,6 +34,14 @@ test('a release is named for when its deploy began and the commit it holds', () 
   assert.equal(commitOf(release), A);
   assert.ok(fs.statSync(release).isDirectory());
   assert.ok(!fs.existsSync(checkout));
+});
+
+test('a stamp gives back the time it was made at, and nothing else is read as one', () => {
+  assert.deepEqual(timeOfStamp('20261121T143005Z'), new Date('2026-11-21T14:30:05Z'));
+  assert.deepEqual(timeOfStamp(stampOf(new Date('2024-02-29T23:59:59.999Z'))), new Date('2024-02-29T23:59:59Z'));
+  for (const name of ['', '2026-11-21', '20261121T143005', '20261121T143005Z-2', 'x20261121T143005Z', '20261321T143005Z', '20260230T143005Z', '20261121T250000Z', '20261121t143005z']) {
+    assert.equal(timeOfStamp(name), null, name);
+  }
 });
 
 test('a release is handed to the app\'s user whole, and its directory stays closed to other users', () => {

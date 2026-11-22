@@ -1,5 +1,6 @@
 // Which backup bundles are given up, as rules over a list of dated bundles: a bundle is anything
-// with a `date` of the form YYYY-MM-DD, and each rule returns the ones to remove.
+// with a `date` of the form YYYY-MM-DD, and each rule returns the ones to remove. The last rule is
+// the same over what a deploy or a restore kept.
 
 export const DAYS_KEPT_ON_MACHINE = 7;
 
@@ -40,4 +41,17 @@ export function expiredOnStorage(bundles, today) {
   }
   const isMonthly = (bundle) => monthOf(bundle.date) >= oldestMonth && firstOfMonth.get(monthOfApp(bundle)) === bundle.date;
   return bundles.filter((bundle) => bundle.date < oldestNightly && !isMonthly(bundle));
+}
+
+export const DAYS_KEPT_DUMPS_LAST = 30;
+
+/**
+ * What a deploy or a restore kept of one app that is given up: what is dated before the thirty
+ * days that end with `today`, but never the newest, which among those of the latest date is the
+ * last in the order given.
+ */
+export function expiredKeptDumps(kept, today) {
+  const oldestKept = daysBefore(today, DAYS_KEPT_DUMPS_LAST - 1);
+  const newest = kept.reduce((latest, one) => (latest && latest.date > one.date ? latest : one), undefined);
+  return kept.filter((one) => one.date < oldestKept && one !== newest);
 }

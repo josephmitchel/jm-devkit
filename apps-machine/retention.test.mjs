@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { expiredOnMachine, expiredOnStorage } from './retention.mjs';
+import { expiredKeptDumps, expiredOnMachine, expiredOnStorage } from './retention.mjs';
 
 const dated = (...dates) => dates.map((date) => ({ app: 'sample', date }));
 const dates = (bundles) => bundles.map((bundle) => bundle.date);
@@ -63,4 +63,18 @@ test('each app has its own first bundle of a month, and the storage rule gives b
   const bundles = [...named('sample', '2026-09-01', '2026-09-05', '2026-09-06'), ...named('example_app', '2026-09-05', '2026-09-06')];
   assert.deepEqual(expiredOnStorage(bundles, '2026-11-21'), [bundles[1], bundles[2], bundles[4]]);
   assert.deepEqual(expiredOnStorage([], '2026-11-21'), []);
+});
+
+test('what a deploy or a restore kept is given up once it is dated before the thirty days ending today', () => {
+  const kept = dated('2026-09-30', '2026-10-22', '2026-10-23', '2026-11-20', '2026-11-21');
+  assert.deepEqual(dates(expiredKeptDumps(kept, '2026-11-21')), ['2026-09-30', '2026-10-22']);
+  assert.deepEqual(dates(expiredKeptDumps(dated('2026-01-31', '2026-02-01', '2026-03-02'), '2026-03-02')), ['2026-01-31']);
+});
+
+test('the newest of what was kept is never given up, however old, and the rest of its day goes with the older ones', () => {
+  assert.deepEqual(dates(expiredKeptDumps(dated('2025-01-01', '2026-03-01', '2026-06-30'), '2026-11-21')), ['2025-01-01', '2026-03-01']);
+  assert.deepEqual(expiredKeptDumps(dated('2020-01-01'), '2026-11-21'), []);
+  assert.deepEqual(expiredKeptDumps([], '2026-11-21'), []);
+  const sameDay = [{ date: '2026-06-30', name: 'first' }, { date: '2026-06-30', name: 'second' }, { date: '2026-06-01', name: 'earlier' }];
+  assert.deepEqual(expiredKeptDumps(sameDay, '2026-11-21'), [sameDay[0], sameDay[2]]);
 });

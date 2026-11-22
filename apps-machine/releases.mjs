@@ -14,18 +14,26 @@ import { servicePointsAt } from './service.mjs';
 /** How many releases a deploy leaves: the one it made and the two before it. */
 export const KEPT_RELEASES = 3;
 
-const RELEASE = /^\d{8}T\d{6}Z-([0-9a-f]{40,64})$/;
+const STAMP = String.raw`(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z`;
+const RELEASE = new RegExp(`^${STAMP}-(?<commit>[0-9a-f]{40,64})$`);
 
 /** The time a deploy began, as its release and its dump are named: `20261121T143005Z`. */
 export function stampOf(date) {
   return date.toISOString().replace(/[-:]|\.\d+/g, '');
 }
 
+/** The time a stamp was made at, to the second: null for anything `stampOf` could not have written. */
+export function timeOfStamp(stamp) {
+  const [, year, month, day, hour, minute, second] = new RegExp(`^${STAMP}$`).exec(stamp) ?? [];
+  const time = new Date(`${year}-${month}-${day}T${hour}:${minute}:${second}Z`);
+  return !Number.isNaN(time.getTime()) && stampOf(time) === stamp ? time : null;
+}
+
 /** The commit a release holds. */
 export function commitOf(release) {
   const named = RELEASE.exec(path.basename(release));
   if (!named) throw new Error(`${release} is not a release`);
-  return named[1];
+  return named.groups.commit;
 }
 
 /** An app's release directories, oldest first. */
