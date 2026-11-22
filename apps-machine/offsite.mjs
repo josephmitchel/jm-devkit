@@ -43,11 +43,11 @@ export function uploadBundle(world, storage, { app, name, file }) {
   if (done.code !== 0) throw new Error(`could not upload ${app}'s bundle: ${done.stderr.trim()}`);
 }
 
-/** The bundles on the storage, as `parseBundleName` gives them. Anything there that is not a bundle is passed over. */
+/** The bundles on the storage by name, as `parseBundleName` gives them. Anything there that is not a bundle is passed over. */
 export function bundlesOnStorage(world, storage) {
   const done = rclone(world, 'lsf', ['--files-only', storage]);
   if (done.code !== 0) throw new Error(`could not list the bundles on the storage: ${done.stderr.trim()}`);
-  return done.stdout.split('\n').map(parseBundleName).filter(Boolean);
+  return done.stdout.split('\n').sort().map(parseBundleName).filter(Boolean);
 }
 
 export function removeFromStorage(world, storage, { name }) {

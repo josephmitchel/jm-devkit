@@ -8,7 +8,7 @@ import { expiredOnMachine, expiredOnStorage } from '../retention.mjs';
 import { UsageError } from '../usage.mjs';
 
 export const usage = 'apps-machine backup';
-export const summary = 'bundle every app\'s database and settings file for the night, encrypted to the owner\'s public key';
+export const summary = 'bundle every app\'s database and settings file for the night, encrypted to the owner\'s public key, and upload the bundles';
 
 const localDate = (at) => [at.getFullYear(), at.getMonth() + 1, at.getDate()].map((part) => String(part).padStart(2, '0')).join('-');
 
@@ -92,7 +92,7 @@ function uploadEach(world, storage, bundles) {
 function pruneStorage(world, storage, uploaded, today) {
   if (uploaded.length === 0) return;
   const apps = new Set(uploaded.map((bundle) => bundle.app));
-  const stored = bundlesOnStorage(world, storage).filter((bundle) => apps.has(bundle.app)).sort((a, b) => (a.name < b.name ? -1 : 1));
+  const stored = bundlesOnStorage(world, storage).filter((bundle) => apps.has(bundle.app));
   for (const bundle of expiredOnStorage(stored, today)) {
     removeFromStorage(world, storage, bundle);
     world.out.write(`${bundle.app}: removed ${bundle.name} from the storage\n`);

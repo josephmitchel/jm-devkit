@@ -92,7 +92,7 @@ Running the command again with the same arguments changes nothing: no new key, n
 sudo apps-machine backup
 ```
 
-Makes the night's bundle of every registered app. A timer runs it each night; the owner can run it by hand at any time.
+Makes the night's bundle of every registered app, uploads each bundle to the owner's storage, and, when nothing went wrong, makes the alive request. A timer runs it each night; the owner can run it by hand at any time.
 
 For each app it dumps the database, copies the settings file as it is, puts the two in one bundle with a note of the app and the date, and encrypts the bundle with `age` to the owner's public key. The bundle is `/var/lib/apps-machine/backups/nightly/<name>-<YYYY-MM-DD>.tar.age`, root's alone (mode 0600). The date is the machine's local date, and a second run on the same date replaces that date's bundle.
 
@@ -101,6 +101,66 @@ The private key is never on the machine, so the machine can make a bundle and ca
 - Everything unencrypted is written in the run's own directory under `/var/lib/apps-machine/backups/work/`, which is removed when the run ends, including when it fails. What a run that was killed left there is removed by the next run.
 - One app failing does not stop the others. The run prints what went wrong for that app, makes the other bundles, and exits 1 naming every app that has no bundle for the night.
 - Seven days of bundles are kept. Once an app has its bundle for the night, its bundles dated before the seven days ending today are removed. An app whose bundle was not made keeps the ones it has.
+- Each bundle made is then uploaded to the storage under its own name. One that does not upload does not stop the others: the run prints what `rclone` said, and exits 1 naming every app whose bundle is not on the storage.
+- The alive request is made last, once, and only by a night in which nothing went wrong. Its absence is the alarm.
+
+#### The storage
+
+Where the bundles go is set by hand in two files only root can read. Neither value is ever given on a command line, the setup script's included: `sudo` logs its command line.
+
+```
+sudo rclone config --config /etc/apps-machine/rclone.conf
+sudoedit /etc/apps-machine/backup-storage
+```
+
+The first defines a remote: `rclone` asks for the kind of storage and its credential, and keeps both in that file. The second holds one line, `<remote>:<folder>`, naming that remote and the folder in it the bundles go to; lines starting `#` are comments. Then run `sudo apps-machine backup` and look for the bundles:
+
+```
+sudo rclone lsf --config /etc/apps-machine/rclone.conf <remote>:<folder>
+```
+
+The command never reads the credential. It gives `rclone` the path of the config file and the destination, and nothing else. The destination must name a remote from the config file: one that spells a remote out with its own settings, which `rclone` also accepts, is refused, because the credential would then be in a program's arguments, and every user on the machine can read those. `rclone` only obscures what it keeps in its config file, so the file's mode (0600, in a directory of root's alone) is what protects the credential.
+
+Until both files are there the run makes the bundles, keeps them on the machine, says uploads are not set up and exits 1. A bundle that is uploaded replaces one of the same name, and `rclone` compares checksums after the transfer where the storage has them.
+
+Ubuntu's `rclone` is older than `rclone`'s own releases. A storage it does not know needs `rclone`'s own package in its place.
+
+##### The credential
+
+Give the machine a credential of its own, confined to that one folder where the storage provider allows it. It needs to list, read, write and delete there, and nothing anywhere else. What can be had depends on the kind of storage:
+
+- Object storage whose keys can be limited to one bucket, or to a prefix in one: a bucket for the backups alone, and a key that can do those four things in it and nothing else. A key that may not create buckets needs `no_check_bucket` set on the remote.
+- A machine of the owner's reached over SFTP: an account for the apps machine alone, entered by a key, and confined by the SSH server to one directory.
+- A drive entered by signing in through a browser: some let an application be limited to a folder of its own or to the files it made, and that limit is the one to choose. Where signing in gives the whole drive, the credential reaches every file in the account, so use an account that holds nothing but the backups.
+
+Two things are left exposed whatever the provider. The credential can delete, because pruning needs it to, so whoever takes over the machine can remove or overwrite the bundles on the storage: where the provider can keep removed and overwritten files for a time, set that from the owner's own account, which the machine's credential cannot change. And they can see each bundle's name, date and size. They cannot read a bundle, on the storage or on the machine: the private key is on neither.
+
+##### What is kept
+
+On the storage each app keeps the bundles of the thirty days ending today, and the first bundle of each of the twelve months ending with this one. A month's first bundle is the earliest it has, so a month whose first night was missed still keeps one. The rest are removed, and the run prints each removal.
+
+As on the machine, an app's old bundles go only once tonight's is on the storage. An app that is no longer registered keeps what it has there, and nothing in the folder that is not a bundle is touched. If the storage cannot be listed or a bundle cannot be removed, the run says so and exits 1.
+
+#### The alive request
+
+A machine that is off or broken cannot report its own failure, so a missed night is noticed from outside: after a night in which nothing went wrong, the run requests an address once, and a service that expects that request each day tells the owner when it has not come.
+
+```
+sudoedit /etc/apps-machine/backup-alive-address
+```
+
+The file holds one line, the `https` address the service gave for this check; lines starting `#` are comments. The service must:
+
+- give an address of its own for one check, which a plain `GET` satisfies;
+- be told how often to expect the request and how long to wait past that: every day, and a few hours' grace for the length of the run and for a night caught up after the machine was off;
+- tell the owner by a way that reaches him off the machine, such as mail or a notification on his phone, when the request is overdue;
+- run somewhere that does not go down with the owner's machines.
+
+The request is not made when an app has no bundle for the night, when a bundle did not upload, when uploads are not set up, or when the storage could not be pruned. So an alert means: read `journalctl -u apps-machine-backup.service`. With no app registered there is nothing to back up, and the request is made.
+
+With no address set the backup runs, warns that nothing is watching it and exits 0. If the request itself fails, the run exits 1 and says so.
+
+Anyone who has the address can make the request and keep the alarm quiet, so it is kept as the credential is: in a file of root's, given to `curl` on its input and never as an argument, and printed nowhere. What `curl` says is not printed either, since its messages name the address's host; a failed request is reported by `curl`'s exit code, which `man curl` explains.
 
 #### The public key
 
