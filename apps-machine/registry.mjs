@@ -7,7 +7,16 @@ import { privateDir, replaceFile } from './files.mjs';
 import { UsageError } from './usage.mjs';
 
 const NAME = /^(?!pg_)[a-z][a-z0-9_]{0,30}$/;
-const REPOSITORY = /^git@github\.com:[A-Za-z0-9-]+\/[A-Za-z0-9._-]+\.git$/;
+const REPOSITORY = /^git@github\.com:([A-Za-z0-9-]+\/[A-Za-z0-9._-]+)\.git$/;
+
+/** Whether `name` can be an app's: it is safe unquoted in a path, a unit's name, a shell word and SQL. */
+export const isAppName = (name) => typeof name === 'string' && NAME.test(name);
+
+/** `<owner>/<name>` of a repository given by its GitHub SSH address, or null when it is not one. */
+export const repositoryOnGitHub = (repository) => (typeof repository === 'string' ? REPOSITORY.exec(repository)?.[1] ?? null : null);
+
+/** Whether `port` is a port number: the rule for a Serve port, and the project config's schema's for a deploy section's `port`. */
+export const isPort = (port) => Number.isInteger(port) && port >= 1 && port <= 65535;
 
 /** Every registration, by name. A machine with none, or never registered on, has `[]`. */
 export function readRegistry(paths) {
@@ -27,7 +36,7 @@ export function readRegistry(paths) {
 
 /** The registration of the app named `name`. Throws when there is none. */
 export function registrationOf(paths, name) {
-  const found = NAME.test(name) && fs.existsSync(paths.registration(name));
+  const found = isAppName(name) && fs.existsSync(paths.registration(name));
   if (!found) throw new Error(`no app named ${name} is registered on this machine`);
   return readRegistration(paths, name);
 }
@@ -37,13 +46,13 @@ export function registrationOf(paths, name) {
  * or port that cannot be one, and an Error for a port another app has.
  */
 export function checkRegistration(paths, { name, repository, servePort }) {
-  if (typeof name !== 'string' || !NAME.test(name)) {
+  if (!isAppName(name)) {
     throw new UsageError('an app\'s name is a lowercase letter, then lowercase letters, digits or underscores, 31 characters at most and not starting pg_: it names a Linux user and a database');
   }
-  if (typeof repository !== 'string' || !REPOSITORY.test(repository)) {
+  if (repositoryOnGitHub(repository) === null) {
     throw new UsageError('a repository is given by its GitHub SSH address: git@github.com:<owner>/<name>.git');
   }
-  if (!Number.isInteger(servePort) || servePort < 1 || servePort > 65535) {
+  if (!isPort(servePort)) {
     throw new UsageError('a Serve port is a whole number from 1 to 65535');
   }
   const holder = readRegistry(paths).find((other) => other.servePort === servePort && other.name !== name);

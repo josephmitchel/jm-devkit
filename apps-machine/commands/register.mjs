@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import { createAppUser, linuxNameTaken } from '../app-user.mjs';
 import { createDatabase, databaseNameTaken, setDatabasePassword } from '../database.mjs';
 import { privateDir } from '../files.mjs';
-import { checkRegistration, readRegistry, writeRegistration } from '../registry.mjs';
+import { checkRegistration, readRegistry, repositoryOnGitHub, writeRegistration } from '../registry.mjs';
 import { must } from '../run.mjs';
 import { installService } from '../service.mjs';
 import { writeSettings } from '../settings.mjs';
@@ -40,7 +40,7 @@ export function command(args, world) {
     `  ${publicKey}`,
     '',
     'Left to do:',
-    `  1. On GitHub, add that key to ${repository.slice('git@github.com:'.length, -'.git'.length)} under Settings, Deploy keys, without write access.`,
+    `  1. On GitHub, add that key to ${repositoryOnGitHub(repository)} under Settings, Deploy keys, without write access.`,
     `  2. Add the app's other settings to its settings file, which has its DATABASE_URL: sudoedit ${paths.settingsFile(name)}`,
     `  3. Deploy it: sudo apps-machine deploy ${name}`,
     `     The deploy maps Serve port ${wanted.servePort} to the port in the project's deploy section.`,

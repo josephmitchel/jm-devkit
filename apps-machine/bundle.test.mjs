@@ -14,7 +14,8 @@ test('a bundle is named for its app and its date, and the name reads back', () =
 });
 
 test('a name that is not a bundle\'s reads back as nothing', () => {
-  for (const name of ['sample-2026-11-21.tar', 'sample-2026-11-21.tar.age.new', 'sample.tar.age', 'sample-20261121.tar.age', '-2026-11-21.tar.age', 'Sample-2026-11-21.tar.age', 'notes.txt']) {
+  const notAnApp = ['pg_sample-2026-11-21.tar.age', `${'a'.repeat(32)}-2026-11-21.tar.age`];
+  for (const name of ['sample-2026-11-21.tar', 'sample-2026-11-21.tar.age.new', 'sample.tar.age', 'sample-20261121.tar.age', '-2026-11-21.tar.age', 'Sample-2026-11-21.tar.age', 'notes.txt', ...notAnApp]) {
     assert.equal(parseBundleName(name), null, name);
   }
 });

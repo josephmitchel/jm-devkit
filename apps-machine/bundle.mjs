@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { dumpDatabase } from './database.mjs';
+import { isAppName } from './registry.mjs';
 import { must } from './run.mjs';
 import { privateDir, valueLines } from './files.mjs';
 import { readSettingsFile } from './settings.mjs';
@@ -18,15 +19,15 @@ export const BUNDLE_FORMAT = 1;
  */
 export const BUNDLE_FILES = { manifest: 'bundle.json', dump: 'database.dump', settings: 'settings.env' };
 
-const NAME = /^([a-z][a-z0-9_]*)-(\d{4}-\d{2}-\d{2})\.tar\.age$/;
+const NAME = /^(.+)-(\d{4}-\d{2}-\d{2})\.tar\.age$/;
 
 /** The file name of an app's bundle for a date (YYYY-MM-DD). Decrypted, it is the same name without `.age`. */
 export const bundleName = (app, date) => `${app}-${date}.tar.age`;
 
 /** `{ name, app, date }` of a bundle's file name, or null when the name is not a bundle's. */
 export function parseBundleName(name) {
-  const match = NAME.exec(name);
-  return match && { name, app: match[1], date: match[2] };
+  const [, app, date] = NAME.exec(name) ?? [];
+  return isAppName(app) ? { name, app, date } : null;
 }
 
 /** Whether the owner's public key is on the machine: its file has a line that is not a comment. Whether that line is a key is `age`'s to say. */

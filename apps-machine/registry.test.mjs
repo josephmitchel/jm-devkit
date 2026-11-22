@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { readRegistry, registrationOf, writeRegistration } from './registry.mjs';
+import { devkitSchema } from '../plugin/devkit-config.mjs';
+import { isAppName, isPort, readRegistry, registrationOf, repositoryOnGitHub, writeRegistration } from './registry.mjs';
 import { machine } from './test-helpers.mjs';
 import { UsageError } from './usage.mjs';
 
@@ -96,4 +97,18 @@ test('a registration under another app\'s name is refused, naming the file', () 
   writeRegistration(paths, sample);
   fs.renameSync(paths.registration('sample'), paths.registration('example_app'));
   assert.throws(() => readRegistry(paths), /example_app\.json is not the registration of an app named example_app/);
+});
+
+test('a port is a whole number in the range the project config\'s schema gives a deploy section\'s port', () => {
+  const { minimum, maximum } = devkitSchema().properties.deploy.properties.port;
+  assert.deepEqual([minimum, maximum], [1, 65535]);
+  for (const port of [minimum, 8443, maximum]) assert.equal(isPort(port), true, String(port));
+  for (const port of [minimum - 1, maximum + 1, 80.5, '8443', NaN, undefined]) assert.equal(isPort(port), false, String(port));
+});
+
+test('an app\'s name and a repository\'s place on GitHub are read by the rules a registration is checked with', () => {
+  for (const name of ['sample', 'example_app2', 'a'.repeat(31)]) assert.equal(isAppName(name), true, name);
+  for (const name of ['', 'Sample', '2fast', 'example-app', 'pg_sample', 'a'.repeat(32), undefined]) assert.equal(isAppName(name), false, String(name));
+  assert.equal(repositoryOnGitHub('git@github.com:example/example-app.git'), 'example/example-app');
+  assert.equal(repositoryOnGitHub('https://github.com/example/example-app.git'), null);
 });
