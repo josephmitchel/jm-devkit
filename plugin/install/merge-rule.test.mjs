@@ -278,27 +278,35 @@ test('without admin rights a rule that is weaker and lacks a check gets no comma
   }
 });
 
-test('a ruleset that covers more than the default branch is judged but never written to, and no command is given for it', () => {
-  const everyBranch = { ref_name: { exclude: [], include: ['~ALL'] } };
+test('a ruleset that covers more than the default branch is the rule only when whole: short of that the rule is missing, and the broad ruleset is never written to', () => {
+  const allBranches = { ref_name: { exclude: [], include: ['~ALL'] } };
   const releasesToo = { ref_name: { exclude: [], include: ['refs/heads/main', 'refs/heads/release/*'] } };
   for (const admin of [true, false]) {
-    for (const [conditions, rules, named] of [
-      [everyBranch, [{ type: 'deletion' }], 'it allows force-pushes; it does not require a pull request; it does not require the CI checks unit, lint'],
-      [releasesToo, without('required_status_checks'), 'it does not require the CI checks unit, lint'],
-      [releasesToo, [...without('required_status_checks'), statusChecks('unit')], 'it does not require the CI checks lint'],
+    for (const changes of [
+      { conditions: allBranches, rules: [{ type: 'deletion' }] },
+      { conditions: releasesToo, rules: without('required_status_checks') },
+      { conditions: releasesToo, rules: [...without('required_status_checks'), statusChecks('unit')] },
+      { conditions: allBranches, enforcement: 'disabled' },
     ]) {
-      const { gh, calls } = projectWith({ admin, rulesets: [ruleset({ conditions, rules })] });
-      assert.deepEqual(run([REPO], gh), {
-        code: 0,
-        out:
-          `The merge rule of owner/project (the ruleset "main merge gate") is weaker than the kit's: ${named}. ` +
-          'It covers more than the default branch, so install and sync do not change it: put these right at https://github.com/owner/project/rules/7\n',
-        err: '',
-      });
-      assert.deepEqual(writes(calls), []);
+      const { gh, calls } = projectWith({ admin, rulesets: [ruleset(changes)] });
+      const result = run([REPO], gh);
+      assert.equal(result.code, 0);
+      if (admin) {
+        assert.equal(result.out, 'create merge rule: requires the CI checks unit, lint\n');
+        assert.deepEqual(writes(calls).map((call) => call.args.slice(2, 4)), [['POST', `repos/${REPO}/rulesets`]]);
+        assert.deepEqual(JSON.parse(writes(calls)[0].input), CREATED);
+      } else {
+        const [said, command, ...rest] = result.out.trimEnd().split('\n');
+        assert.deepEqual(rest, []);
+        assert.match(said, /^owner\/project has no merge rule on its default branch, /);
+        assert.deepEqual(JSON.parse(command.match(/^printf '%s' '(.*)' \| gh api --method POST repos\/owner\/project\/rulesets --input -$/)[1]), CREATED);
+        assert.deepEqual(writes(calls), []);
+      }
     }
     const whole = ruleset({ conditions: releasesToo });
-    assert.match(run([REPO], projectWith({ admin, rulesets: [whole] }).gh).out, /^in place/);
+    const { gh, calls } = projectWith({ admin, rulesets: [whole] });
+    assert.match(run([REPO], gh).out, /^in place/);
+    assert.deepEqual(writes(calls), []);
   }
 });
 
@@ -375,14 +383,14 @@ test('a ruleset in force is judged before a whole one that is not: a disabled dr
   }
 });
 
-test('among rulesets in force, one for the default branch alone is judged before a broader one, then the one that lacks least', () => {
+test('a broader ruleset that falls short is passed over for one for the default branch alone; among those, the one that lacks least is judged', () => {
   const lacking = without('required_status_checks');
   const broad = ruleset({ id: 1, name: 'all branches', conditions: everyBranch, rules: lacking });
   const own = ruleset({ id: 2, name: 'default branch', rules: without('deletion', lacking) });
   for (const rulesets of [[broad, own], [own, broad]]) {
     const { gh, calls } = projectWith({ rulesets });
     assert.equal(judged(run([REPO], gh).out), 'default branch');
-    assert.equal(writes(calls)[0].args[3], `repos/${REPO}/rulesets/2`);
+    assert.deepEqual(writes(calls).map((call) => call.args[3]), [`repos/${REPO}/rulesets/2`]);
   }
   const closer = ruleset({ id: 3, name: 'closer', rules: lacking });
   for (const rulesets of [[own, closer], [closer, own]]) {

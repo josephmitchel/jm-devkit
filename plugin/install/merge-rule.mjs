@@ -70,9 +70,7 @@ export function mergeRuleset(checks) {
 
 /**
  * How far `ruleset` reaches, as far as its conditions can be read without matching patterns:
- * 'only' the default branch, 'more' than it, or null when it is not known to cover it. Only a
- * ruleset for the default branch alone is ever written to: a check added to a broader one would be
- * required on every branch it covers.
+ * 'only' the default branch, 'more' than it, or null when it is not known to cover it.
  */
 function reach(ruleset, defaultBranch) {
   const own = ['~DEFAULT_BRANCH', `refs/heads/${defaultBranch}`];
@@ -128,16 +126,18 @@ function command({ method, path, body }) {
 }
 
 /**
- * The ruleset judged as the project's merge rule, with its `reach`, `weaker` and `missing`, or
- * undefined when the default branch has none. A whole one comes first; short of that, one in force
- * before one that is not, then one for the default branch alone, then the one that lacks least.
+ * The ruleset judged as the project's merge rule, with its `weaker` and `missing`, or undefined
+ * when the default branch has none. A ruleset that covers more than the default branch is the rule
+ * only when it is whole: short of that it is passed over, so the kit never writes to one, where an
+ * added check would be required on every branch it covers. Of the rest, one in force comes before
+ * one that is not, then the one that lacks least.
  */
 function judgedRuleset(rulesets, defaultBranch, checks) {
   const shortfalls = ({ weaker, missing }) => weaker.length + missing.length;
-  const rank = (found) => ((shortfalls(found) ? 4 : 0) + (found.ruleset.enforcement === 'active' ? 0 : 2) + (found.reach === 'only' ? 0 : 1)) * 1000 + shortfalls(found);
+  const rank = (found) => (found.ruleset.enforcement === 'active' ? 0 : 1000) + shortfalls(found);
   return rulesets
     .map((ruleset) => ({ ruleset, reach: reach(ruleset, defaultBranch), ...compare(ruleset, checks) }))
-    .filter((found) => found.reach && holdsPartOfTheRule(found.ruleset))
+    .filter((found) => holdsPartOfTheRule(found.ruleset) && (found.reach === 'only' || (found.reach === 'more' && !shortfalls(found))))
     .sort((a, b) => rank(a) - rank(b))[0];
 }
 
@@ -171,25 +171,18 @@ export function decide({ project, defaultBranch, admin, refused = false, ruleset
     const { ruleset, weaker, missing } = judged;
     const rule = `The merge rule of ${project} (${named})`;
     const lacks = `does not require the CI checks ${missing.join(', ')}`;
-    if (judged.reach === 'more') {
-      const short = [...weaker, ...(missing.length ? [`it ${lacks}`] : [])];
-      if (short.length) {
-        report.push(`${rule} is weaker than the kit's: ${short.join('; ')}. It covers more than the default branch, so install and sync do not change it: put these right at ${url}`);
-      }
-    } else {
-      if (weaker.length) {
-        const later = missing.length && !admin ? ` It also ${lacks}: once the rest is right, the next install or sync adds them or gives the command that does.` : '';
-        report.push(`${rule} is weaker than the kit's: ${weaker.join('; ')}. Install and sync never change these: put them right at ${url}${later}`);
-      }
-      // A printed command carries the ruleset as read, so it is given only when running it late could undo nothing but a check.
-      if (missing.length && (admin || !weaker.length)) {
-        propose(
-          `add required checks: ${missing.join(', ')}`,
-          { what: 'add required checks to the merge rule of', method: 'PUT', path: `repos/${project}/rulesets/${ruleset.id}`, body: withChecks(ruleset, missing) },
-          `${rule} ${lacks}`,
-          ' The command sends the whole ruleset as it was read just now, with the checks added, so run it before the ruleset is changed again.',
-        );
-      }
+    if (weaker.length) {
+      const later = missing.length && !admin ? ` It also ${lacks}: once the rest is right, the next install or sync adds them or gives the command that does.` : '';
+      report.push(`${rule} is weaker than the kit's: ${weaker.join('; ')}. Install and sync never change these: put them right at ${url}${later}`);
+    }
+    // A printed command carries the ruleset as read, so it is given only when running it late could undo nothing but a check.
+    if (missing.length && (admin || !weaker.length)) {
+      propose(
+        `add required checks: ${missing.join(', ')}`,
+        { what: 'add required checks to the merge rule of', method: 'PUT', path: `repos/${project}/rulesets/${ruleset.id}`, body: withChecks(ruleset, missing) },
+        `${rule} ${lacks}`,
+        ' The command sends the whole ruleset as it was read just now, with the checks added, so run it before the ruleset is changed again.',
+      );
     }
   }
 
