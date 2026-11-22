@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { CONFIG_FILE } from '../plugin/devkit-config.mjs';
+import { replaceFile } from './files.mjs';
 import { GITHUB_KNOWN_HOSTS } from './github-host-keys.mjs';
 import { servicePointsAt } from './service.mjs';
 
@@ -39,8 +40,7 @@ function git({ run }, args, env = {}) {
 
 /** Root's ssh for a fetch: the app's deploy key and no other, GitHub's published host keys and no other, and never a question. */
 function sshCommand(paths, app) {
-  fs.writeFileSync(`${paths.githubHostKeys}.new`, GITHUB_KNOWN_HOSTS, { mode: 0o600 });
-  fs.renameSync(`${paths.githubHostKeys}.new`, paths.githubHostKeys);
+  replaceFile(paths.githubHostKeys, GITHUB_KNOWN_HOSTS, 0o600);
   const options = ['IdentitiesOnly=yes', 'BatchMode=yes', 'StrictHostKeyChecking=yes', `UserKnownHostsFile='${paths.githubHostKeys}'`, 'GlobalKnownHostsFile=/dev/null'];
   return `ssh -F /dev/null -i '${paths.deployKey(app)}' ${options.map((option) => `-o ${option}`).join(' ')}`;
 }

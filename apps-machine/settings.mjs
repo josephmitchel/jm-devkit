@@ -4,6 +4,8 @@
 
 import fs from 'node:fs';
 
+import { privateDir, replaceFile } from './files.mjs';
+
 // What systemd gives a service.
 const SYSTEM_PATH = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin';
 
@@ -15,11 +17,8 @@ const LINE = /[ \t]*(?:[#;][^\n\\]*|([A-Za-z_][A-Za-z0-9_]*)[ \t]*=[ \t]*(?:'([^
 
 /** Write an app's settings file, root's alone. */
 export function writeSettings(paths, app, text) {
-  const file = paths.settingsFile(app);
-  fs.mkdirSync(paths.settingsDir, { recursive: true, mode: 0o700 });
-  fs.chmodSync(paths.settingsDir, 0o700);
-  fs.writeFileSync(`${file}.new`, text, { mode: 0o600 });
-  fs.renameSync(`${file}.new`, file);
+  privateDir(paths.settingsDir);
+  replaceFile(paths.settingsFile(app), text, 0o600);
 }
 
 /** An app's settings file as it is, byte for byte. */

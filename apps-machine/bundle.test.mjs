@@ -28,6 +28,32 @@ test('the public key is set once its file has a line that is not a comment', () 
   assert.equal(publicKeyIsSet(paths), true);
 });
 
+test('the setup script turns the timer on for exactly the key files the command takes as holding a key', () => {
+  const setup = fs.readFileSync(path.join(import.meta.dirname, '../vm/apps-machine-setup.sh'), 'utf8');
+  const [, grep] = /&& (\S*\s*grep -Eq '[^']+') "\$BACKUP_KEY_FILE"/.exec(setup);
+  const paths = machine();
+  const holdsAKey = {
+    '': false,
+    '\n\n': false,
+    '# a comment\n': false,
+    '   # an indented comment\n\t\n': false,
+    '\r\n# a comment\r\n': false,
+    'age1madeup\n': true,
+    'age1madeup': true,
+    '# a comment\nage1madeup\n': true,
+    '  age1madeup\n': true,
+    'age1madeup\r\n': true,
+    '﻿# a comment after a byte-order mark\n': true,
+    ' \n': true,
+    ' \n': true,
+  };
+  for (const [text, expected] of Object.entries(holdsAKey)) {
+    fs.writeFileSync(paths.backupPublicKey, text);
+    assert.equal(publicKeyIsSet(paths), expected, JSON.stringify(text));
+    assert.equal(realRun('/bin/sh', ['-c', `${grep} "$1"`, 'sh', paths.backupPublicKey]).code === 0, expected, `the script, for ${JSON.stringify(text)}`);
+  }
+});
+
 /**
  * `run` with the machine's own `tar`, a `runuser` that writes bytes that are not text where pg_dump
  * would write the dump, and an `age` that takes the real one's options and writes its input out as it is.

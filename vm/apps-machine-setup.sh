@@ -95,8 +95,9 @@ for unit in apps-machine-backup.service apps-machine-backup.timer; do
 done
 [ "$changed" = no ] || systemctl daemon-reload
 # The timer is on only while there is a public key: a run without one can only refuse.
-# The same test as publicKeyIsSet in apps-machine/bundle.mjs: a line that is not a comment.
-if [ -f "$BACKUP_KEY_FILE" ] && grep -Eq '^[^#[:space:]]' "$BACKUP_KEY_FILE"; then
+# The same test as publicKeyIsSet in apps-machine/bundle.mjs, and a test there holds the two
+# together: a line that is not blank and not a comment.
+if [ -f "$BACKUP_KEY_FILE" ] && LC_ALL=C grep -Eq '^[[:space:]]*[^#[:space:]]' "$BACKUP_KEY_FILE"; then
   backup_timer=on
   systemctl enable --now apps-machine-backup.timer
   # Only when something changed: restarting a timer whose time has already passed today starts a run.

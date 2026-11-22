@@ -3,6 +3,7 @@ import path from 'node:path';
 
 import { parseDeployConfig } from '../../plugin/devkit-config.mjs';
 import { dumpDatabase } from '../database.mjs';
+import { privateDir } from '../files.mjs';
 import { NOT_ANSWERED, askedHealthy, mustAnswerHealthy } from '../health.mjs';
 import { checkLoopbackOnly } from '../loopback.mjs';
 import { serviceName } from '../paths.mjs';
@@ -72,7 +73,7 @@ export function command(args, world) {
 
 function dump(world, deploy) {
   const dir = world.paths.deployDumps(deploy.app.name);
-  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  privateDir(dir);
   deploy.dump = path.join(dir, `${deploy.stamp}.dump`);
   dumpDatabase(world, deploy.app.name, deploy.dump);
   world.out.write(`Dumped ${deploy.app.name}'s database to ${deploy.dump}\n`);

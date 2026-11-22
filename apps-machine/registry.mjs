@@ -3,6 +3,7 @@
 
 import fs from 'node:fs';
 
+import { privateDir, replaceFile } from './files.mjs';
 import { UsageError } from './usage.mjs';
 
 const NAME = /^(?!pg_)[a-z][a-z0-9_]{0,30}$/;
@@ -56,10 +57,8 @@ export function writeRegistration(paths, fields) {
   const text = `${JSON.stringify(registration, null, 2)}\n`;
   const file = paths.registration(registration.name);
   if (fs.existsSync(file) && fs.readFileSync(file, 'utf8') === text) return registration;
-  fs.mkdirSync(paths.appsDir, { recursive: true, mode: 0o700 });
-  fs.chmodSync(paths.appsDir, 0o700);
-  fs.writeFileSync(`${file}.new`, text, { mode: 0o600 });
-  fs.renameSync(`${file}.new`, file);
+  privateDir(paths.appsDir);
+  replaceFile(file, text, 0o600);
   return registration;
 }
 

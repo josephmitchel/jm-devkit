@@ -5,6 +5,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { replaceFile } from './files.mjs';
 import { serviceName } from './paths.mjs';
 
 const TEMPLATE = path.join(import.meta.dirname, 'app.service.template');
@@ -23,18 +24,12 @@ function systemctl({ run }, ...args) {
   if (done.code !== 0) throw new Error(`systemctl ${args.join(' ')} failed: ${done.stderr.trim()}`);
 }
 
-function replaceFile(file, text) {
-  fs.writeFileSync(`${file}.new`, text, { mode: 0o644 });
-  fs.chmodSync(`${file}.new`, 0o644);
-  fs.renameSync(`${file}.new`, file);
-}
-
 function writeUnit(world, app) {
   const file = world.paths.unitFile(app);
   const unit = renderUnit(world.paths, app);
   if (fs.existsSync(file) && fs.readFileSync(file, 'utf8') === unit) return;
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  replaceFile(file, unit);
+  replaceFile(file, unit, 0o644);
   systemctl(world, 'daemon-reload');
 }
 
@@ -84,7 +79,7 @@ export function pointServiceAt(world, app, target) {
   if (!isRelease) throw new Error(`${release} is not a release of ${app}`);
   if (typeof start !== 'string' || start.trim() === '') throw new Error('a release needs a start command');
   writeUnit(world, app);
-  replaceFile(paths.startFile(app), `${start}\n`);
+  replaceFile(paths.startFile(app), `${start}\n`, 0o644);
   fs.rmSync(`${link}.new`, { force: true });
   fs.symlinkSync(path.relative(paths.appDir(app), release), `${link}.new`);
   fs.renameSync(`${link}.new`, link);

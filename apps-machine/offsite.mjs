@@ -5,16 +5,10 @@
 import fs from 'node:fs';
 
 import { parseBundleName } from './bundle.mjs';
+import { valueLines } from './files.mjs';
 
-/** The one value of a settings file of the machine's: its first line that is not blank or a `#` comment, or null. */
-function valueIn(file) {
-  try {
-    return fs.readFileSync(file, 'utf8').split('\n').map((line) => line.trim()).find((line) => line !== '' && !line.startsWith('#')) ?? null;
-  } catch (e) {
-    if (e.code === 'ENOENT') return null;
-    throw e;
-  }
-}
+/** The one value of a settings file of the machine's: its first line that holds one, or null. */
+const valueIn = (file) => valueLines(file)[0] ?? null;
 
 const NAMED_REMOTE = /^[\w.+@][\w.+@ -]*:/;
 

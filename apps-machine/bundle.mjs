@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { dumpDatabase } from './database.mjs';
+import { privateDir, valueLines } from './files.mjs';
 import { readSettingsFile } from './settings.mjs';
 
 export const BUNDLE_FORMAT = 1;
@@ -27,15 +28,8 @@ export function parseBundleName(name) {
   return match && { name, app: match[1], date: match[2] };
 }
 
-/** Whether the owner's public key is on the machine: its file has a line that is not a comment. */
-export function publicKeyIsSet(paths) {
-  try {
-    return fs.readFileSync(paths.backupPublicKey, 'utf8').split('\n').some((line) => /^[^#\s]/.test(line));
-  } catch (e) {
-    if (e.code === 'ENOENT') return false;
-    throw e;
-  }
-}
+/** Whether the owner's public key is on the machine: its file has a line that is not a comment. Whether that line is a key is `age`'s to say. */
+export const publicKeyIsSet = (paths) => valueLines(paths.backupPublicKey).length > 0;
 
 function must(done, what) {
   if (done.code !== 0) throw new Error(`could not ${what}: ${done.stderr.trim()}`);
@@ -55,7 +49,7 @@ const isRunning = (pid) => {
  * process, after removing those of runs that were killed before they could. The caller removes it.
  */
 export function newWorkDir(paths) {
-  fs.mkdirSync(paths.backupWorkDir, { recursive: true, mode: 0o700 });
+  privateDir(paths.backupWorkDir);
   for (const name of fs.readdirSync(paths.backupWorkDir)) {
     const owner = /^(\d+)-/.exec(name);
     if (owner && !isRunning(Number(owner[1]))) fs.rmSync(path.join(paths.backupWorkDir, name), { recursive: true, force: true });
@@ -76,15 +70,14 @@ export function makeBundle(world, { app, date, workDir }) {
   const sealed = path.join(scratch, bundleName(app, date));
   const file = path.join(paths.nightlyDir, bundleName(app, date));
   try {
-    fs.mkdirSync(members, { recursive: true, mode: 0o700 });
+    privateDir(members);
     fs.writeFileSync(path.join(members, BUNDLE_FILES.settings), readSettingsFile(paths, app), { mode: 0o600 });
     fs.writeFileSync(path.join(members, BUNDLE_FILES.manifest), `${JSON.stringify({ format: BUNDLE_FORMAT, app, date })}\n`, { mode: 0o600 });
     dumpDatabase(world, app, path.join(members, BUNDLE_FILES.dump));
     must(run('tar', ['--create', '--file', archive, '--directory', members, ...Object.values(BUNDLE_FILES)], { cwd: paths.root }), `bundle ${app}'s dump and settings`);
     must(run('age', ['--encrypt', '--recipients-file', paths.backupPublicKey, '--output', sealed, archive], { cwd: paths.root }), `encrypt ${app}'s bundle`);
     fs.chmodSync(sealed, 0o600);
-    fs.mkdirSync(paths.nightlyDir, { recursive: true, mode: 0o700 });
-    fs.chmodSync(paths.nightlyDir, 0o700);
+    privateDir(paths.nightlyDir);
     fs.renameSync(sealed, file);
     return file;
   } finally {
