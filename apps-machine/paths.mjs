@@ -12,6 +12,7 @@ export function machinePaths(root = '/') {
   const settingsDir = path.join(configDir, 'settings');
   const keysDir = path.join(configDir, 'keys');
   const stateDir = path.join(root, 'var/lib/apps-machine');
+  const backupDir = path.join(stateDir, 'backups');
   const appDir = (app) => path.join(stateDir, 'apps', app);
   return {
     root,
@@ -29,7 +30,7 @@ export function machinePaths(root = '/') {
     /** Readable by all, written by root: made by the setup script. */
     stateDir,
     /** Root's alone, mode 0700: made by the setup script. Dumps and bundles go here. */
-    backupDir: path.join(stateDir, 'backups'),
+    backupDir,
     /** Root's, and readable by the app's group alone. */
     appDir,
     /** The home of the app's Linux user, and the one place under `appDir` it owns outside its releases. */
@@ -43,11 +44,11 @@ export function machinePaths(root = '/') {
     /** The owner's public key for backups, in a file `age` reads recipients from. The private half is never on the machine. */
     backupPublicKey: path.join(configDir, 'backup-public-key'),
     /** The nights' encrypted bundles, root's alone. */
-    nightlyDir: path.join(stateDir, 'backups/nightly'),
+    nightlyDir: path.join(backupDir, 'nightly'),
     /** Where a backup run or a restore works: a directory per run, removed when the run ends. */
-    backupWorkDir: path.join(stateDir, 'backups/work'),
+    backupWorkDir: path.join(backupDir, 'work'),
     /** The dumps a deploy takes of an app's database before it changes anything, one file per deploy. */
-    deployDumps: (app) => path.join(stateDir, 'backups/deploys', app),
+    deployDumps: (app) => path.join(backupDir, 'deploys', app),
     /** Root's checkout of the commit being deployed, until it becomes a release. */
     incomingRelease: (app) => path.join(appDir(app), 'incoming'),
     /** The host keys root's ssh accepts from GitHub, written by a deploy before it fetches. */
@@ -59,6 +60,6 @@ export function machinePaths(root = '/') {
     /** The address requested when a night's bundles have all uploaded: one line, root's alone. */
     backupAliveAddress: path.join(configDir, 'backup-alive-address'),
     /** What a restore replaced, kept so it can be undone: an app's database dump, and its settings file when that was replaced too. */
-    restoreDumps: (app) => path.join(stateDir, 'backups/restores', app),
+    restoreDumps: (app) => path.join(backupDir, 'restores', app),
   };
 }
