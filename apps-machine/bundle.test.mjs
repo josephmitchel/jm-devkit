@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { BUNDLE_FILES, bundleName, makeBundle, parseBundleName, publicKeyIsSet } from './bundle.mjs';
+import { BUNDLE_FILES, bundleName, isBundle, makeBundle, openBundle, parseBundleName, publicKeyIsSet } from './bundle.mjs';
 import { run as realRun } from './run.mjs';
-import { machine, registered, tempDir } from './test-helpers.mjs';
+import { archiveOf, machine, registered, tempDir } from './test-helpers.mjs';
 
 test('a bundle is named for its app and its date, and the name reads back', () => {
   assert.equal(bundleName('sample', '2026-11-21'), 'sample-2026-11-21.tar.age');
@@ -84,4 +84,65 @@ test('a bundle that fails leaves nothing in the work directory and no bundle', (
     /^Error: could not encrypt sample's bundle: age: no recipient in .*backup-public-key$/);
   assert.deepEqual(fs.readdirSync(workDir), []);
   assert.ok(!fs.existsSync(paths.nightlyDir));
+});
+
+const DUMP = Buffer.from([0x50, 0xff, 0x00, 0xfe]);
+const SETTINGS = 'DATABASE_URL=postgres://sample:f00d@127.0.0.1:5432/sample\n';
+const withTar = (paths) => ({ run: realRun, paths });
+
+test('a bundle made on the machine, once decrypted, opens into its app, its date, its dump and its settings file', () => {
+  const paths = machine();
+  registered(paths, { name: 'sample' });
+  fs.writeFileSync(paths.backupPublicKey, 'age1madeup\n');
+  const settings = fs.readFileSync(paths.settingsFile('sample'));
+  const decrypted = makeBundle({ run: withStubbedAge(), paths }, { app: 'sample', date: '2026-11-21', workDir: tempDir() });
+  assert.equal(isBundle(withTar(paths), decrypted), true);
+  const dir = tempDir();
+  const opened = openBundle(withTar(paths), decrypted, dir);
+  assert.deepEqual(opened, { app: 'sample', date: '2026-11-21', dump: path.join(dir, 'database.dump'), settings: path.join(dir, 'settings.env') });
+  assert.deepEqual(fs.readFileSync(opened.dump), Buffer.from([0xff, 0x00, 0xfe]));
+  assert.deepEqual(fs.readFileSync(opened.settings), settings);
+});
+
+test('a bundle opens whatever its file is called', () => {
+  const paths = machine();
+  const decrypted = archiveOf({ 'bundle.json': '{"format":1,"app":"sample","date":"2026-11-21"}\n', 'database.dump': DUMP, 'settings.env': SETTINGS }, 'from my-device:sample.tar');
+  assert.equal(isBundle(withTar(paths), decrypted), true);
+  assert.equal(openBundle(withTar(paths), decrypted, tempDir()).app, 'sample');
+});
+
+test('a file that is no archive, and an archive with no manifest, are not bundles', () => {
+  const paths = machine();
+  const dump = path.join(tempDir(), 'a.dump');
+  fs.writeFileSync(dump, DUMP);
+  assert.equal(isBundle(withTar(paths), dump), false);
+  assert.equal(isBundle(withTar(paths), archiveOf({ 'notes.txt': 'notes\n', 'database.dump': DUMP })), false);
+  assert.equal(isBundle(withTar(paths), path.join(tempDir(), 'missing.tar')), false);
+});
+
+test('a bundle without all three of its files is still a bundle, and does not open', () => {
+  const paths = machine();
+  const decrypted = archiveOf({ 'bundle.json': '{"format":1,"app":"sample","date":"2026-11-21"}\n', 'database.dump': DUMP });
+  assert.equal(isBundle(withTar(paths), decrypted), true);
+  assert.throws(() => openBundle(withTar(paths), decrypted, tempDir()), (e) => {
+    assert.match(e.message, /^could not open the bundle .*sample-2026-11-21\.tar: tar: settings\.env: Not found in archive/);
+    return true;
+  });
+});
+
+test('a bundle whose settings are a link to another file does not open', () => {
+  const paths = machine();
+  const decrypted = archiveOf({ 'bundle.json': '{"format":1,"app":"sample","date":"2026-11-21"}\n', 'database.dump': DUMP, 'settings.env': { linkTo: '/etc/hostname' } });
+  assert.throws(() => openBundle(withTar(paths), decrypted, tempDir()), /^Error: .*sample-2026-11-21\.tar is not a bundle: its settings\.env is not a file$/);
+});
+
+test('a bundle of a format this machine does not read, or whose manifest names no app, does not open', () => {
+  const paths = machine();
+  const rest = { 'database.dump': DUMP, 'settings.env': SETTINGS };
+  assert.throws(() => openBundle(withTar(paths), archiveOf({ 'bundle.json': '{"format":2,"app":"sample","date":"2027-01-01"}\n', ...rest }), tempDir()),
+    /^Error: .*sample-2026-11-21\.tar is a bundle of format 2, and these commands read format 1$/);
+  for (const manifest of ['not json', '[]', 'null', '{"format":1}', '{"format":1,"app":7,"date":"2026-11-21"}']) {
+    assert.throws(() => openBundle(withTar(paths), archiveOf({ 'bundle.json': manifest, ...rest }), tempDir()),
+      /^Error: .*sample-2026-11-21\.tar is not a bundle: its bundle\.json does not say which app and date it is of$/, manifest);
+  }
 });

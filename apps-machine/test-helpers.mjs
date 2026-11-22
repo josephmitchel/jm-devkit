@@ -8,6 +8,7 @@ import path from 'node:path';
 import { COMMANDS, main } from './apps-machine.mjs';
 import { machinePaths } from './paths.mjs';
 import { readRegistry, registrationOf } from './registry.mjs';
+import { run as realRun } from './run.mjs';
 
 const dirs = [];
 after(() => dirs.forEach((dir) => fs.rmSync(dir, { recursive: true, force: true })));
@@ -116,4 +117,28 @@ export function openedBundle(file) {
   const { recipients, archive } = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^sealed by the stand-in age\n/, ''));
   const members = Object.entries(JSON.parse(archive)).map(([name, bytes]) => [name, Buffer.from(bytes, 'base64')]);
   return { recipients, members: Object.fromEntries(members) };
+}
+
+/**
+ * A tar archive made by the machine's own `tar`, in a temp dir of its own, of `members`: each name
+ * with its contents, or with `{ linkTo }` for a symbolic link. Returns the archive's path.
+ */
+export function archiveOf(members, name = 'sample-2026-11-21.tar') {
+  const dir = tempDir();
+  const from = path.join(dir, 'members');
+  fs.mkdirSync(from);
+  for (const [member, contents] of Object.entries(members)) {
+    if (contents?.linkTo) fs.symlinkSync(contents.linkTo, path.join(from, member));
+    else fs.writeFileSync(path.join(from, member), contents, { mode: 0o600 });
+  }
+  const file = path.join(dir, name);
+  const made = realRun('tar', ['--create', '--force-local', '--file', file, '--directory', from, ...Object.keys(members)]);
+  if (made.code !== 0) throw new Error(made.stderr);
+  return file;
+}
+
+/** A decrypted bundle as the owner brings it to the machine: what `age --decrypt` gives of a night's bundle. */
+export function decryptedBundle({ app, date = '2026-11-21', dump, settings, format = 1 }) {
+  const manifest = `${JSON.stringify({ format, app, date })}\n`;
+  return archiveOf({ 'bundle.json': manifest, 'database.dump': dump, 'settings.env': settings }, `${app}-${date}.tar`);
 }
