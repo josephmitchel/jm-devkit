@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url';
 
 import { ENTRY, KIT_FILES, install, main } from './install.mjs';
 import { run } from './run.mjs';
-import { machine, sink, tempDir } from './test-helpers.mjs';
+import { fakeRun, machine, machinePrograms, sink, tempDir } from './test-helpers.mjs';
 
 const KIT = path.resolve(import.meta.dirname, '..');
 
@@ -50,10 +50,20 @@ test('the project-config reader comes along, with its schema', async () => {
   assert.equal(typeof reader.devkitSchema(), 'object');
 });
 
+test('the installed copy registers an app, writing its unit from the template that came along', async () => {
+  const destDir = installed();
+  const entry = await import(pathToFileURL(path.join(destDir, ENTRY)).href);
+  const paths = machine();
+  const err = sink();
+  const argv = ['register', 'sample', 'git@github.com:example/sample.git', '8443'];
+  assert.equal(await entry.main(argv, { paths, run: fakeRun(machinePrograms()).run, out: sink(), err, uid: 0 }), 0, err.text);
+  assert.match(fs.readFileSync(paths.unitFile('sample'), 'utf8'), /^User=sample$/m);
+});
+
 test('no test, test helper or note is installed', () => {
   const copied = files(installed());
   assert.ok(copied.includes('apps-machine/commands/list.mjs'));
-  assert.deepEqual(copied.filter((file) => !file.endsWith('.mjs') && !KIT_FILES.includes(file)), []);
+  assert.deepEqual(copied.filter((file) => !file.endsWith('.mjs') && !KIT_FILES.includes(file)), ['apps-machine/app.service.template']);
   assert.deepEqual(copied.filter((file) => /test/.test(file)), []);
 });
 

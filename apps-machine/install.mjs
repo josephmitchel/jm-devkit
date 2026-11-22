@@ -20,6 +20,8 @@ export const KIT_FILES = ['plugin/devkit-config.mjs', 'plugin/devkit.schema.json
 export const ENTRY = `${HOME}/apps-machine.mjs`;
 
 const isCommandModule = (file) => file.endsWith('.mjs') && !file.endsWith('.test.mjs') && path.basename(file) !== 'test-helpers.mjs';
+/** What the home gives the copy: its modules, and the templates they read at runtime. */
+const isCommandFile = (file) => isCommandModule(file) || file.endsWith('.template');
 
 function filesUnder(dir) {
   if (!fs.existsSync(dir)) return [];
@@ -27,7 +29,7 @@ function filesUnder(dir) {
 }
 
 function wanted(kitDir) {
-  const modules = filesUnder(path.join(kitDir, HOME)).filter(isCommandModule).map((file) => path.join(HOME, file));
+  const modules = filesUnder(path.join(kitDir, HOME)).filter(isCommandFile).map((file) => path.join(HOME, file));
   return new Map([...modules, ...KIT_FILES].sort().map((file) => [file, {
     content: fs.readFileSync(path.join(kitDir, file)),
     mode: file === ENTRY ? 0o755 : 0o644,
