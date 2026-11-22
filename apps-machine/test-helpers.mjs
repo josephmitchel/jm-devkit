@@ -63,6 +63,22 @@ export function machinePrograms({ users = [], groups = [], taken = [], port = 54
   };
 }
 
+/** Each call a fake `run` recorded, as the command line it stands for. */
+export const commandLines = (calls) => calls.map(({ program, args }) => [program, ...args].join(' '));
+
+/** A file's permission bits. */
+export const mode = (file) => fs.statSync(file).mode & 0o777;
+
+/**
+ * The stand-in `pg_dump`, for a `respond`: when the call is `dumpDatabase`'s, writes a dump naming
+ * its database to the file asked for, root's alone and not text, and returns true.
+ */
+export function standInDump(program, args) {
+  if (program !== '/bin/sh' || !args[1]?.includes('pg_dump')) return false;
+  fs.writeFileSync(args[4], `dump of ${args[3]}\0\xff`, { encoding: 'latin1', mode: 0o600 });
+  return true;
+}
+
 /** A writable stream stand-in that keeps what was written. */
 export function sink() {
   const s = { text: '', write: (chunk) => { s.text += chunk; return true; } };
@@ -97,7 +113,7 @@ export async function appsMachine(argv, { run = fakeRun().run, paths = machine()
 export function backupPrograms() {
   const after = (args, option) => args[args.indexOf(option) + 1];
   return (program, args) => {
-    if (program === '/bin/sh' && args[1].includes('pg_dump')) fs.writeFileSync(args[4], `dump of ${args[3]}\0\xff`, { encoding: 'latin1', mode: 0o600 });
+    standInDump(program, args);
     if (program === 'tar') {
       const dir = after(args, '--directory');
       const members = args.slice(args.indexOf(dir) + 1).map((name) => [name, fs.readFileSync(path.join(dir, name)).toString('base64')]);
@@ -133,9 +149,8 @@ export function deployPrograms(paths, app, remote, behaviour = {}) {
   const current = () => (fs.existsSync(paths.currentRelease(app)) ? path.basename(fs.readlinkSync(paths.currentRelease(app))) : 'nothing');
   const configText = () => (typeof remote.config === 'string' ? remote.config : JSON.stringify(remote.config));
   const respond = (program, args, options = {}) => {
-    if (program === '/bin/sh' && args[1].includes('pg_dump')) {
+    if (standInDump(program, args)) {
       events.push('dump');
-      fs.writeFileSync(args.at(-1), `a dump of ${args.at(-2)}\n`, { mode: 0o600 });
     } else if (program === 'git' && args[0] === 'clone') {
       events.push('fetch');
       fs.mkdirSync(args.at(-1));

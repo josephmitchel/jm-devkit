@@ -8,12 +8,11 @@ import { GITHUB_HOST_KEYS } from './github-host-keys.mjs';
 import { KEPT_RELEASES, commitOf, deployConfigOf, fetchDefaultBranch, makeRelease, projectConfigAt, pruneReleases, releasesOf, stampOf } from './releases.mjs';
 import { run as realRun } from './run.mjs';
 import { pointServiceAt, servicePointsAt } from './service.mjs';
-import { fakeRun, machine, registered, tempDir } from './test-helpers.mjs';
+import { commandLines, fakeRun, machine, registered, tempDir } from './test-helpers.mjs';
 
 const A = 'a'.repeat(40);
 const B = 'b'.repeat(40);
 const CONFIG = { setup: 'npm ci', build: 'npm run build', start: 'npm start', port: 3000, healthPath: '/healthz' };
-const commandLines = (calls) => calls.map(({ program, args }) => [program, ...args].join(' '));
 
 /** A machine with the sample app registered and these releases, named as given, in place. */
 function withReleases(...names) {

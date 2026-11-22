@@ -6,7 +6,7 @@ import path from 'node:path';
 import { commitOf, deployConfigOf, releasesOf } from '../releases.mjs';
 import { servicePointsAt } from '../service.mjs';
 import { readSettings, writeSettings } from '../settings.mjs';
-import { appsMachine, deployPrograms, fakeRun, machine, registered } from '../test-helpers.mjs';
+import { appsMachine, commandLines, deployPrograms, fakeRun, machine, mode, registered } from '../test-helpers.mjs';
 
 const A = 'a'.repeat(40);
 const B = 'b'.repeat(40);
@@ -17,8 +17,6 @@ const DEPLOY = { setup: 'npm ci', build: 'npm run build', migrate: 'npm run migr
 /** A project config with this deploy section, or with none. */
 const config = (deploy = DEPLOY) => ({ modules: ['process'], reviewer: { tests: [{ name: 'unit', command: 'npm test' }] }, ...(deploy && { deploy }) });
 
-const commandLines = (calls) => calls.map(({ program, args }) => [program, ...args].join(' '));
-const mode = (file) => fs.statSync(file).mode & 0o777;
 
 /**
  * A machine with the sample app registered, a remote whose default branch is at commit A, and
@@ -97,7 +95,7 @@ test('the dump is taken before anything is fetched, it is root\'s alone, and its
   const { paths, events, calls, deploy } = world();
   const done = await deploy();
   const file = path.join(paths.deployDumps('sample'), '20261121T143000Z.dump');
-  assert.equal(fs.readFileSync(file, 'utf8'), 'a dump of sample\n');
+  assert.deepEqual(fs.readFileSync(file), Buffer.from('dump of sample\0\xff', 'latin1'));
   assert.equal(mode(file), 0o600);
   assert.equal(mode(paths.deployDumps('sample')), 0o700);
   assert.ok(file.startsWith(paths.backupDir + path.sep));

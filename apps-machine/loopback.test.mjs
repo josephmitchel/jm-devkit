@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { checkLoopbackOnly } from './loopback.mjs';
-import { fakeRun, machine } from './test-helpers.mjs';
+import { commandLines, fakeRun, machine } from './test-helpers.mjs';
 
 const OTHERS = [
   'LISTEN 0      4096                 100.64.0.7%tailscale0:8443  0.0.0.0:*',
@@ -15,7 +15,7 @@ const OTHERS = [
 function check(port, listeners) {
   const { run, calls } = fakeRun(() => ({ stdout: [...OTHERS, ...listeners].map((line) => `${line}\n`).join('') }));
   checkLoopbackOnly({ run, paths: machine() }, port);
-  return calls.map(({ program, args }) => [program, ...args].join(' '));
+  return commandLines(calls);
 }
 
 test('a port listened on at loopback alone passes, whatever else the machine listens on', () => {
