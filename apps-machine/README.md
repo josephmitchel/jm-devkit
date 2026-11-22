@@ -181,6 +181,17 @@ The last line answers `The sample app at commit <commit>. Visits: 1.` Any commit
 
 To make its health check fail on purpose, add `SAMPLE_HEALTH=fail` to its settings file and deploy: `/healthz` then answers 503 while `/` still answers and names its commit, so the deploy stops at `health` after 90 seconds and puts the previous release back. The setting is still on when that release starts, so its `/healthz` fails as well: the command waits another 90 seconds and says the previous release was started but did not answer. `curl http://127.0.0.1:4310/` then names the previous commit, and `ls /var/lib/apps-machine/apps/sample/releases/` shows the failed release gone. Take the line out afterwards and restart the service with `sudo systemctl restart app-sample.service`.
 
+To rehearse a stop, the sample app answers SIGTERM as "When the service stops" describes: it finishes the answers it owes, takes no more and exits 143, and its `start` command begins with `exec`, so that status is the service's.
+
+```
+sudo systemctl stop app-sample.service
+systemctl is-active app-sample.service
+sudo apps-machine logs sample 5min
+sudo systemctl start app-sample.service
+```
+
+The second line answers `inactive`, where a unit without `SuccessExitStatus=143` answers `failed`, and the log has `Stopped` with no `Failed with result 'exit-code'` before it.
+
 ### backup
 
 ```
