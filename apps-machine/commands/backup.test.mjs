@@ -168,7 +168,8 @@ test('bundles older than seven days are removed once the app has its bundle for 
     fs.mkdirSync(path.dirname(path.join(paths.backupDir, file)), { recursive: true });
     fs.writeFileSync(path.join(paths.backupDir, file), 'from an earlier night');
   }
-  const result = await backup(paths);
+  const alreadyStored = [...recent, 'nightly/unregistered-2026-01-01.tar.age'].map((file) => path.basename(file));
+  const result = await backup(paths, { offsite: storageHolding(...alreadyStored) });
   assert.equal(result.code, 0);
   assert.deepEqual(filesUnder(paths.backupDir), [...kept, ...recent, 'nightly/example_app-2026-11-21.tar.age', 'nightly/sample-2026-11-21.tar.age'].sort());
   assert.equal(result.out, [
@@ -297,7 +298,7 @@ test('an upload that fails means no alive request, and the run fails naming the 
   const result = await backup(paths, failingStorage((verb, args) => verb === 'copyto' && args.at(-1).includes('/other-')));
   assert.equal(result.code, 1);
   assert.equal(result.err, [
-    'other: could not upload other\'s bundle: 2026/11/21 03:00:09 ERROR : Attempt 3/3 failed with 1 errors',
+    'other: could not upload other-2026-11-21.tar.age: 2026/11/21 03:00:09 ERROR : Attempt 3/3 failed with 1 errors',
     '2026/11/21 03:00:09 Failed to copyto: permission denied',
     'error: no bundle was uploaded for other',
     '',
@@ -367,9 +368,10 @@ const holdsSecret = (text) => SECRETS.some((secret) => text.includes(secret));
 
 test('neither the storage credential nor the alive address is in a program\'s arguments or environment, or in what the run prints', async () => {
   const paths = machineWithKey('sample');
+  holding(paths.nightlyDir, 'sample-2026-11-20.tar.age');
   const result = await backup(paths, { offsite: storageHolding('sample-2025-01-02.tar.age') });
   assert.equal(result.code, 0);
-  assert.deepEqual(programsRun(result.calls).slice(-4), ['rclone copyto', 'rclone lsf', 'rclone deletefile', 'curl']);
+  assert.deepEqual(programsRun(result.calls).slice(-5), ['rclone copyto', 'rclone lsf', 'rclone copyto', 'rclone deletefile', 'curl']);
   assert.equal(holdsSecret(result.out + result.err), false);
   assert.equal(holdsSecret(JSON.stringify(result.calls.map(({ input, ...seenByOthers }) => seenByOthers))), false);
   assert.deepEqual(result.calls.filter(({ input }) => input !== undefined && holdsSecret(input)).map(({ program, input }) => [program, input]), [['curl', `url = "${ADDRESS}"\n`]]);
@@ -472,6 +474,122 @@ test('a storage that cannot be listed or pruned means no alive request, and the 
     assert.deepEqual(result.requests, [], verb);
     assert.ok(result.stored.has(`${STORAGE}/sample-2026-11-21.tar.age`), verb);
   }
+});
+
+const NIGHT_BEFORE = () => new Date(2026, 10, 20, 3, 0, 0);
+const uploadsOf = (calls) => calls.filter(({ program, args }) => program === 'rclone' && args[0] === 'copyto').map(({ args }) => path.posix.basename(args.at(-1)));
+
+test('a bundle whose upload failed is uploaded by the next night that reaches the storage, and the run says which', async () => {
+  const paths = machineWithKey('sample', 'example_app');
+  const offsite = offsitePrograms();
+  const outage = await backup(paths, { ...failingStorage(() => true, undefined, offsite), now: NIGHT_BEFORE });
+  assert.equal(outage.code, 1);
+  assert.match(outage.err, /\nerror: no bundle was uploaded for example_app, sample\n$/);
+  assert.deepEqual(outage.requests, []);
+  assert.equal(offsite.stored.size, 0);
+  const made = Object.fromEntries(fs.readdirSync(paths.nightlyDir).map((name) => [name, fs.readFileSync(path.join(paths.nightlyDir, name))]));
+  assert.deepEqual(Object.keys(made).sort(), ['example_app-2026-11-20.tar.age', 'sample-2026-11-20.tar.age']);
+
+  const result = await backup(paths, { offsite });
+  assert.equal(result.err, '');
+  assert.equal(result.code, 0);
+  for (const [name, bytes] of Object.entries(made)) assert.deepEqual(result.stored.get(`${STORAGE}/${name}`), bytes, name);
+  assert.equal(result.stored.size, 4);
+  assert.deepEqual(result.out.split('\n').slice(2), [
+    'example_app: uploaded example_app-2026-11-21.tar.age',
+    'sample: uploaded sample-2026-11-21.tar.age',
+    'example_app: uploaded example_app-2026-11-20.tar.age, which the storage did not have',
+    'sample: uploaded sample-2026-11-20.tar.age, which the storage did not have',
+    'The alive request was made.',
+    '',
+  ]);
+  assert.deepEqual(result.requests, [ADDRESS]);
+  assert.deepEqual(programsRun(result.calls).filter((program) => program === 'rclone lsf'), ['rclone lsf']);
+});
+
+test('a bundle the storage already has is not uploaded again', async () => {
+  const paths = machineWithKey('sample');
+  holding(paths.nightlyDir, 'sample-2026-11-19.tar.age', 'sample-2026-11-20.tar.age');
+  const result = await backup(paths, { offsite: storageHolding('sample-2026-11-19.tar.age') });
+  assert.equal(result.code, 0);
+  assert.deepEqual(uploadsOf(result.calls), ['sample-2026-11-21.tar.age', 'sample-2026-11-20.tar.age']);
+  assert.equal(result.stored.get(`${STORAGE}/sample-2026-11-19.tar.age`).toString(), 'from an earlier night');
+  assert.equal(result.stored.get(`${STORAGE}/sample-2026-11-20.tar.age`).toString(), 'kept');
+  assert.doesNotMatch(result.out, /2026-11-19/);
+});
+
+test('a bundle the storage\'s rule would remove straight away is not uploaded, whether or not its app is still registered', async () => {
+  const paths = machineWithKey('sample');
+  const wanted = ['unregistered-2026-08-10.tar.age', 'unregistered-2026-10-23.tar.age'];
+  const unwanted = ['unregistered-2025-11-30.tar.age', 'unregistered-2026-08-20.tar.age', 'unregistered-2026-09-10.tar.age', 'unregistered-2026-10-22.tar.age'];
+  holding(paths.nightlyDir, ...wanted, ...unwanted);
+  const result = await backup(paths, { offsite: storageHolding('unregistered-2026-09-02.tar.age', 'unregistered-2026-10-01.tar.age') });
+  assert.equal(result.err, '');
+  assert.equal(result.code, 0);
+  assert.deepEqual(uploadsOf(result.calls), ['sample-2026-11-21.tar.age', ...wanted]);
+  assert.deepEqual(result.out.split('\n').filter((line) => line.startsWith('unregistered: ')), wanted.map((name) => `unregistered: uploaded ${name}, which the storage did not have`));
+  assert.equal(result.stored.size, 5);
+  for (const name of [...wanted, ...unwanted]) assert.ok(fs.existsSync(path.join(paths.nightlyDir, name)), name);
+});
+
+test('a bundle of an earlier night that does not upload means no alive request, and the run fails naming the app and the bundle\'s date', async () => {
+  const paths = machineWithKey('sample', 'example_app');
+  holding(paths.nightlyDir, 'example_app-2026-11-20.tar.age', 'sample-2026-11-19.tar.age', 'sample-2026-11-20.tar.age');
+  const result = await backup(paths, failingStorage((verb, args) => verb === 'copyto' && /example_app-2026-11-20|sample-2026-11-19/.test(args.at(-1)), { code: 1, stderr: 'Failed to copyto: permission denied\n' }));
+  assert.equal(result.code, 1);
+  assert.equal(result.err, [
+    'example_app: could not upload example_app-2026-11-20.tar.age: Failed to copyto: permission denied',
+    'sample: could not upload sample-2026-11-19.tar.age: Failed to copyto: permission denied',
+    'error: the storage still does not have example_app\'s bundle of 2026-11-20, sample\'s bundle of 2026-11-19',
+    '',
+  ].join('\n'));
+  assert.deepEqual(result.requests, []);
+  assert.deepEqual([...result.stored.keys()].map((at) => path.posix.basename(at)), ['example_app-2026-11-21.tar.age', 'sample-2026-11-21.tar.age', 'sample-2026-11-20.tar.age']);
+  assert.match(result.out, /^sample: uploaded sample-2026-11-20\.tar\.age, which the storage did not have$/m);
+  assert.doesNotMatch(result.out, /alive/);
+});
+
+test('an app with no bundle tonight still has its earlier bundles uploaded, and a bundle of tonight that did not upload is not tried twice', async () => {
+  const paths = machineWithKey('sample', 'example_app');
+  holding(paths.nightlyDir, 'sample-2026-11-20.tar.age');
+  const offsite = offsitePrograms();
+  const result = await backup(paths, {
+    offsite,
+    respond: (program, args, options) => {
+      if (program === '/bin/sh' && args[3] === 'sample') return { code: 1, stderr: 'pg_dump: failed\n' };
+      if (program === 'rclone' && args.at(-1).includes('/example_app-')) return { code: 1, stderr: 'Failed to copyto: permission denied\n' };
+      return offsite.respond(program, args, options);
+    },
+  });
+  assert.equal(result.code, 1);
+  assert.match(result.err, /\nerror: no bundle was made for sample; no bundle was uploaded for example_app\n$/);
+  assert.deepEqual(uploadsOf(result.calls), ['example_app-2026-11-21.tar.age', 'sample-2026-11-20.tar.age']);
+  assert.deepEqual([...result.stored.keys()], [`${STORAGE}/sample-2026-11-20.tar.age`]);
+  assert.deepEqual(result.requests, []);
+});
+
+test('with a storage that cannot be listed nothing but the night\'s bundles is uploaded, and the run fails saying so', async () => {
+  const refused = { code: 1, stderr: 'Failed: permission denied\n' };
+  for (const [failing, uploads, message] of [
+    [(verb) => verb === 'lsf', ['sample-2026-11-21.tar.age'], 'error: could not list the bundles on the storage: Failed: permission denied\n'],
+    [() => true, ['sample-2026-11-21.tar.age'], 'sample: could not upload sample-2026-11-21.tar.age: Failed: permission denied\nerror: no bundle was uploaded for sample; could not list the bundles on the storage: Failed: permission denied\n'],
+  ]) {
+    const paths = machineWithKey('sample');
+    holding(paths.nightlyDir, 'sample-2026-11-20.tar.age');
+    const result = await backup(paths, failingStorage(failing, refused));
+    assert.equal(result.code, 1);
+    assert.equal(result.err, message);
+    assert.deepEqual(uploadsOf(result.calls), uploads);
+    assert.deepEqual(programsRun(result.calls).filter((program) => program === 'rclone lsf'), ['rclone lsf']);
+    assert.deepEqual(result.requests, []);
+  }
+});
+
+test('a machine with only tonight\'s bundles and none of them uploaded does not ask the storage what it has', async () => {
+  const paths = machineWithKey('sample');
+  const result = await backup(paths, failingStorage((verb) => verb === 'copyto'));
+  assert.equal(result.code, 1);
+  assert.deepEqual(programsRun(result.calls).filter((program) => program.startsWith('rclone')), ['rclone copyto']);
 });
 
 /** The name a deploy or a restore gave what it kept on a day, at noon unless a time is given: the machine's own time. */

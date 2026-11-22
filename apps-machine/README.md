@@ -187,7 +187,9 @@ The private key is never on the machine, so the machine can make a bundle and ca
 - One app failing does not stop the others. The run prints what went wrong for that app, makes the other bundles, and exits 1 naming every app that has no bundle for the night.
 - Seven days of bundles are kept. Once an app has its bundle for the night, its bundles dated before the seven days ending today are removed. An app whose bundle was not made keeps the ones it has.
 - Each bundle made is then uploaded to the storage under its own name. One that does not upload does not stop the others: the run prints what `rclone` said, and exits 1 naming every app whose bundle is not on the storage.
-- Only the night's own bundles are uploaded. A bundle that did not upload is not tried again by a later night: it stays on the machine for its seven days, and running `sudo apps-machine backup` again the same day makes and uploads that day's bundles afresh.
+- A bundle that did not upload is uploaded by a later night, for as long as the machine has it: its seven days. After the night's own bundles the run lists the storage, once, and uploads every other bundle on the machine whose name the storage does not have, printing `<name>: uploaded <bundle>, which the storage did not have`. A bundle the storage has is not uploaded again, and one the storage's own rule would remove at once ("What is kept", below) is not uploaded.
+- This goes by what is on the machine, not by the registrations: a bundle of an app that is no longer registered is uploaded too, and so is an earlier bundle of an app that has none tonight.
+- An earlier bundle that still does not upload does not stop the others either: the run exits 1 naming the app and the bundle's date. If the storage cannot be listed, only the night's own bundles are uploaded, and the run says so and exits 1.
 - What the deploys and the restores of each registered app kept is removed after thirty days ("What a deploy or a restore kept", below).
 - The alive request is made last, once, and only by a night in which nothing went wrong. Its absence is the alarm.
 
@@ -208,7 +210,7 @@ sudo rclone lsf --config /etc/apps-machine/rclone.conf <remote>:<folder>
 
 The command never reads the credential. It gives `rclone` the path of the config file and the destination, and nothing else. The destination must name a remote from the config file: one that spells a remote out with its own settings, which `rclone` also accepts, is refused, because the credential would then be in a program's arguments, and every user on the machine can read those. `rclone` only obscures what it keeps in its config file, so the file's mode (0600, in a directory of root's alone) is what protects the credential.
 
-Until both files are there the run makes the bundles, keeps them on the machine, says uploads are not set up and exits 1. A bundle that is uploaded replaces one of the same name, and `rclone` compares checksums after the transfer where the storage has them.
+Until both files are there the run makes the bundles, keeps them on the machine, says uploads are not set up and exits 1. The first run after that uploads the ones the machine still has. A bundle that is uploaded replaces one of the same name, and `rclone` compares checksums after the transfer where the storage has them.
 
 Ubuntu's `rclone` is older than `rclone`'s own releases. A storage it does not know needs `rclone`'s own package in its place.
 
@@ -255,7 +257,7 @@ The file holds one line, the `https` address the service gave for this check; li
 - tell the owner by a way that reaches him off the machine, such as mail or a notification on his phone, when the request is overdue;
 - run somewhere that does not go down with the owner's machines.
 
-The request is not made when an app has no bundle for the night, when a bundle did not upload, when uploads are not set up, when the storage could not be pruned, or when something a deploy or a restore kept could not be removed. So an alert means: read `journalctl -u apps-machine-backup.service`. With no app registered there is nothing to back up, and the request is made.
+The request is not made when an app has no bundle for the night, when a bundle did not upload, tonight's or an earlier night's, when uploads are not set up, when the storage could not be listed or pruned, or when something a deploy or a restore kept could not be removed. So an alert means: read `journalctl -u apps-machine-backup.service`. With no app registered there is nothing to back up, and the request is made.
 
 With no address set the backup runs, warns that nothing is watching it and exits 0. If the request itself fails, the run exits 1 and says so.
 

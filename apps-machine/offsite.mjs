@@ -33,8 +33,8 @@ function rclone({ run, paths }, verb, args) {
 }
 
 /** Put a bundle on the storage under its own name, replacing one of that name. */
-export function uploadBundle(world, storage, { app, name, file }) {
-  must(rclone(world, 'copyto', ['--ignore-times', file, onStorage(storage, name)]), `could not upload ${app}'s bundle`);
+export function uploadBundle(world, storage, { name, file }) {
+  must(rclone(world, 'copyto', ['--ignore-times', file, onStorage(storage, name)]), `could not upload ${name}`);
 }
 
 /** The bundles on the storage by name, as `parseBundleName` gives them. Anything there that is not a bundle is passed over. */
