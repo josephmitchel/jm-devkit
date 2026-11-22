@@ -82,9 +82,64 @@ export function registered(paths, { name, repository = `git@github.com:example/$
 }
 
 /** Run `apps-machine <argv>` as root on `paths`, with programs run by `run`. */
-export async function appsMachine(argv, { run = fakeRun().run, paths = machine(), uid = 0 } = {}) {
+export async function appsMachine(argv, { run = fakeRun().run, paths = machine(), uid = 0, now } = {}) {
   const out = sink();
   const err = sink();
-  const code = await main(argv, { run, paths, out, err, uid });
+  const code = await main(argv, { run, paths, out, err, uid, now });
   return { code, out: out.text, err: err.text };
+}
+
+/**
+ * A `respond` for `fakeRun` that stands in for what a deploy of `app` runs, over `machinePrograms`.
+ * `remote` is the repository's default branch as GitHub has it, and a test changes it between
+ * deploys: `commit`, and `config`, the object or text of its project config (none when undefined).
+ * `behaviour` is how the build behaves on this machine, also a test's to change: `exits` gives the
+ * exit code of a command line run as the app's user, `healthy` whether the health path answers, and
+ * `listeners` the lines `ss` prints. `events` names each thing the deploy did, in order, with the
+ * release the service pointed at when it was migrated and when it was started.
+ */
+export function deployPrograms(paths, app, remote, behaviour = {}) {
+  const programs = machinePrograms({ users: [app] });
+  const events = [];
+  const current = () => (fs.existsSync(paths.currentRelease(app)) ? path.basename(fs.readlinkSync(paths.currentRelease(app))) : 'nothing');
+  const configText = () => (typeof remote.config === 'string' ? remote.config : JSON.stringify(remote.config));
+  const respond = (program, args, options = {}) => {
+    if (program === '/bin/sh' && args[1].includes('pg_dump')) {
+      events.push('dump');
+      fs.writeFileSync(args.at(-1), `a dump of ${args.at(-2)}\n`, { mode: 0o600 });
+    } else if (program === 'git' && args[0] === 'clone') {
+      events.push('fetch');
+      fs.mkdirSync(args.at(-1));
+      if (remote.config !== undefined) fs.writeFileSync(path.join(args.at(-1), 'devkit.json'), configText());
+    } else if (program === 'git' && args.includes('rev-parse')) {
+      return { stdout: `${remote.commit}\n` };
+    } else if (program === 'git' && args.includes('ls-tree')) {
+      events.push('config');
+      return { stdout: remote.config === undefined ? '' : 'devkit.json\n' };
+    } else if (program === 'git' && args.includes('show')) {
+      return { stdout: configText() };
+    } else if (program === 'chown' && args[0] === '-R') {
+      events.push('release');
+    } else if (program === 'runuser' && args[1] === app) {
+      const line = args.at(-1);
+      const step = Object.entries(remote.config?.deploy ?? {}).find(([, value]) => value === line)?.[0] ?? line;
+      events.push(step === 'migrate' ? `migrate, pointing at ${current()}` : step);
+      return { code: behaviour.exits?.[line] ?? 0 };
+    } else if (program === 'systemctl' && args[0] === 'stop') {
+      events.push('stop');
+    } else if (program === 'systemctl' && args[0] === 'start') {
+      events.push(`start, pointing at ${current()}`);
+    } else if (program === 'timeout' && args.includes('curl')) {
+      events.push('health');
+      return { code: behaviour.healthy === false ? 124 : 0 };
+    } else if (program === 'ss') {
+      events.push('loopback');
+      const port = remote.config?.deploy?.port;
+      return { stdout: (behaviour.listeners ?? [`LISTEN 0 511 127.0.0.1:${port} 0.0.0.0:*`]).map((line) => `${line}\n`).join('') };
+    } else if (program === 'tailscale') {
+      events.push('serve');
+    }
+    return programs(program, args, options);
+  };
+  return { respond, events };
 }
