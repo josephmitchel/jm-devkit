@@ -4,11 +4,12 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import path from 'node:path';
 
 import { parseDeployConfig } from '../plugin/devkit-config.mjs';
-import { listen } from '../sample-app/app.mjs';
+import { exitOnSigterm, listen } from '../sample-app/app.mjs';
 import { migrate } from '../sample-app/migrate.mjs';
 
 const KIT = path.resolve(import.meta.dirname, '..');
@@ -35,15 +36,31 @@ async function app(t, { db = database(), env = {}, commit = 'a'.repeat(40) } = {
     const response = await fetch(`http://127.0.0.1:${port}${url}`, { redirect: 'manual' });
     return { status: response.status, text: await response.text() };
   };
-  return { address, get, db };
+  return { address, get, db, server };
+}
+
+/** A stand-in for the app's own process: it can be sent a signal, and `exited` resolves with the status it exits with. */
+function fakeProcess() {
+  const proc = new EventEmitter();
+  proc.exited = new Promise((resolve) => {
+    proc.exit = (status) => {
+      proc.status = status;
+      resolve(status);
+    };
+  });
+  return proc;
 }
 
 test('the kit\'s project config deploys the sample app: every command runs a file the app has', () => {
   assert.ok(deploy, 'devkit.json has no deploy section');
   for (const step of ['setup', 'build', 'migrate', 'start']) {
-    const [, file] = /^node (sample-app\/[\w.-]+\.mjs)$/.exec(deploy[step]) ?? [];
+    const [, file] = /^(?:exec )?node (sample-app\/[\w.-]+\.mjs)$/.exec(deploy[step]) ?? [];
     assert.ok(file && fs.existsSync(path.join(KIT, file)), `${step} is ${deploy[step]}`);
   }
+});
+
+test('its start command puts the app in the shell\'s place, so the status the app exits with is the one its service ends with', () => {
+  assert.match(deploy.start, /^exec /);
 });
 
 test('the sample app listens on loopback alone', async (t) => {
@@ -73,6 +90,30 @@ test('every visit to the app is counted in its database, and the answer names th
   assert.deepEqual(await get('/'), { status: 200, text: `The sample app at commit ${'a'.repeat(40)}. Visits: 2.\n` });
   assert.equal(db.visits, 2);
   assert.equal((await get('/anything-else')).status, 404);
+});
+
+test('on SIGTERM the sample app answers what it was already asked, takes nothing new and exits 143', async (t) => {
+  const db = database();
+  let reached;
+  let answer;
+  const asked = new Promise((resolve) => (reached = resolve));
+  const held = new Promise((resolve) => (answer = resolve));
+  const query = async (sql) => {
+    reached();
+    await held;
+    return db.query(sql);
+  };
+  const { get, server } = await app(t, { db: { query } });
+  const proc = fakeProcess();
+  exitOnSigterm(server, proc);
+  const visit = get('/');
+  await asked;
+  proc.emit('SIGTERM');
+  await assert.rejects(get('/'));
+  assert.equal(proc.status, undefined);
+  answer();
+  assert.deepEqual(await visit, { status: 200, text: `The sample app at commit ${'a'.repeat(40)}. Visits: 1.\n` });
+  assert.equal(await proc.exited, 143);
 });
 
 test('migrating applies each migration the database has not had, once, in order', async () => {

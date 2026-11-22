@@ -35,6 +35,11 @@ test('an app\'s unit runs the current release\'s start command as the app\'s use
   assert.doesNotMatch(renderUnit(machinePaths(), 'example_app'), /sample/);
 });
 
+test('an app that answers a stop by exiting 143 has stopped cleanly, and no other status is added to the clean ones', () => {
+  const settings = renderUnit(machinePaths(), 'sample').split('\n').filter((line) => /^(SuccessExitStatus|RestartPreventExitStatus)=/.test(line));
+  assert.deepEqual(settings, ['SuccessExitStatus=143']);
+});
+
 test('installing an app\'s service writes its unit and turns it on for the next boot, without starting it', () => {
   const paths = machine();
   const { run, calls } = fakeRun(notYetEnabled);
@@ -111,6 +116,18 @@ test('pointing a service at a release brings its unit up to the template', () =>
   const again = fakeRun();
   pointServiceAt({ run: again.run, paths }, 'sample', { release, start: 'npm start' });
   assert.deepEqual(again.calls, []);
+});
+
+test('pointing a registered app\'s service, whose unit an older template wrote, writes the unit as the template has it now and has systemd read it', () => {
+  const { paths, release } = withRelease();
+  const older = renderUnit(paths, 'sample').replace('SuccessExitStatus=143\n', '');
+  fs.mkdirSync(path.dirname(paths.unitFile('sample')), { recursive: true });
+  fs.writeFileSync(paths.unitFile('sample'), older);
+  const { run, calls } = fakeRun();
+  pointServiceAt({ run, paths }, 'sample', { release, start: 'npm start' });
+  assert.notEqual(renderUnit(paths, 'sample'), older);
+  assert.equal(fs.readFileSync(paths.unitFile('sample'), 'utf8'), renderUnit(paths, 'sample'));
+  assert.deepEqual(calls.map(({ program, args }) => [program, ...args]), [['systemctl', 'daemon-reload']]);
 });
 
 test('a service can be pointed back at what it pointed at before', () => {

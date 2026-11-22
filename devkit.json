@@ -18,7 +18,7 @@
     "setup": "node sample-app/setup.mjs",
     "build": "node sample-app/build.mjs",
     "migrate": "node sample-app/migrate.mjs",
-    "start": "node sample-app/server.mjs",
+    "start": "exec node sample-app/server.mjs",
     "port": 4310,
     "healthPath": "/healthz"
   }

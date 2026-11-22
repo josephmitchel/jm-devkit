@@ -18,6 +18,8 @@ WorkingDirectory={{currentRelease}}
 ExecStart=/bin/sh {{startFile}}
 Restart=always
 RestartSec=5
+# 128 plus SIGTERM's number, which many servers exit with when stopped: a clean end, and still restarted when nobody asked for the stop.
+SuccessExitStatus=143
 StandardOutput=journal
 StandardError=journal
 NoNewPrivileges=yes
