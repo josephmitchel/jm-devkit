@@ -1,0 +1,26 @@
+# The service of one app on the apps machine. `apps-machine register` writes a unit from this
+# template for each app, with the app's name and paths where the double braces are.
+[Unit]
+Description=App {{app}}
+Wants=network-online.target
+After=network-online.target postgresql.service
+# Until the first deploy there is nothing to run, and a boot passes the unit over.
+ConditionPathExists={{currentRelease}}
+
+[Service]
+User={{app}}
+Group={{app}}
+# Root's alone. The app's processes get the values and its user cannot read the file.
+EnvironmentFile={{settingsFile}}
+WorkingDirectory={{currentRelease}}
+# The file holds the current release's start command, as its project config has it.
+ExecStart=/bin/sh {{startFile}}
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

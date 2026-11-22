@@ -20,8 +20,13 @@ CHECKOUT=$(dirname "$VM_DIR")
 # from the copy: never from the checkout, and never from anywhere another user can write.
 COMMANDS_DIR=/usr/local/lib/apps-machine
 COMMAND=/usr/local/sbin/apps-machine
-# Root's alone. apps-machine/paths.mjs names the same directory.
+# apps-machine/paths.mjs names the same directories, and a test there fails if the two differ.
+# Root's alone: registrations, settings files and deploy keys.
 CONFIG_DIR=/etc/apps-machine
+# Each app's own directory is under here, so every user can pass through it.
+STATE_DIR=/var/lib/apps-machine
+# Root's alone: database dumps and backup bundles.
+BACKUP_DIR=/var/lib/apps-machine/backups
 
 require_sudo_on_ubuntu
 [ -f "$CHECKOUT/apps-machine/install.mjs" ] \
@@ -34,7 +39,7 @@ prepare_apt
 
 step "Base packages"
 apt-get update
-apt-get install -y ca-certificates curl git
+apt-get install -y ca-certificates curl git openssh-client
 
 step "Package sources: Node $NODE_MAJOR, Postgres $PG_MAJOR"
 add_node_source
@@ -50,8 +55,10 @@ apt-get install -y age rclone
 step "Tailscale"
 install_tailscale
 
-step "The machine's settings directory"
+step "The machine's directories"
 install -d -m 0700 -o root -g root "$CONFIG_DIR"
+install -d -m 0755 -o root -g root "$STATE_DIR"
+install -d -m 0700 -o root -g root "$BACKUP_DIR"
 
 step "The apps-machine commands"
 node "$CHECKOUT/apps-machine/install.mjs" "$COMMANDS_DIR"

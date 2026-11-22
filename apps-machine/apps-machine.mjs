@@ -10,6 +10,7 @@ import { UsageError } from './usage.mjs';
 /** One line per command: its module exports `usage`, `summary` and `command(args, world)`, which throws to fail. */
 export const COMMANDS = {
   list: await import('./commands/list.mjs'),
+  register: await import('./commands/register.mjs'),
 };
 
 function usage() {
