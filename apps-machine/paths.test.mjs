@@ -39,7 +39,7 @@ test('every path is under the root it was given', () => {
 test('the setup script states each directory it makes as paths.mjs has it', () => {
   const setup = fs.readFileSync(path.join(import.meta.dirname, '../vm/apps-machine-setup.sh'), 'utf8');
   const paths = machinePaths();
-  const stated = { CONFIG_DIR: paths.configDir, STATE_DIR: paths.stateDir, BACKUP_DIR: paths.backupDir, BACKUP_KEY_FILE: paths.backupPublicKey };
+  const stated = { CONFIG_DIR: paths.configDir, STATE_DIR: paths.stateDir, BACKUP_DIR: paths.backupDir, BACKUP_KEY_FILE: paths.backupPublicKey, BACKUP_STORAGE_FILE: paths.backupStorage, RCLONE_CONFIG_FILE: paths.rcloneConfig, ALIVE_ADDRESS_FILE: paths.backupAliveAddress };
   for (const [variable, expected] of Object.entries(stated)) {
     const line = new RegExp(`^${variable}=(\\S+)$`, 'm').exec(setup);
     assert.ok(line, `the setup script sets no ${variable}`);
@@ -59,4 +59,11 @@ test('a deploy\'s dumps are in the backup directory by app, its checkout waits b
   assert.equal(paths.deployDumps('sample'), '/var/lib/apps-machine/backups/deploys/sample');
   assert.equal(paths.incomingRelease('sample'), '/var/lib/apps-machine/apps/sample/incoming');
   assert.equal(paths.githubHostKeys, '/etc/apps-machine/github-host-keys');
+});
+
+test('where the bundles are uploaded, the rclone config holding the credential, and the alive address are in root\'s directory', () => {
+  const paths = machinePaths();
+  assert.equal(paths.backupStorage, '/etc/apps-machine/backup-storage');
+  assert.equal(paths.rcloneConfig, '/etc/apps-machine/rclone.conf');
+  assert.equal(paths.backupAliveAddress, '/etc/apps-machine/backup-alive-address');
 });
