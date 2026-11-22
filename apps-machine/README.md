@@ -236,7 +236,7 @@ In this order it:
 3. stops the app's service;
 4. drops the database, makes it again for the app's role alone, and reads the dump into it. Nothing of the database as it was survives: a table a later migration added is gone, which is what going back means;
 5. with `--settings`, replaces the app's settings file with the bundle's. Without it the settings file is left as it is;
-6. starts the service and asks the app's health path until it answers, as a deploy does.
+6. starts the service and asks the app's health path until it answers, as a deploy does: the port and the path are the ones the running release was deployed with, and the app has 90 seconds.
 
 A decrypted bundle is removed from the machine when the command ends, whether the restore worked, failed or was refused. A dump is left where it is: it is root's alone already, and it is still the way back.
 
@@ -260,9 +260,12 @@ Each of these ends with exit 1 before the service is stopped, with the database 
 - an app that is not registered;
 - a file that is neither a bundle nor a dump `pg_restore` can read, which is left where it is. A bundle that is still encrypted is told apart and the message says so;
 - a bundle of another app, a bundle missing one of its three files, or one made in a format these commands do not read;
-- a bundle whose dump `pg_restore` cannot read: one cut short, or made by a newer Postgres than the machine's;
+- a bundle whose dump `pg_restore` cannot list: one that is not a dump, or one made by a newer Postgres than the machine's;
 - `--settings` with a dump, which holds no settings file;
+- a running release with no record of the deploy section it was deployed with, so there is nowhere to ask whether the app answers;
 - a database that cannot be dumped first.
+
+Wrong arguments end with exit 2 and the usage line, and remove nothing.
 
 #### Going back on a restore
 

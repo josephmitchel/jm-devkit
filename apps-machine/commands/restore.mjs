@@ -3,8 +3,10 @@ import path from 'node:path';
 
 import { isBundle, openBundle } from '../bundle.mjs';
 import { databasePassword, dumpDatabase, dumpFault, restoreDatabase, setDatabasePassword } from '../database.mjs';
+import { HEALTH_TIME_LIMIT_SECONDS, answersHealthy } from '../health.mjs';
 import { serviceName } from '../paths.mjs';
 import { registrationOf } from '../registry.mjs';
+import { deployConfigOf, stampOf } from '../releases.mjs';
 import { servicePointsAt, startService, stopService } from '../service.mjs';
 import { readSettings, writeSettings } from '../settings.mjs';
 import { UsageError } from '../usage.mjs';
@@ -13,8 +15,6 @@ export const usage = 'apps-machine restore <name> <file> [--settings]';
 export const summary = 'put an app\'s database back from a decrypted bundle or from the dump a deploy took, and with --settings the bundle\'s settings file too';
 
 const ENCRYPTED = 'age-encryption.org/v1';
-
-const stampOf = (date) => date.toISOString().replace(/[-:]|\.\d+/g, '');
 
 /** A decrypted bundle is removed however the restore ends. A dump is not: it is root's alone already, and still the way back. */
 export function command(args, world) {
@@ -66,7 +66,8 @@ function restore(world, { name, file, bundled, withSettings }) {
     const fault = dumpFault(world, source.dump);
     if (fault) throw new Error(bundled ? `the dump in ${file} cannot be restored: ${fault}` : `${file} is neither a decrypted bundle nor a database dump: ${fault}`);
     if (!bundled && withSettings) throw new Error(`${file} is a dump, which holds no settings file: leave out --settings`);
-    const deployed = servicePointsAt(paths, name) !== null;
+    const running = servicePointsAt(paths, name);
+    const answers = running && deploySectionOf(name, running.release);
 
     const kept = newKeptName(paths.restoreDumps(name), stampOf(now()));
     const before = { dump: `${kept}.dump`, settings: null };
@@ -83,10 +84,14 @@ function restore(world, { name, file, bundled, withSettings }) {
       step = 'settings';
       if (withSettings) before.settings = putSettingsBack(world, name, source.settings, `${kept}.env`);
       else if (bundled) out.write(`Left ${name}'s settings file as it is\n`);
-      step = 'start';
-      if (deployed) {
+      if (answers) {
+        step = 'start';
         out.write(`Starting ${serviceName(name)}\n`);
         startService(world, name);
+        step = 'health';
+        const { port, healthPath } = answers;
+        out.write(`Asking ${healthPath} on port ${port}, for ${HEALTH_TIME_LIMIT_SECONDS} seconds at most\n`);
+        if (!answersHealthy(world, answers)) throw new Error(`${healthPath} on port ${port} did not answer with success within ${HEALTH_TIME_LIMIT_SECONDS} seconds`);
       }
     } catch (e) {
       err.write([
@@ -97,7 +102,7 @@ function restore(world, { name, file, bundled, withSettings }) {
       throw new Error(`the restore of ${name} stopped at ${step}: ${e.message}`);
     }
     out.write([
-      deployed ? `${name} is restored.` : `${name} is restored. It has never been deployed, so nothing was started: its first deploy starts it.`,
+      answers ? `${name} is restored and answering.` : `${name} is restored. It has never been deployed, so nothing was started: its first deploy starts it.`,
       ...wayBack(name, before),
       '',
     ].join('\n'));
@@ -112,6 +117,15 @@ function newKeptName(dir, stamp) {
   let name = stamp;
   for (let n = 2; fs.existsSync(path.join(dir, `${name}.dump`)); n += 1) name = `${stamp}-${n}`;
   return path.join(dir, name);
+}
+
+/** The deploy section the running release was deployed with, which says where the app answers. */
+function deploySectionOf(name, release) {
+  try {
+    return deployConfigOf(release);
+  } catch (e) {
+    throw new Error(`cannot tell where ${name} answers: ${e.message}`);
+  }
 }
 
 function wayBack(name, before) {

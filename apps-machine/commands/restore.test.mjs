@@ -3,32 +3,34 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { makeRelease } from '../releases.mjs';
 import { run as realRun } from '../run.mjs';
 import { pointServiceAt } from '../service.mjs';
-import { appsMachine, archiveOf, decryptedBundle, fakeRun, machine, machinePrograms, registered } from '../test-helpers.mjs';
+import { appsMachine, archiveOf, commandLines, decryptedBundle, fakeRun, machine, machinePrograms, mode, registered } from '../test-helpers.mjs';
 
 const USAGE = 'usage: apps-machine restore <name> <file> [--settings]\n';
 const NOW = () => new Date(Date.UTC(2026, 10, 21, 14, 30, 5));
 const STAMP = '20261121T143005Z';
 const NIGHT_SETTINGS = 'DATABASE_URL=postgres://sample:0ldpassw0rd@127.0.0.1:5432/sample\nKEY="that night\'s"\n';
 
-const mode = (file) => fs.statSync(file).mode & 0o777;
 const filesUnder = (dir) => fs.readdirSync(dir, { recursive: true }).filter((file) => fs.statSync(path.join(dir, file)).isFile()).sort();
 const dumpOf = (data) => `PGDMP${data}`;
 
 /**
  * A machine with `sample` registered and stand-ins for what a restore runs on it. `tar` is the
  * machine's own. Postgres is `state.data`, the text the database holds (null while it is dropped):
- * a dump of it is `PGDMP` and that text, and nothing else is a dump. `state.running` is the
- * service, `state.events` names what was done in order, and a name in `state.fails` makes that fail.
+ * a dump of it is `PGDMP` and that text, so a restore is seen to bring data back, and nothing else
+ * is a dump. `state.running` is the service, `state.events` names what was done in order, and a
+ * name in `state.fails` makes that fail. Deployed, the app's release answers on port 4310 at /healthz.
  */
 function sampleMachine({ data = 'as it is now', deployed = true } = {}) {
   const paths = machine();
   registered(paths, { name: 'sample' });
   if (deployed) {
-    const release = path.join(paths.releasesDir('sample'), `20261101T090000Z-${'c0ffee'.padEnd(40, '0')}`);
-    fs.mkdirSync(release);
-    pointServiceAt({ run: fakeRun().run, paths }, 'sample', { release, start: 'node server.mjs' });
+    const config = { setup: 'npm ci', build: 'npm run build', start: 'node server.mjs', port: 4310, healthPath: '/healthz' };
+    fs.mkdirSync(paths.incomingRelease('sample'));
+    const release = makeRelease({ run: fakeRun().run, paths }, 'sample', { checkout: paths.incomingRelease('sample'), commit: 'c0ffee'.padEnd(40, '0'), stamp: '20261101T090000Z', config });
+    pointServiceAt({ run: fakeRun().run, paths }, 'sample', { release, start: config.start });
   }
   const state = { data, running: deployed, events: [], fails: {}, password: null };
   const programs = machinePrograms({ users: ['sample'] });
@@ -63,6 +65,9 @@ function sampleMachine({ data = 'as it is now', deployed = true } = {}) {
       state.events.push('start');
       if (state.fails.start) return failing('start', 'systemctl: said this');
       state.running = true;
+    } else if (program === 'timeout' && args.includes('curl')) {
+      state.events.push('health');
+      return { code: state.fails.health ? 124 : 0 };
     }
     return programs(program, args, options);
   });
@@ -72,14 +77,50 @@ function sampleMachine({ data = 'as it is now', deployed = true } = {}) {
 
 const lastNight = (overrides = {}) => decryptedBundle({ app: 'sample', date: '2026-11-20', dump: dumpOf('as it was that night'), settings: NIGHT_SETTINGS, ...overrides });
 
-test('restoring a night\'s bundle puts the database back as it was that night, with the service stopped while it is replaced and started after', async () => {
+test('restoring a night\'s bundle puts the database back as it was that night, with the service stopped while it is replaced, started after, and asked whether it answers', async () => {
   const { state, restore } = sampleMachine();
   const done = await restore('sample', lastNight());
   assert.equal(done.err, '');
   assert.equal(done.code, 0);
   assert.equal(state.data, 'as it was that night');
   assert.equal(state.running, true);
-  assert.deepEqual(state.events, ['dump', 'stop', 'drop', 'restore', 'start']);
+  assert.deepEqual(state.events, ['dump', 'stop', 'drop', 'restore', 'start', 'health']);
+  assert.match(done.out, /^sample is restored and answering\.$/m);
+});
+
+test('the health path asked is the one the running release was deployed with, on its port', async () => {
+  const { calls, restore } = sampleMachine();
+  await restore('sample', lastNight());
+  const asked = commandLines(calls).filter((line) => line.startsWith('timeout '));
+  assert.equal(asked.length, 1);
+  assert.match(asked[0], / curl .* http:\/\/127\.0\.0\.1:4310\/healthz$/);
+});
+
+test('an app that does not answer after a restore is stopped again, and the restore fails naming the dump taken at the start', async () => {
+  const { state, restore, before } = sampleMachine();
+  state.fails.health = true;
+  const done = await restore('sample', lastNight());
+  assert.equal(done.code, 1);
+  assert.deepEqual(state.events, ['dump', 'stop', 'drop', 'restore', 'start', 'health', 'stop']);
+  assert.equal(state.running, false);
+  assert.equal(state.data, 'as it was that night');
+  assert.equal(done.err, [
+    'app-sample.service is stopped.',
+    `sample's database as it was before this restore is in ${before}. To put it back:`,
+    `  sudo apps-machine restore sample ${before}`,
+    'error: the restore of sample stopped at health: /healthz on port 4310 did not answer with success within 90 seconds',
+    '',
+  ].join('\n'));
+});
+
+test('a running release whose record of its deploy section cannot be read is refused before anything is stopped', async () => {
+  const { paths, state, restore } = sampleMachine();
+  fs.rmSync(`${fs.realpathSync(paths.currentRelease('sample'))}.json`);
+  const done = await restore('sample', lastNight());
+  assert.equal(done.code, 1);
+  assert.match(done.err, /^error: cannot tell where sample answers: ENOENT: .*\.json'\n$/);
+  assert.equal(state.running, true);
+  assert.deepEqual(state.events, []);
 });
 
 test('the database as it was is dumped before anything is stopped, for root alone, and the way to put it back is printed', async () => {
@@ -104,14 +145,14 @@ test('the dump taken before a restore undoes it, and is kept', async () => {
 
 test('the dump a deploy took restores as a bundle\'s does, and stays where the deploy put it', async () => {
   const { paths, state, restore } = sampleMachine();
-  const taken = path.join(paths.backupDir, 'deploys/sample/20261121T120000Z.dump');
+  const taken = path.join(paths.deployDumps('sample'), '20261121T120000Z.dump');
   fs.mkdirSync(path.dirname(taken), { recursive: true });
   fs.writeFileSync(taken, dumpOf('as it was before the deploy'));
   const done = await restore('sample', taken);
   assert.equal(done.err, '');
   assert.equal(done.code, 0);
   assert.equal(state.data, 'as it was before the deploy');
-  assert.deepEqual(state.events, ['dump', 'stop', 'drop', 'restore', 'start']);
+  assert.deepEqual(state.events, ['dump', 'stop', 'drop', 'restore', 'start', 'health']);
   assert.equal(fs.readFileSync(taken, 'latin1'), dumpOf('as it was before the deploy'));
   assert.doesNotMatch(done.out, /Removed/);
 });
@@ -159,7 +200,7 @@ test('the app\'s role is given the password the settings put back name, after th
   const { state, calls, restore } = sampleMachine();
   await restore('sample', lastNight(), '--settings');
   assert.equal(state.password, '0ldpassw0rd');
-  assert.deepEqual(state.events, ['dump', 'stop', 'drop', 'restore', 'password', 'start']);
+  assert.deepEqual(state.events, ['dump', 'stop', 'drop', 'restore', 'password', 'start', 'health']);
   for (const call of calls) assert.ok(!call.args.join(' ').includes('0ldpassw0rd'));
 });
 
@@ -263,6 +304,7 @@ test('the decrypted bundle is gone from the machine however the restore ends, an
     'the dump before it failing': (m, given) => { m.state.fails.dump = true; return m.restore('sample', given.whole); },
     'the restore failing': (m, given) => { m.state.fails.restore = true; return m.restore('sample', given.whole); },
     'the start failing': (m, given) => { m.state.fails.start = true; return m.restore('sample', given.whole); },
+    'the app not answering': (m, given) => { m.state.fails.health = true; return m.restore('sample', given.whole); },
   };
   for (const [outcome, act] of Object.entries(outcomes)) {
     const m = sampleMachine();
