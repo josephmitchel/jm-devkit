@@ -53,3 +53,7 @@ test('the backups\' public key is in root\'s directory, and the nightly bundles 
   assert.equal(paths.nightlyDir, '/var/lib/apps-machine/backups/nightly');
   assert.equal(paths.backupWorkDir, '/var/lib/apps-machine/backups/work');
 });
+
+test('what a restore replaced is kept in the backup directory, apart from the nightly bundles and a run\'s work', () => {
+  assert.equal(machinePaths().restoreDumps('sample'), '/var/lib/apps-machine/backups/restores/sample');
+});

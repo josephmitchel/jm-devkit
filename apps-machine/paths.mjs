@@ -44,7 +44,9 @@ export function machinePaths(root = '/') {
     backupPublicKey: path.join(configDir, 'backup-public-key'),
     /** The nights' encrypted bundles, root's alone. */
     nightlyDir: path.join(stateDir, 'backups/nightly'),
-    /** Where a backup run works: a directory per run, removed when the run ends. */
+    /** Where a backup run or a restore works: a directory per run, removed when the run ends. */
     backupWorkDir: path.join(stateDir, 'backups/work'),
+    /** What a restore replaced, kept so it can be undone: an app's database dump, and its settings file when that was replaced too. */
+    restoreDumps: (app) => path.join(stateDir, 'backups/restores', app),
   };
 }
