@@ -11,7 +11,7 @@ export const HEALTH_ANSWER_SECONDS = 30;
  */
 export function answersHealthy({ run }, { port, healthPath }) {
   const done = run('timeout', [
-    String(HEALTH_TIME_LIMIT_SECONDS),
+    '--foreground', String(HEALTH_TIME_LIMIT_SECONDS),
     'curl', '--silent', '--output', '/dev/null', '--fail', '--location', '--max-redirs', '0',
     '--max-time', String(HEALTH_ANSWER_SECONDS),
     '--retry', String(HEALTH_TIME_LIMIT_SECONDS), '--retry-delay', '1', '--retry-all-errors', '--retry-max-time', String(HEALTH_TIME_LIMIT_SECONDS),

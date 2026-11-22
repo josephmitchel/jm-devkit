@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { run } from './run.mjs';
+import { Interrupted, run } from './run.mjs';
 import { tempDir } from './test-helpers.mjs';
 
 const HOME = import.meta.dirname;
@@ -37,6 +37,38 @@ test('a live program\'s output goes to the terminal, not back to the command', (
 
 test('a program that cannot be started is an error naming it', () => {
   assert.throws(() => run('no-such-program-on-this-machine'), /^Error: could not run no-such-program-on-this-machine: /);
+});
+
+/** Run a module in a process group of its own, so a signal it sends its group reaches nothing else. Returns what it printed. */
+function inOwnGroup(module) {
+  const done = run('setsid', ['--wait', node, '--input-type=module', '-e', module]);
+  return { code: done.code, said: done.stdout, err: done.stderr };
+}
+
+const RUN = JSON.stringify(path.join(HOME, 'run.mjs'));
+
+test('a signal that ends a program is thrown once as Interrupted, and what cleans up afterwards still runs programs', () => {
+  for (const [signal, number] of [['SIGINT', 'INT'], ['SIGTERM', 'TERM'], ['SIGHUP', 'HUP']]) {
+    const done = inOwnGroup(`import { Interrupted, outliveSignals, run } from ${RUN};
+      outliveSignals();
+      try {
+        run('/bin/sh', ['-c', 'kill -${number} 0; sleep 30']);
+        console.log('the program returned');
+      } catch (e) {
+        console.log(e instanceof Interrupted, e.signal, e.message);
+      } finally {
+        console.log(run('echo', ['cleaned up']).stdout.trim());
+      }`);
+    assert.deepEqual(done, { code: 0, said: `true ${signal} interrupted by ${signal}\ncleaned up\n`, err: '' });
+  }
+});
+
+test('a program that exits the way a shell reports one a signal ended is interrupted too', () => {
+  for (const [code, signal] of [[129, 'SIGHUP'], [130, 'SIGINT'], [143, 'SIGTERM']]) {
+    assert.throws(() => run('/bin/sh', ['-c', `exit ${code}`]), (e) => e instanceof Interrupted && e.signal === signal);
+  }
+  assert.equal(run('/bin/sh', ['-c', 'exit 128']).code, 128);
+  assert.equal(run('/bin/sh', ['-c', 'kill -KILL $$']).code, 1);
 });
 
 test('run.mjs is the only module in the home that can start a program', () => {

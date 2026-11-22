@@ -5,6 +5,7 @@ import { makeBundle, newWorkDir, parseBundleName, publicKeyIsSet } from '../bund
 import { aliveAddressOf, bundlesOnStorage, removeFromStorage, requestAlive, storageOf, uploadBundle } from '../offsite.mjs';
 import { readRegistry } from '../registry.mjs';
 import { expiredOnMachine, expiredOnStorage } from '../retention.mjs';
+import { Interrupted } from '../run.mjs';
 import { UsageError } from '../usage.mjs';
 
 export const usage = 'apps-machine backup';
@@ -35,6 +36,7 @@ export function bundleEveryApp(world) {
         night.bundles.push({ app, date: night.date, name: path.basename(file), file });
         out.write(`${app}: ${file}\n`);
       } catch (e) {
+        if (e instanceof Interrupted) throw e;
         night.failed.push({ app, reason: e.message });
         err.write(`${app}: ${e.message}\n`);
       }
@@ -63,6 +65,7 @@ function uploadEach(world, storage, bundles) {
       world.out.write(`${bundle.app}: uploaded ${bundle.name}\n`);
       return true;
     } catch (e) {
+      if (e instanceof Interrupted) throw e;
       world.err.write(`${bundle.app}: ${e.message}\n`);
       return false;
     }
@@ -103,6 +106,7 @@ export function command(args, world) {
     if (uploaded.length < night.bundles.length) problems.push(`no bundle was uploaded for ${appsOf(night.bundles.filter((bundle) => !uploaded.includes(bundle)))}`);
     pruneStorage(world, storage, uploaded, night.date);
   } catch (e) {
+    if (e instanceof Interrupted) throw e;
     problems.push(e.message);
   }
   if (problems.length > 0) throw new Error(problems.join('; '));

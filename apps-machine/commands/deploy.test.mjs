@@ -323,7 +323,20 @@ test('after going back, the output names the dump the deploy took and the comman
   assert.match(lines[0], /pg_dump/);
   assert.deepEqual(lines.slice(1).filter((line) => /postgres|psql|pg_|dropdb|createdb/.test(line)), []);
   assert.deepEqual(lines.slice(lines.indexOf('runuser -u sample -- /bin/sh -c npm run migrate') + 1).map((line) => line.split(' ').slice(0, 2).join(' ')),
-    ['systemctl stop', 'systemctl start', 'timeout 90']);
+    ['systemctl stop', 'systemctl start', 'timeout --foreground']);
+});
+
+test('a deploy interrupted once the service is stopped goes back as after any failure, and says it was interrupted', async () => {
+  const { paths, behaviour, before, events, deploy } = await deployedOnce();
+  behaviour.interruptedAt = 'health';
+  const done = await deploy();
+  assert.equal(done.code, 1);
+  assert.deepEqual(servicePointsAt(paths, 'sample'), before);
+  assert.deepEqual(events.slice(events.lastIndexOf('stop')), ['stop', `start, pointing at 20261121T143000Z-${A}`, 'health']);
+  const said = done.err.split('\n');
+  assert.equal(said[2], 'The previous release is running again, and its health path answers.');
+  assert.equal(said.at(-3), `To put the database back as it was then: sudo apps-machine restore sample ${path.join(paths.deployDumps('sample'), '20261121T143100Z.dump')}`);
+  assert.equal(said.at(-2), 'error: the deploy stopped at health: interrupted by SIGINT');
 });
 
 test('when the previous release does not answer its health path either, the going back says so', async () => {

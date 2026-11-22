@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { Interrupted } from '../run.mjs';
 import { appsMachine, backupPrograms, fakeRun, filesUnder, machine, mode, offsitePrograms, openedBundle, registered, sink } from '../test-helpers.mjs';
 import { bundleEveryApp } from './backup.mjs';
 
@@ -97,6 +98,27 @@ test('one app\'s dump failing does not stop the others: the run fails naming the
   ].join('\n'));
   assert.deepEqual(filesUnder(paths.backupDir), ['nightly/example_app-2026-11-21.tar.age', 'nightly/sample-2026-11-21.tar.age']);
   assert.deepEqual(fs.readdirSync(paths.backupWorkDir), []);
+});
+
+test('a run that is interrupted stops there: no other app is dumped, nothing is uploaded, and nothing unencrypted is left', async () => {
+  for (const interrupted of ['tar', 'age', 'rclone']) {
+    const paths = machineWithKey('example_app', 'sample');
+    const offsite = offsitePrograms();
+    const result = await backup(paths, {
+      offsite,
+      respond: (program, args, options) => {
+        const answer = offsite.respond(program, args, options);
+        if (program === interrupted) throw new Interrupted('SIGTERM');
+        return answer;
+      },
+    });
+    assert.equal(result.code, 1, interrupted);
+    assert.equal(result.err, 'error: interrupted by SIGTERM\n', interrupted);
+    assert.deepEqual(fs.readdirSync(paths.backupWorkDir), [], interrupted);
+    assert.equal(result.calls.filter((call) => call.program === interrupted).length, 1, interrupted);
+    assert.deepEqual(result.requests, [], interrupted);
+    if (interrupted !== 'rclone') assert.deepEqual(filesUnder(paths.backupDir), [], interrupted);
+  }
 });
 
 test('a bundle that cannot be encrypted is not kept, and the app is named', async () => {

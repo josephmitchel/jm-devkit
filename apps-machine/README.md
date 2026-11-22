@@ -47,6 +47,8 @@ The Node and Postgres versions, and the other steps this script shares with the 
 
 Every command is run by the owner with sudo: `sudo apps-machine <command>`. Run with no command, it lists them. A command exits 0 when done, 1 when it failed and 2 when its arguments were wrong.
 
+A command that is interrupted, by Ctrl-C, a session that dropped or a shutdown, is not killed where it stands. The program it was waiting for ends, the command cleans up as it does when that step fails, and it exits 1 with `interrupted by <signal>`. A second interrupt while it cleans up ends the cleaning up. A signal sent to the command's own process and nothing else (`kill <pid>`) does not stop it: interrupt it from its terminal.
+
 ### list
 
 ```
@@ -381,7 +383,7 @@ Building an app again from nothing is: the setup script, `register`, `restore --
 For whoever changes the commands. They are plain Node modules with no dependencies, tested with `node --test 'apps-machine/**/*.test.mjs'`, which CI runs as its own job.
 
 - `apps-machine.mjs` is the entry point. Each command is a module in `commands/` exporting `usage`, `summary` and `command(args, { run, paths, out, err })`, which returns when done and throws to fail (a `UsageError` from `usage.mjs` for bad arguments). Adding a command is one line in `COMMANDS`.
-- `run.mjs` is the one way a command starts a program, and the only module that may: a test fails if another one imports Node's process-starting modules. Tests pass a fake `run` instead.
+- `run.mjs` is the one way a command starts a program, and the only module that may: a test fails if another one imports Node's process-starting modules. Tests pass a fake `run` instead. It throws `Interrupted`, once, for a program that SIGINT, SIGTERM or SIGHUP ended; the entry point keeps the process alive through those signals, so a command's `finally` and its failure handling run. Code that catches an error and goes on to the next app rethrows an `Interrupted`.
 - `paths.mjs` holds every path on the machine under one root, which tests point at a temp dir. A command takes its paths from there, never from a literal.
 - `registry.mjs` reads and writes the registrations, and is where a name, a repository and a Serve port are checked.
 - `settings.mjs` reads an app's settings file, and runs a command as the app's user with those values in its environment.

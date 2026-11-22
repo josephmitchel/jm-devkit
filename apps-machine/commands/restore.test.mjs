@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { makeRelease } from '../releases.mjs';
-import { run as realRun } from '../run.mjs';
+import { Interrupted, run as realRun } from '../run.mjs';
 import { pointServiceAt } from '../service.mjs';
 import { appsMachine, archiveOf, commandLines, decryptedBundle, fakeRun, filesUnder, machine, machinePrograms, mode, registered, standInDump, standInDumpOf, standInDumpText } from '../test-helpers.mjs';
 
@@ -63,6 +63,7 @@ function sampleMachine({ data = 'as it is now', deployed = true } = {}) {
       state.running = true;
     } else if (program === 'timeout' && args.includes('curl')) {
       state.events.push('health');
+      if (state.fails.health === 'interrupted') throw new Interrupted('SIGHUP');
       return { code: state.fails.health ? 124 : 0 };
     }
     return programs(program, args, options);
@@ -340,6 +341,19 @@ test('the decrypted bundle is gone from the machine however the restore ends, an
     assert.deepEqual(fs.readdirSync(m.paths.backupDir, { recursive: true }).filter((entry) => entry.startsWith('work/')), [], outcome);
     assert.deepEqual(filesUnder(m.paths.backupDir).filter((file) => !file.startsWith('restores/sample/')), [], outcome);
   }
+});
+
+test('a restore interrupted while it waits for the app to answer stops the service again and leaves nothing of the bundle', async () => {
+  const m = sampleMachine();
+  m.state.fails.health = 'interrupted';
+  const bundle = lastNight();
+  const done = await m.restore('sample', bundle);
+  assert.equal(done.code, 1);
+  assert.equal(done.err.split('\n').at(-2), 'error: the restore of sample stopped at health: interrupted by SIGHUP');
+  assert.equal(m.state.events.at(-1), 'stop');
+  assert.equal(m.state.running, false);
+  assert.ok(!fs.existsSync(bundle));
+  assert.deepEqual(filesUnder(m.paths.backupDir).filter((file) => !file.startsWith('restores/sample/')), []);
 });
 
 test('a bundle given through a link is itself removed', async () => {

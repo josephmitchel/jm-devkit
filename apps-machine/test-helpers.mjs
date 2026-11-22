@@ -9,7 +9,7 @@ import { COMMANDS, main } from './apps-machine.mjs';
 import { BUNDLE_FILES, BUNDLE_FORMAT } from './bundle.mjs';
 import { machinePaths } from './paths.mjs';
 import { readRegistry, registrationOf } from './registry.mjs';
-import { run as realRun } from './run.mjs';
+import { Interrupted, run as realRun } from './run.mjs';
 
 const dirs = [];
 after(() => dirs.forEach((dir) => fs.rmSync(dir, { recursive: true, force: true })));
@@ -155,7 +155,7 @@ export function openedBundle(file) {
  * deploys: `commit`, and `config`, the object or text of its project config (none when undefined).
  * `behaviour` is how the build behaves on this machine, also a test's to change: `exits` gives the
  * exit code of a command line run as the app's user, or of any other program's whole command line,
- * `healthy` whether the health path answers, `unhealthy` the commits whose release does not answer
+ * `healthy` whether the health path answers, `interruptedAt: 'health'` an interrupt while it is first asked, `unhealthy` the commits whose release does not answer
  * it while the others do, and `listeners` the lines `ss` prints. `events` names each thing the
  * deploy did, in order, with the release the service pointed at when it was migrated and when it
  * was started.
@@ -192,6 +192,10 @@ export function deployPrograms(paths, app, remote, behaviour = {}) {
       events.push(`start, pointing at ${current()}`);
     } else if (program === 'timeout' && args.includes('curl')) {
       events.push('health');
+      if (behaviour.interruptedAt === 'health') {
+        delete behaviour.interruptedAt;
+        throw new Interrupted('SIGINT');
+      }
       const answers = behaviour.healthy !== false && !behaviour.unhealthy?.some((commit) => current().endsWith(commit));
       return { code: answers ? 0 : 124 };
     } else if (program === 'ss') {

@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { createDatabase, databaseNameTaken, databasePassword, dumpDatabase, dumpFault, restoreDatabase, setDatabasePassword } from './database.mjs';
-import { run as realRun } from './run.mjs';
+import { Interrupted, run as realRun } from './run.mjs';
 import { fakeRun, machine, tempDir } from './test-helpers.mjs';
 
 const PSQL = ['-u', 'postgres', '--', 'psql', '-X', '-q', '-tA', '-v', 'ON_ERROR_STOP=1', '-d', 'postgres'];
@@ -81,6 +81,17 @@ test('a dump that fails leaves no file and says what pg_dump said', () => {
   const file = path.join(paths.backupDir, 'sample.dump');
   assert.throws(() => dumpDatabase({ run: withStubbedRunuser({ code: 1 }), paths }, 'sample', file),
     /^Error: could not dump sample's database: pg_dump: said this$/);
+  assert.ok(!fs.existsSync(file));
+});
+
+test('a dump that is interrupted leaves no file either', () => {
+  const paths = machine();
+  const file = path.join(paths.backupDir, 'sample.dump');
+  const { run } = fakeRun(() => {
+    fs.writeFileSync(file, 'PGDMP, cut short');
+    throw new Interrupted('SIGINT');
+  });
+  assert.throws(() => dumpDatabase({ run, paths }, 'sample', file), Interrupted);
   assert.ok(!fs.existsSync(file));
 });
 

@@ -40,10 +40,13 @@ export function setDatabasePassword(world, app, password) {
  */
 export function dumpDatabase({ run, paths }, app, file) {
   const script = 'umask 077 && exec runuser -u postgres -- pg_dump --format=custom --dbname="$1" > "$2"';
-  const done = run('/bin/sh', ['-c', script, 'sh', app, file], { cwd: paths.root });
-  if (done.code === 0) return;
-  fs.rmSync(file, { force: true });
-  throw new Error(`could not dump ${app}'s database: ${done.stderr.trim()}`);
+  let done;
+  try {
+    done = run('/bin/sh', ['-c', script, 'sh', app, file], { cwd: paths.root });
+  } finally {
+    if (done?.code !== 0) fs.rmSync(file, { force: true });
+  }
+  if (done.code !== 0) throw new Error(`could not dump ${app}'s database: ${done.stderr.trim()}`);
 }
 
 /** What keeps `file` from being a dump pg_restore can read, in pg_restore's words, or null when it is one. */

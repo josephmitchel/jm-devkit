@@ -4,7 +4,7 @@
 
 import { isMain } from './is-main.mjs';
 import { machinePaths } from './paths.mjs';
-import { run as realRun } from './run.mjs';
+import { outliveSignals, run as realRun } from './run.mjs';
 import { UsageError } from './usage.mjs';
 
 /** One line per command: its module exports `usage`, `summary` and `command(args, world)`, which throws to fail. */
@@ -46,4 +46,10 @@ export async function main(argv, { run = realRun, paths = machinePaths(), out = 
   }
 }
 
-if (isMain(import.meta.url)) process.exitCode = await main(process.argv.slice(2));
+/** `main` as the program root runs: an interrupt does not kill it, so the command it stopped cleans up as after any failure. */
+export function start(argv, world) {
+  outliveSignals();
+  return main(argv, world);
+}
+
+if (isMain(import.meta.url)) process.exitCode = await start(process.argv.slice(2));
