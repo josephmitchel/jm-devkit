@@ -14,9 +14,9 @@ A retired file is a kit-owned file the kit no longer writes. The generator still
 
 | Retired file | What removing it does |
 | --- | --- |
-| `.github/workflows/nightly-sweep.yml` | Moves the project's code reviewer from GitHub Actions to the owner's machine. The workflow was the three jobs that ran it on Actions: `sweep`, `landed` and `review-now`. |
+| `.github/workflows/nightly-sweep.yml` | Moves the project's code reviewer from GitHub Actions to the development machine. The workflow was the three jobs that ran it on Actions: `sweep`, `landed` and `review-now`. |
 
-A project that still has the sweep workflow has not moved: its workflow keeps working exactly as it is, and the code reviewer on the owner's machine leaves the project alone. It moves when the pull request that removes the file is merged, which is why the nudge and sync both say what the removal does before anyone merges it. The path is exported as `SWEEP_WORKFLOW`, which is how the code reviewer tells a project still on Actions from one it handles.
+A project that still has the sweep workflow has not moved: its workflow keeps working exactly as it is, and the code reviewer on the development machine leaves the project alone. It moves when the pull request that removes the file is merged, which is why the nudge and sync both say what the removal does before anyone merges it. The path is exported as `SWEEP_WORKFLOW`, which is how the code reviewer tells a project still on Actions from one it handles.
 
 `retired-sweep-workflow.mjs` holds the workflow as it was last written, with the tests that pin it. Nothing writes it. It stays until the last project has moved, as the record of what a project still on Actions is running.
 
@@ -24,7 +24,7 @@ A project that still has the sweep workflow has not moved: its workflow keeps wo
 
 Only through `devkit.json`, as `../devkit.schema.json` defines it. A hand edit to a kit-owned file is drift: `--check` reports it and the next sync replaces it.
 
-No field of `devkit.json` changes what is written today. `reviewer.env`, `reviewer.databases` and `nightly.checks` are read by the code reviewer itself, on the owner's machine. `sweep.hour` and `reviewer.services` are retired with the workflow they described: they are still accepted, so a project still on Actions keeps validating, and nothing reads them on the machine.
+No field of `devkit.json` changes what is written today. `reviewer.env`, `reviewer.databases` and `nightly.checks` are read by the code reviewer itself, on the development machine. `sweep.hour` and `reviewer.services` are retired with the workflow they described: they are still accepted, so a project still on Actions keeps validating, and nothing reads them on the machine.
 
 A variation `devkit.json` cannot express is a change to the schema and to this generator, made in the kit, never in a project.
 

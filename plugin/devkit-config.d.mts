@@ -30,6 +30,21 @@ export interface DevkitConfig {
     /** Commands run once a night after the project's sweep, in the order written. */
     checks?: Array<{ name: string; command: string }>;
   };
+  /** How the apps machine deploys the project. A project that is not deployed has none. */
+  deploy?: DeployConfig;
+}
+
+/** The `deploy` section: commands run with `sh -c` from the root of the commit being deployed. */
+export interface DeployConfig {
+  setup: string;
+  build: string;
+  /** Left out by a project that migrates as it starts. */
+  migrate?: string;
+  start: string;
+  /** The local port the app listens on. */
+  port: number;
+  /** The path on `port` that answers once the app is healthy. */
+  healthPath: string;
 }
 
 /** One entry of `reviewer.services`: a GitHub Actions job service. */
@@ -68,5 +83,7 @@ export type JsonType = 'object' | 'array' | 'string' | 'integer' | 'number' | 'b
 
 export declare function devkitSchema(): JsonSchema;
 export declare function parseDevkitConfig(text: string): DevkitConfig;
+/** The checked `deploy` section of a devkit.json's text, or null when the project has none. */
+export declare function parseDeployConfig(text: string): DeployConfig | null;
 export declare function checkDevkitConfig(value: unknown): DevkitConfig;
 export declare function validate(schema: JsonSchema, value: unknown, at: string): string[];

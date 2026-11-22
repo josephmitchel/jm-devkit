@@ -10,7 +10,7 @@ _Avoid_: devkit (the plugin's name), toolkit, tooling, flow
 
 **Project**:
 A repository that is developed with the kit. The kit never names or describes one, and the kit is itself a project.
-_Avoid_: repo, consumer, app
+_Avoid_: repo, consumer, app (what a project runs, and not every project has one)
 
 **Plugin**:
 The part of the kit that is present inside a Claude Code session: the skills and the house rules.
@@ -67,6 +67,14 @@ _Avoid_: setup, init, onboarding, bootstrap
 **Sync**:
 Bringing a project's own copies of kit files up to the kit's current state.
 _Avoid_: update (what the plugin does on its own), upgrade
+
+**Development machine**:
+The owner's machine that agents and the code reviewer work on unattended. It holds projects' checkouts and seeded data only, never an app's real data or production keys.
+_Avoid_: dev VM, dev box, sandbox, server
+
+**Apps machine**:
+The owner's machine that runs the real copies of his apps, and holds their real data and production keys. Only the owner acts on it: no agent, and not the code reviewer, has an account, a key or a route onto it.
+_Avoid_: prod box, production server, server, host
 
 **Upstream**:
 Matt Pocock's skills, which the plugin's skills were forked from and which are pulled in again only on purpose.
