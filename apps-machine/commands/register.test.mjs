@@ -6,14 +6,12 @@ import path from 'node:path';
 import { readRegistry } from '../registry.mjs';
 import { renderUnit, servicePointsAt } from '../service.mjs';
 import { readSettings } from '../settings.mjs';
-import { appsMachine, fakeRun, machine, machinePrograms } from '../test-helpers.mjs';
+import { appsMachine, commandLines, fakeRun, machine, machinePrograms, mode } from '../test-helpers.mjs';
 
 const SAMPLE = ['register', 'sample', 'git@github.com:example/sample.git', '8443'];
 const EXAMPLE = ['register', 'example_app', 'git@github.com:example/example-app.git', '8444'];
 const USAGE = 'usage: apps-machine register <name> <repository> <serve-port>\n';
 
-const mode = (file) => fs.statSync(file).mode & 0o777;
-const commandLines = (calls) => calls.map(({ program, args }) => [program, ...args].join(' '));
 const everythingUnder = (dir) => fs.readdirSync(dir, { recursive: true }).sort();
 
 /** A machine, the programs on it, and `register(argv)` run there. */

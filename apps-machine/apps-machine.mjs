@@ -11,6 +11,7 @@ import { UsageError } from './usage.mjs';
 export const COMMANDS = {
   list: await import('./commands/list.mjs'),
   register: await import('./commands/register.mjs'),
+  deploy: await import('./commands/deploy.mjs'),
   backup: await import('./commands/backup.mjs'),
   logs: await import('./commands/logs.mjs'),
   restore: await import('./commands/restore.mjs'),

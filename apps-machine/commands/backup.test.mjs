@@ -3,13 +3,12 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { appsMachine, backupPrograms, fakeRun, machine, openedBundle, registered, sink } from '../test-helpers.mjs';
+import { appsMachine, backupPrograms, fakeRun, machine, mode, openedBundle, registered, sink } from '../test-helpers.mjs';
 import { bundleEveryApp } from './backup.mjs';
 
 const PUBLIC_KEY = 'age1madeupmadeupmadeupmadeupmadeupmadeupmadeupmadeupmadeupma\n';
 const NIGHT = () => new Date(2026, 10, 21, 3, 0, 0);
 
-const mode = (file) => fs.statSync(file).mode & 0o777;
 const filesUnder = (dir) => fs.readdirSync(dir, { recursive: true }).filter((file) => fs.statSync(path.join(dir, file)).isFile()).sort();
 
 function machineWithKey(...apps) {
