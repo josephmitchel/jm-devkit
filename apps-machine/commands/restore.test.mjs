@@ -6,21 +6,18 @@ import path from 'node:path';
 import { makeRelease } from '../releases.mjs';
 import { run as realRun } from '../run.mjs';
 import { pointServiceAt } from '../service.mjs';
-import { appsMachine, archiveOf, commandLines, decryptedBundle, fakeRun, machine, machinePrograms, mode, registered } from '../test-helpers.mjs';
+import { appsMachine, archiveOf, commandLines, decryptedBundle, fakeRun, filesUnder, machine, machinePrograms, mode, registered, standInDump, standInDumpOf, standInDumpText } from '../test-helpers.mjs';
 
 const USAGE = 'usage: apps-machine restore <name> <file> [--settings]\n';
 const NOW = () => new Date(Date.UTC(2026, 10, 21, 14, 30, 5));
 const STAMP = '20261121T143005Z';
 const NIGHT_SETTINGS = 'DATABASE_URL=postgres://sample:0ldpassw0rd@127.0.0.1:5432/sample\nKEY="that night\'s"\n';
 
-const filesUnder = (dir) => fs.readdirSync(dir, { recursive: true }).filter((file) => fs.statSync(path.join(dir, file)).isFile()).sort();
-const dumpOf = (data) => `PGDMP${data}`;
-
 /**
  * A machine with `sample` registered and stand-ins for what a restore runs on it. `tar` is the
  * machine's own. Postgres is `state.data`, the text the database holds (null while it is dropped):
- * a dump of it is `PGDMP` and that text, so a restore is seen to bring data back, and nothing else
- * is a dump. `state.running` is the service, `state.events` names what was done in order, and a
+ * a dump of it is the stand-in dump holding that text, so a restore is seen to bring data back, and
+ * nothing else is a dump. `state.running` is the service, `state.events` names what was done in order, and a
  * name in `state.fails` makes that fail. Deployed, the app's release answers on port 4310 at /healthz.
  */
 function sampleMachine({ data = 'as it is now', deployed = true } = {}) {
@@ -38,17 +35,15 @@ function sampleMachine({ data = 'as it is now', deployed = true } = {}) {
   const { run, calls } = fakeRun((program, args, options = {}) => {
     const { input = '' } = options;
     if (program === 'tar') return realRun(program, args, options);
-    if (program === '/bin/sh' && args[1].includes('pg_dump')) {
+    if (standInDump(program, args, state.fails.dump ? null : state.data)) {
       state.events.push('dump');
-      if (state.fails.dump) return failing('dump', 'pg_dump: error: said this');
-      fs.writeFileSync(args.at(-1), dumpOf(state.data), { mode: 0o600 });
+      return failing('dump', 'pg_dump: error: said this');
     } else if (program === '/bin/sh' && args[1].includes('pg_restore --list')) {
-      const isDump = fs.readFileSync(args.at(-1), 'latin1').startsWith('PGDMP');
-      return isDump ? {} : { code: 1, stderr: 'pg_restore: error: input file does not appear to be a valid archive\n' };
+      return standInDumpText(args.at(-1)) === null ? { code: 1, stderr: 'pg_restore: error: input file does not appear to be a valid archive\n' } : {};
     } else if (program === '/bin/sh' && args[1].includes('pg_restore')) {
       state.events.push('restore');
       if (state.fails.restore) return failing('restore', 'pg_restore: error: said this');
-      state.data = fs.readFileSync(args.at(-1), 'latin1').slice('PGDMP'.length);
+      state.data = standInDumpText(args.at(-1));
     } else if (/^DROP DATABASE/.test(input)) {
       state.events.push('drop');
       state.data = null;
@@ -76,7 +71,7 @@ function sampleMachine({ data = 'as it is now', deployed = true } = {}) {
   return { paths, state, calls, run, restore, before: path.join(paths.restoreDumps('sample'), `${STAMP}.dump`) };
 }
 
-const lastNight = (overrides = {}) => decryptedBundle({ app: 'sample', date: '2026-11-20', dump: dumpOf('as it was that night'), settings: NIGHT_SETTINGS, ...overrides });
+const lastNight = (overrides = {}) => decryptedBundle({ app: 'sample', date: '2026-11-20', dump: standInDumpOf('as it was that night'), settings: NIGHT_SETTINGS, ...overrides });
 
 test('restoring a night\'s bundle puts the database back as it was that night, with the service stopped while it is replaced, started after, and asked whether it answers', async () => {
   const { state, restore } = sampleMachine();
@@ -128,7 +123,7 @@ test('the database as it was is dumped before anything is stopped, for root alon
   const { paths, state, restore, before } = sampleMachine();
   const done = await restore('sample', lastNight());
   assert.deepEqual(state.events.slice(0, 2), ['dump', 'stop']);
-  assert.equal(fs.readFileSync(before, 'latin1'), dumpOf('as it is now'));
+  assert.deepEqual(fs.readFileSync(before), standInDumpOf('as it is now'));
   assert.equal(mode(before), 0o600);
   assert.equal(mode(paths.restoreDumps('sample')), 0o700);
   assert.match(done.out, new RegExp(`^Dumped sample's database as it is now to ${before}$`, 'm'));
@@ -141,20 +136,20 @@ test('the dump taken before a restore undoes it, and is kept', async () => {
   const undone = await restore('sample', before);
   assert.equal(undone.code, 0);
   assert.equal(state.data, 'as it is now');
-  assert.equal(fs.readFileSync(before, 'latin1'), dumpOf('as it is now'));
+  assert.deepEqual(fs.readFileSync(before), standInDumpOf('as it is now'));
 });
 
 test('the dump a deploy took restores as a bundle\'s does, and stays where the deploy put it', async () => {
   const { paths, state, restore } = sampleMachine();
   const taken = path.join(paths.deployDumps('sample'), '20261121T120000Z.dump');
   fs.mkdirSync(path.dirname(taken), { recursive: true });
-  fs.writeFileSync(taken, dumpOf('as it was before the deploy'));
+  fs.writeFileSync(taken, standInDumpOf('as it was before the deploy'));
   const done = await restore('sample', taken);
   assert.equal(done.err, '');
   assert.equal(done.code, 0);
   assert.equal(state.data, 'as it was before the deploy');
   assert.deepEqual(state.events, ['dump', 'stop', 'drop', 'restore', 'start', 'health']);
-  assert.equal(fs.readFileSync(taken, 'latin1'), dumpOf('as it was before the deploy'));
+  assert.deepEqual(fs.readFileSync(taken), standInDumpOf('as it was before the deploy'));
   assert.doesNotMatch(done.out, /Removed/);
 });
 
@@ -205,6 +200,29 @@ test('the app\'s role is given the password the settings put back name, after th
   for (const call of calls) assert.ok(!call.args.join(' ').includes('0ldpassw0rd'));
 });
 
+test('a bundle whose settings are the file register wrote on another machine gives the role that machine\'s password', async () => {
+  const lost = sampleMachine();
+  const written = fs.readFileSync(lost.paths.settingsFile('sample'));
+  const [, password] = /^DATABASE_URL=postgres:\/\/sample:([0-9a-f]{48})@/m.exec(written.toString());
+  const { paths, state, restore } = sampleMachine();
+  assert.notDeepEqual(fs.readFileSync(paths.settingsFile('sample')), written);
+  const done = await restore('sample', lastNight({ settings: written }), '--settings');
+  assert.equal(done.err, '');
+  assert.equal(done.code, 0);
+  assert.equal(state.password, password);
+  assert.deepEqual(fs.readFileSync(paths.settingsFile('sample')), written);
+});
+
+test('an app whose settings file is gone gets the bundle\'s with --settings, and there is none to keep', async () => {
+  const { paths, restore } = sampleMachine();
+  fs.rmSync(paths.settingsFile('sample'));
+  const done = await restore('sample', lastNight(), '--settings');
+  assert.equal(done.code, 0);
+  assert.equal(fs.readFileSync(paths.settingsFile('sample'), 'utf8'), NIGHT_SETTINGS);
+  assert.deepEqual(filesUnder(paths.restoreDumps('sample')), [`${STAMP}.dump`]);
+  assert.doesNotMatch(done.out, /Its settings file as it was/);
+});
+
 test('settings put back whose DATABASE_URL is not one register wrote leave the password alone, with a warning that names the file and not what it holds', async () => {
   for (const settings of ['DATABASE_URL=postgres://sample:s3cret@db.example:5432/sample\n', 'KEY=value\n', 'not a setting s3cret\n']) {
     const { paths, state, restore } = sampleMachine();
@@ -229,7 +247,7 @@ function assertRefused(done, state, message) {
 
 test('a bundle of another app is refused before anything is stopped', async () => {
   const { state, restore } = sampleMachine();
-  const bundle = decryptedBundle({ app: 'example_app', dump: dumpOf('another app\'s'), settings: NIGHT_SETTINGS });
+  const bundle = decryptedBundle({ app: 'example_app', dump: standInDumpOf('another app\'s'), settings: NIGHT_SETTINGS });
   assertRefused(await restore('sample', bundle), state, `${bundle} is a bundle of example_app, not of sample`);
 });
 
@@ -260,7 +278,7 @@ test('a bundle whose dump pg_restore cannot read is refused before anything is s
 
 test('a bundle missing one of its files is refused before anything is stopped', async () => {
   const { state, restore } = sampleMachine();
-  const bundle = archiveOf({ 'bundle.json': '{"format":1,"app":"sample","date":"2026-11-20"}\n', 'database.dump': dumpOf('as it was that night') });
+  const bundle = archiveOf({ 'bundle.json': '{"format":1,"app":"sample","date":"2026-11-20"}\n', 'database.dump': standInDumpOf('as it was that night') });
   const done = await restore('sample', bundle);
   assert.equal(done.code, 1);
   assert.match(done.err, /^error: could not open the bundle .*: tar: settings\.env: Not found in archive/);
@@ -271,14 +289,14 @@ test('a bundle missing one of its files is refused before anything is stopped', 
 test('--settings with a dump is refused before anything is stopped: a dump holds no settings file', async () => {
   const { paths, state, restore } = sampleMachine();
   const dump = path.join(paths.backupDir, 'a.dump');
-  fs.writeFileSync(dump, dumpOf('from a deploy'));
+  fs.writeFileSync(dump, standInDumpOf('from a deploy'));
   assertRefused(await restore('sample', dump, '--settings'), state, `${dump} is a dump, which holds no settings file: leave out --settings`);
 });
 
 test('an app that is not registered, and a file that is not there, are refused', async () => {
   const { paths, state, restore } = sampleMachine();
   const dump = path.join(paths.backupDir, 'a.dump');
-  fs.writeFileSync(dump, dumpOf('from a deploy'));
+  fs.writeFileSync(dump, standInDumpOf('from a deploy'));
   assertRefused(await restore('example_app', dump), state, 'no app named example_app is registered on this machine');
   assertRefused(await restore('sample', path.join(paths.root, 'missing.tar')), state, `${path.join(paths.root, 'missing.tar')} is not a file`);
   assertRefused(await restore('sample', paths.backupDir), state, `${paths.backupDir} is not a file`);
@@ -311,9 +329,9 @@ test('the decrypted bundle is gone from the machine however the restore ends, an
     const m = sampleMachine();
     const given = {
       whole: lastNight(),
-      other: decryptedBundle({ app: 'example_app', dump: dumpOf('another app\'s'), settings: NIGHT_SETTINGS }),
+      other: decryptedBundle({ app: 'example_app', dump: standInDumpOf('another app\'s'), settings: NIGHT_SETTINGS }),
       unreadable: lastNight({ dump: 'cut short' }),
-      partial: archiveOf({ 'bundle.json': '{"format":1,"app":"sample","date":"2026-11-20"}\n', 'database.dump': dumpOf('that night') }),
+      partial: archiveOf({ 'bundle.json': '{"format":1,"app":"sample","date":"2026-11-20"}\n', 'database.dump': standInDumpOf('that night') }),
     };
     const done = await act(m, given);
     const used = Object.values(given).filter((file) => !fs.existsSync(file));
@@ -373,7 +391,7 @@ test('a restore that fails once the service is stopped leaves it stopped, says s
       '',
     ].join('\n'), failing);
     if (failing !== 'stop') assert.equal(state.running, false, failing);
-    assert.equal(fs.readFileSync(before, 'latin1'), dumpOf('as it is now'));
+    assert.deepEqual(fs.readFileSync(before), standInDumpOf('as it is now'));
     assert.doesNotMatch(done.out, /is restored/);
   }
 });

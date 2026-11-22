@@ -174,3 +174,10 @@ test('a password is read back from a database address as register wrote it, and 
   ];
   for (const address of others) assert.equal(databasePassword(address, 'sample'), null, String(address));
 });
+
+test('the address a password is set with is one the password is read back from', () => {
+  const { run } = fakeRun((program, args, { input }) => (/SHOW port/.test(input) ? { stdout: '5433\n' } : {}));
+  for (const password of ['f00dfeed', 'AZaz09', '0'.repeat(48)]) {
+    assert.equal(databasePassword(setDatabasePassword({ run, paths: machine() }, 'sample', password), 'sample'), password);
+  }
+});

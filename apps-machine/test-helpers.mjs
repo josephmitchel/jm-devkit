@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { COMMANDS, main } from './apps-machine.mjs';
+import { BUNDLE_FILES, BUNDLE_FORMAT } from './bundle.mjs';
 import { machinePaths } from './paths.mjs';
 import { readRegistry, registrationOf } from './registry.mjs';
 import { run as realRun } from './run.mjs';
@@ -70,13 +71,26 @@ export const commandLines = (calls) => calls.map(({ program, args }) => [program
 /** A file's permission bits. */
 export const mode = (file) => fs.statSync(file).mode & 0o777;
 
+/** Every file under `dir`, by its path from there, sorted. */
+export const filesUnder = (dir) => fs.readdirSync(dir, { recursive: true }).filter((file) => fs.statSync(path.join(dir, file)).isFile()).sort();
+
+/** A stand-in dump holding `text`: what pg_dump's custom format starts with, the text, and bytes that are not text. */
+export const standInDumpOf = (text) => Buffer.from(`PGDMP${text}\0\xff`, 'latin1');
+
+/** The text a stand-in dump holds, or null when the file is not one: what a stand-in `pg_restore` goes by. */
+export function standInDumpText(file) {
+  const dump = /^PGDMP(.*)\0\xff$/s.exec(fs.readFileSync(file, 'latin1'));
+  return dump && dump[1];
+}
+
 /**
- * The stand-in `pg_dump`, for a `respond`: when the call is `dumpDatabase`'s, writes a dump naming
- * its database to the file asked for, root's alone and not text, and returns true.
+ * The stand-in `pg_dump`, for a `respond`: when the call is `dumpDatabase`'s, writes a stand-in dump
+ * to the file asked for, root's alone, and returns true. The dump holds `text`, which names its
+ * database unless given; with `text` null nothing is written, as when pg_dump fails.
  */
-export function standInDump(program, args) {
+export function standInDump(program, args, text = `dump of ${args[3]}`) {
   if (program !== '/bin/sh' || !args[1]?.includes('pg_dump')) return false;
-  fs.writeFileSync(args[4], `dump of ${args[3]}\0\xff`, { encoding: 'latin1', mode: 0o600 });
+  if (text !== null) fs.writeFileSync(args[4], standInDumpOf(text), { mode: 0o600 });
   return true;
 }
 
@@ -234,7 +248,7 @@ export function archiveOf(members, name = 'sample-2026-11-21.tar') {
 }
 
 /** A decrypted bundle as the owner brings it to the machine: what `age --decrypt` gives of a night's bundle. */
-export function decryptedBundle({ app, date = '2026-11-21', dump, settings, format = 1 }) {
+export function decryptedBundle({ app, date = '2026-11-21', dump, settings, format = BUNDLE_FORMAT }) {
   const manifest = `${JSON.stringify({ format, app, date })}\n`;
-  return archiveOf({ 'bundle.json': manifest, 'database.dump': dump, 'settings.env': settings }, `${app}-${date}.tar`);
+  return archiveOf({ [BUNDLE_FILES.manifest]: manifest, [BUNDLE_FILES.dump]: dump, [BUNDLE_FILES.settings]: settings }, `${app}-${date}.tar`);
 }

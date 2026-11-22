@@ -8,7 +8,7 @@ import { serviceName } from '../paths.mjs';
 import { registrationOf } from '../registry.mjs';
 import { deployConfigOf, stampOf } from '../releases.mjs';
 import { servicePointsAt, startService, stopService } from '../service.mjs';
-import { readSettings, writeSettings } from '../settings.mjs';
+import { readSettings, readSettingsFile, writeSettings } from '../settings.mjs';
 import { UsageError } from '../usage.mjs';
 
 export const usage = 'apps-machine restore <name> <file> [--settings]';
@@ -148,7 +148,7 @@ function stoppedAgain(world, name) {
 /** Copy the app's settings file as it is to `keep`, root's alone. Returns `keep`, or null when the app has no settings file. */
 function keptSettings(paths, name, keep) {
   if (!fs.existsSync(paths.settingsFile(name))) return null;
-  fs.writeFileSync(keep, fs.readFileSync(paths.settingsFile(name)), { mode: 0o600 });
+  fs.writeFileSync(keep, readSettingsFile(paths, name), { mode: 0o600 });
   return keep;
 }
 
