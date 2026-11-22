@@ -44,7 +44,7 @@ export function machinePaths(root = '/') {
     backupPublicKey: path.join(configDir, 'backup-public-key'),
     /** The nights' encrypted bundles, root's alone. */
     nightlyDir: path.join(stateDir, 'backups/nightly'),
-    /** Where a backup run works: a directory per run, removed when the run ends. */
+    /** Where a backup run or a restore works: a directory per run, removed when the run ends. */
     backupWorkDir: path.join(stateDir, 'backups/work'),
     /** The dumps a deploy takes of an app's database before it changes anything, one file per deploy. */
     deployDumps: (app) => path.join(stateDir, 'backups/deploys', app),
@@ -58,5 +58,7 @@ export function machinePaths(root = '/') {
     rcloneConfig: path.join(configDir, 'rclone.conf'),
     /** The address requested when a night's bundles have all uploaded: one line, root's alone. */
     backupAliveAddress: path.join(configDir, 'backup-alive-address'),
+    /** What a restore replaced, kept so it can be undone: an app's database dump, and its settings file when that was replaced too. */
+    restoreDumps: (app) => path.join(stateDir, 'backups/restores', app),
   };
 }

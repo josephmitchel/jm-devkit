@@ -14,6 +14,7 @@ export const COMMANDS = {
   deploy: await import('./commands/deploy.mjs'),
   backup: await import('./commands/backup.mjs'),
   logs: await import('./commands/logs.mjs'),
+  restore: await import('./commands/restore.mjs'),
 };
 
 function usage() {

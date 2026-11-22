@@ -67,3 +67,7 @@ test('where the bundles are uploaded, the rclone config holding the credential, 
   assert.equal(paths.rcloneConfig, '/etc/apps-machine/rclone.conf');
   assert.equal(paths.backupAliveAddress, '/etc/apps-machine/backup-alive-address');
 });
+
+test('what a restore replaced is kept in the backup directory, apart from the nightly bundles and a run\'s work', () => {
+  assert.equal(machinePaths().restoreDumps('sample'), '/var/lib/apps-machine/backups/restores/sample');
+});

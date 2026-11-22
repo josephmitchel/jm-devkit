@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { appsMachine, backupPrograms, fakeRun, machine, mode, offsitePrograms, openedBundle, registered, sink } from '../test-helpers.mjs';
+import { appsMachine, backupPrograms, fakeRun, filesUnder, machine, mode, offsitePrograms, openedBundle, registered, sink } from '../test-helpers.mjs';
 import { bundleEveryApp } from './backup.mjs';
 
 const PUBLIC_KEY = 'age1madeupmadeupmadeupmadeupmadeupmadeupmadeupmadeupmadeupma\n';
@@ -11,8 +11,6 @@ const STORAGE = 'backups:apps-machine';
 const CREDENTIAL = 'madeUpStorageCredential';
 const ADDRESS = 'https://alive.example/ping/made-up-id';
 const NIGHT = () => new Date(2026, 10, 21, 3, 0, 0);
-
-const filesUnder = (dir) => fs.readdirSync(dir, { recursive: true }).filter((file) => fs.statSync(path.join(dir, file)).isFile()).sort();
 
 /** A machine set up for its backups: the public key, the storage and the alive address. */
 function machineWithKey(...apps) {
@@ -57,7 +55,7 @@ test('a bundle holds the app\'s name and date, its database\'s dump and its sett
   assert.equal(recipients, PUBLIC_KEY);
   assert.deepEqual(Object.keys(members), ['bundle.json', 'database.dump', 'settings.env']);
   assert.deepEqual(JSON.parse(members['bundle.json']), { format: 1, app: 'sample', date: '2026-11-21' });
-  assert.deepEqual(members['database.dump'], Buffer.from('dump of sample\0\xff', 'latin1'));
+  assert.deepEqual(members['database.dump'], Buffer.from('PGDMPdump of sample\0\xff', 'latin1'));
   assert.deepEqual(members['settings.env'], settings);
 });
 

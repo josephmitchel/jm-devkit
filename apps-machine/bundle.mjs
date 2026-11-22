@@ -1,5 +1,6 @@
 // A backup bundle: one app's database dump and settings file for one date, as a tar archive
-// encrypted with `age` to the owner's public key. The machine can make a bundle and cannot open one.
+// encrypted with `age` to the owner's public key. The machine can make a bundle and cannot decrypt
+// one: what it opens is a bundle the owner decrypted on his own device.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -40,6 +41,28 @@ function must(done, what) {
   if (done.code !== 0) throw new Error(`could not ${what}: ${done.stderr.trim()}`);
 }
 
+const isRunning = (pid) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return e.code === 'EPERM';
+  }
+};
+
+/**
+ * A directory of a run's own for a bundle's unencrypted files, root's alone and named for its
+ * process, after removing those of runs that were killed before they could. The caller removes it.
+ */
+export function newWorkDir(paths) {
+  fs.mkdirSync(paths.backupWorkDir, { recursive: true, mode: 0o700 });
+  for (const name of fs.readdirSync(paths.backupWorkDir)) {
+    const owner = /^(\d+)-/.exec(name);
+    if (owner && !isRunning(Number(owner[1]))) fs.rmSync(path.join(paths.backupWorkDir, name), { recursive: true, force: true });
+  }
+  return fs.mkdtempSync(path.join(paths.backupWorkDir, `${process.pid}-`));
+}
+
 /**
  * Make an app's bundle for `date` in the machine's nightly directory, root's alone, replacing one of
  * the same date. Everything unencrypted is written under `workDir` and removed before this returns
@@ -66,5 +89,37 @@ export function makeBundle(world, { app, date, workDir }) {
     return file;
   } finally {
     fs.rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
+/** Whether `file` is a decrypted bundle, whole or not: a tar archive that holds a bundle's manifest. */
+export function isBundle({ run, paths }, file) {
+  const listed = run('tar', ['--list', '--force-local', '--file', file], { cwd: paths.root });
+  return listed.stdout.split('\n').includes(BUNDLE_FILES.manifest);
+}
+
+/**
+ * Take a decrypted bundle's files out into `dir`, which is the caller's to remove. Returns
+ * `{ app, date, dump, settings }`: the app and date the bundle says it is of, and the two files' paths.
+ */
+export function openBundle({ run, paths }, file, dir) {
+  const names = Object.values(BUNDLE_FILES);
+  must(run('tar', ['--extract', '--force-local', '--file', file, '--directory', dir, '--no-same-owner', ...names], { cwd: paths.root }), `open the bundle ${file}`);
+  const at = (name) => path.join(dir, name);
+  for (const name of names) {
+    if (!fs.lstatSync(at(name), { throwIfNoEntry: false })?.isFile()) throw new Error(`${file} is not a bundle: its ${name} is not a file`);
+  }
+  const manifest = manifestIn(fs.readFileSync(at(BUNDLE_FILES.manifest), 'utf8'));
+  if (!manifest) throw new Error(`${file} is not a bundle: its ${BUNDLE_FILES.manifest} does not say which app and date it is of`);
+  if (manifest.format !== BUNDLE_FORMAT) throw new Error(`${file} is a bundle of format ${manifest.format}, and these commands read format ${BUNDLE_FORMAT}`);
+  return { app: manifest.app, date: manifest.date, dump: at(BUNDLE_FILES.dump), settings: at(BUNDLE_FILES.settings) };
+}
+
+function manifestIn(text) {
+  try {
+    const manifest = JSON.parse(text);
+    return typeof manifest?.app === 'string' && typeof manifest.date === 'string' ? manifest : null;
+  } catch {
+    return null;
   }
 }

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { createDatabase, databaseNameTaken, dumpDatabase, setDatabasePassword } from './database.mjs';
+import { createDatabase, databaseNameTaken, databasePassword, dumpDatabase, dumpFault, restoreDatabase, setDatabasePassword } from './database.mjs';
 import { run as realRun } from './run.mjs';
 import { fakeRun, machine, tempDir } from './test-helpers.mjs';
 
@@ -90,4 +90,94 @@ test('a dump runs where the postgres user can be', () => {
   dumpDatabase({ run, paths }, 'sample', path.join(paths.backupDir, 'sample.dump'));
   assert.equal(calls.length, 1);
   assert.equal(calls[0].cwd, paths.root);
+});
+
+test('a database is restored by dropping it, making it again for the app alone, and reading the dump into it', () => {
+  const paths = machine();
+  const { run, calls } = fakeRun();
+  restoreDatabase({ run, paths }, 'sample', path.join(paths.backupDir, 'sample.dump'));
+  const did = calls.map((call) => call.input ?? call.args[1]);
+  assert.equal(did.length, 3);
+  assert.equal(did[0], 'DROP DATABASE IF EXISTS "sample" WITH (FORCE);\n');
+  assert.match(did[1], /CREATE DATABASE "sample" OWNER "sample"/);
+  assert.match(did[1], /^REVOKE CONNECT ON DATABASE "sample" FROM PUBLIC;$/m);
+  assert.match(did[2], /pg_restore/);
+  for (const call of calls) assert.equal(call.cwd, paths.root);
+});
+
+/** `run`, with a `runuser` that writes its arguments, and what it was given to read, to the file `seen`. */
+function withRecordingRunuser(seen, { code = 0 } = {}) {
+  const stubs = tempDir();
+  const script = `#!/bin/sh\n{ printf '%s\\n' "$@"; cat; } >> '${seen}'\necho "pg_restore: said this" >&2\nexit ${code}\n`;
+  fs.writeFileSync(path.join(stubs, 'runuser'), script, { mode: 0o755 });
+  return (program, args, options) => realRun(program, args, { ...options, env: { PATH: `${stubs}:/usr/bin:/bin` } });
+}
+
+const NOT_TEXT = Buffer.from([0x50, 0xff, 0x00, 0xfe]);
+
+/** Only the shell that feeds pg_restore is real: psql's calls succeed without a Postgres. */
+function withRealShell(real) {
+  return (program, args, options) => (program === '/bin/sh' ? real(program, args, options) : { code: 0, stdout: '', stderr: '' });
+}
+
+test('a dump reaches pg_restore on its input, as it is, and what it holds comes to be the app\'s role\'s', () => {
+  const paths = machine();
+  const file = path.join(paths.backupDir, 'sample with a space.dump');
+  fs.writeFileSync(file, NOT_TEXT);
+  const seen = path.join(tempDir(), 'seen');
+  restoreDatabase({ run: withRealShell(withRecordingRunuser(seen)), paths }, 'sample', file);
+  const asked = '-u\npostgres\n--\npg_restore\n--exit-on-error\n--no-owner\n--role=sample\n--dbname=sample\n';
+  assert.deepEqual(fs.readFileSync(seen), Buffer.concat([Buffer.from(asked), NOT_TEXT]));
+});
+
+test('a restore that pg_restore gives up on fails with what it said', () => {
+  const paths = machine();
+  const file = path.join(paths.backupDir, 'sample.dump');
+  fs.writeFileSync(file, NOT_TEXT);
+  const run = withRealShell(withRecordingRunuser(path.join(tempDir(), 'seen'), { code: 1 }));
+  assert.throws(() => restoreDatabase({ run, paths }, 'sample', file), /^Error: could not restore sample's database: pg_restore: said this$/);
+});
+
+test('a database that cannot be dropped is not restored into', () => {
+  const { run, calls } = fakeRun(() => ({ code: 3, stderr: 'psql: error: connection refused\n' }));
+  assert.throws(() => restoreDatabase({ run, paths: machine() }, 'sample', '/a/dump'), /^Error: psql failed: psql: error: connection refused$/);
+  assert.equal(calls.length, 1);
+});
+
+test('a file is a dump when pg_restore can list what it holds, and otherwise what pg_restore said is its fault', () => {
+  const paths = machine();
+  const file = path.join(paths.backupDir, 'a file.dump');
+  fs.writeFileSync(file, NOT_TEXT);
+  const seen = path.join(tempDir(), 'seen');
+  assert.equal(dumpFault({ run: withRecordingRunuser(seen), paths }, file), null);
+  assert.deepEqual(fs.readFileSync(seen), Buffer.concat([Buffer.from('-u\npostgres\n--\npg_restore\n--list\n'), NOT_TEXT]));
+  assert.equal(dumpFault({ run: withRecordingRunuser(seen, { code: 1 }), paths }, file), 'pg_restore: said this');
+});
+
+test('a dump pg_restore refuses without a word still has a fault', () => {
+  const { run } = fakeRun(() => ({ code: 1 }));
+  assert.equal(dumpFault({ run, paths: machine() }, '/a/file'), 'pg_restore exited with 1');
+});
+
+test('a password is read back from a database address as register wrote it, and from nothing else', () => {
+  assert.equal(databasePassword('postgres://sample:f00dfeed@127.0.0.1:5432/sample', 'sample'), 'f00dfeed');
+  assert.equal(databasePassword('postgres://sample:F00dFeed9@127.0.0.1:5433/sample', 'sample'), 'F00dFeed9');
+  const others = [
+    undefined,
+    '',
+    'postgres://other:f00dfeed@127.0.0.1:5432/other',
+    'postgres://sample:f00dfeed@127.0.0.1:5432/other',
+    'postgres://sample:f00d\'feed@127.0.0.1:5432/sample',
+    'postgres://sample:f00dfeed@db.example:5432/sample',
+    'postgres://sample:f00dfeed@127.0.0.1:5432/sample?sslmode=require',
+    'postgres://sample@127.0.0.1:5432/sample',
+  ];
+  for (const address of others) assert.equal(databasePassword(address, 'sample'), null, String(address));
+});
+
+test('the address a password is set with is one the password is read back from', () => {
+  const { run } = fakeRun((program, args, { input }) => (/SHOW port/.test(input) ? { stdout: '5433\n' } : {}));
+  for (const password of ['f00dfeed', 'AZaz09', '0'.repeat(48)]) {
+    assert.equal(databasePassword(setDatabasePassword({ run, paths: machine() }, 'sample', password), 'sample'), password);
+  }
 });

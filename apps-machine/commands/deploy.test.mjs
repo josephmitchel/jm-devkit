@@ -97,7 +97,7 @@ test('the dump is taken before anything is fetched, it is root\'s alone, and its
   const { paths, events, calls, deploy } = world();
   const done = await deploy();
   const file = path.join(paths.deployDumps('sample'), '20261121T143000Z.dump');
-  assert.deepEqual(fs.readFileSync(file), Buffer.from('dump of sample\0\xff', 'latin1'));
+  assert.deepEqual(fs.readFileSync(file), Buffer.from('PGDMPdump of sample\0\xff', 'latin1'));
   assert.equal(mode(file), 0o600);
   assert.equal(mode(paths.deployDumps('sample')), 0o700);
   assert.ok(file.startsWith(paths.backupDir + path.sep));
