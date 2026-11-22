@@ -343,7 +343,7 @@ describe('the devkit.json schema', () => {
     const kitConfig = path.resolve(path.dirname(SCHEMA_PATH), '..', 'devkit.json');
     const config = parseDevkitConfig(fs.readFileSync(kitConfig, 'utf8'));
     expect(config.modules).toContain('process');
-    expect(config.reviewer.tests.map((t) => t.name)).toEqual(['reviewer', 'plugin']);
+    expect(config.reviewer.tests.map((t) => t.name)).toEqual(['reviewer', 'plugin', 'apps-machine']);
   });
 
   it('accepts each of its own examples', () => {
