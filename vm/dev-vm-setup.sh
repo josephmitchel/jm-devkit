@@ -32,6 +32,8 @@ CREDENTIALS_FILE=/etc/code-reviewer/credentials.env
 # local socket by being that user: each takes its password.
 REVIEWER_DB=code_reviewer
 REVIEWER_TESTS_ROLE=code_reviewer_tests
+# The second Postgres server, for databases that tests create. See its step.
+TESTS_CLUSTER=tests
 # What the credentials file must hold. Names only: this script never prints a value.
 CREDENTIAL_NAMES=(DATABASE_URL REVIEWER_TEST_DATABASES_URL CLAUDE_CODE_OAUTH_TOKEN REVIEWER_APP_CLIENT_ID REVIEWER_APP_PRIVATE_KEY)
 NIGHTLY_AT=${NIGHTLY_AT:-}
@@ -138,13 +140,49 @@ if role_exists "$REVIEWER_USER" && ! database_exists "$REVIEWER_USER"; then
 fi
 
 role_exists "$REVIEWER_DB" || as_postgres "CREATE ROLE $REVIEWER_DB LOGIN"
-# Creates the databases a project's tests ask for (reviewer.databases). A project's commands are
-# handed this role's password inside those addresses, so it may do that and nothing else.
-role_exists "$REVIEWER_TESTS_ROLE" || as_postgres "CREATE ROLE $REVIEWER_TESTS_ROLE LOGIN CREATEDB"
 database_exists "$REVIEWER_DB" || as_postgres "CREATE DATABASE $REVIEWER_DB OWNER $REVIEWER_DB"
-# Only its owner may connect: not the agents' role, and not the role for test databases.
+# Only its owner may connect: not the agents' role.
 as_postgres "REVOKE CONNECT ON DATABASE $REVIEWER_DB FROM PUBLIC"
 pg_port=$(as_postgres "SHOW port")
+
+step "A second Postgres server, for tests, that does not wait for the disk"
+# A suite that empties its tables before every test has Postgres confirm hundreds of small writes
+# with the disk each time, and on a virtual machine's disk that turns minutes into most of an hour.
+# This server confirms none of them, so a power cut can damage everything on it: only databases
+# that tests create, and can lose, belong here. Everything else stays on the first server.
+tests_cluster=$PG_MAJOR/$TESTS_CLUSTER
+tests_service=postgresql@$PG_MAJOR-$TESTS_CLUSTER
+tests_conf=/etc/postgresql/$tests_cluster/conf.d/no-disk-wait.conf
+[ -d "/etc/postgresql/$tests_cluster" ] || pg_createcluster "$PG_MAJOR" "$TESTS_CLUSTER"
+wanted=$(mktemp)
+printf '%s\n' '# Written by dev-vm-setup.sh. This server holds only databases that tests create.' \
+  'fsync = off' 'synchronous_commit = off' 'full_page_writes = off' > "$wanted"
+if ! cmp -s "$wanted" "$tests_conf"; then
+  install -D -m 0644 -o postgres -g postgres "$wanted" "$tests_conf"
+  systemctl restart "$tests_service"
+fi
+rm -f "$wanted"
+systemctl start "$tests_service"
+as_postgres_tests() { runuser -u postgres -- psql -X --cluster "$tests_cluster" -v ON_ERROR_STOP=1 -tAc "$1"; }
+tests_role_exists() { [ "$(as_postgres_tests "SELECT 1 FROM pg_roles WHERE rolname = '$1'")" = 1 ]; }
+[ "$(as_postgres_tests "SHOW fsync")" = off ] \
+  || fail "the tests server still waits for the disk: check that its postgresql.conf includes conf.d, where $tests_conf is"
+tests_port=$(as_postgres_tests "SHOW port")
+# The agents' own test databases go here too, over the local socket.
+tests_role_exists "$AGENT_USER" || as_postgres_tests "CREATE ROLE $AGENT_USER LOGIN CREATEDB"
+# Creates the databases a project's tests ask for (reviewer.databases). A project's commands are
+# handed this role's password inside those addresses, so it may do that and nothing else.
+tests_role_exists "$REVIEWER_TESTS_ROLE" || as_postgres_tests "CREATE ROLE $REVIEWER_TESTS_ROLE LOGIN CREATEDB"
+# An earlier version of this script made that role on the first server. Postgres refuses to drop a
+# role that still owns a database, so this cannot lose one.
+if role_exists "$REVIEWER_TESTS_ROLE"; then
+  if as_postgres "DROP ROLE $REVIEWER_TESTS_ROLE" 2>/dev/null; then
+    echo "Removed the role '$REVIEWER_TESTS_ROLE' from the first server: test databases are created on the second now."
+  else
+    echo "warning: the role '$REVIEWER_TESTS_ROLE' on the first server still owns a database, so it is left alone."
+    echo "         Run this script again once no code reviewer run is going, and it is removed."
+  fi
+fi
 
 step "The code reviewer's credentials file"
 # Root's alone. systemd reads it and hands the values to the code reviewer's services through
@@ -152,13 +190,19 @@ step "The code reviewer's credentials file"
 install -d -m 0700 -o root -g root "$(dirname "$CREDENTIALS_FILE")"
 new_password() { head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n'; }
 # The statement goes in on stdin, so the password is in no process's arguments.
-set_password() { printf "ALTER ROLE %s PASSWORD '%s';\n" "$1" "$2" | runuser -u postgres -- psql -X -v ON_ERROR_STOP=1 -q; }
+set_password() { # <role> <password> [the server, when not the first]
+  printf "ALTER ROLE %s PASSWORD '%s';\n" "$1" "$2" | runuser -u postgres -- psql -X ${3:+--cluster "$3"} -v ON_ERROR_STOP=1 -q
+}
+# Whether a role signs in to a database with its password, over 127.0.0.1.
+can_open() { # <role> <password> <database> <port>
+  PGPASSWORD=$2 psql -X -h 127.0.0.1 -p "$4" -U "$1" -d "$3" -w -tAc 'SELECT 1' >/dev/null 2>&1
+}
 if [ ! -e "$CREDENTIALS_FILE" ]; then
   # The two database passwords are made here and kept nowhere else, so a missing file means new ones.
   db_password=$(new_password)
   tests_password=$(new_password)
   set_password "$REVIEWER_DB" "$db_password"
-  set_password "$REVIEWER_TESTS_ROLE" "$tests_password"
+  set_password "$REVIEWER_TESTS_ROLE" "$tests_password" "$tests_cluster"
   (
     umask 077
     cat > "$CREDENTIALS_FILE.new" <<EOF
@@ -172,8 +216,9 @@ if [ ! -e "$CREDENTIALS_FILE" ]; then
 # time do not hold through a pooler, and the code reviewer refuses to start agent jobs if so.
 DATABASE_URL=postgres://$REVIEWER_DB:$db_password@127.0.0.1:$pg_port/$REVIEWER_DB
 
-# Where the databases a project's tests ask for are created.
-REVIEWER_TEST_DATABASES_URL=postgres://$REVIEWER_TESTS_ROLE:$tests_password@127.0.0.1:$pg_port/postgres
+# Where the databases a project's tests ask for are created: the second Postgres server, which
+# does not wait for the disk. The setup script rewrites this line when it points anywhere else.
+REVIEWER_TEST_DATABASES_URL=postgres://$REVIEWER_TESTS_ROLE:$tests_password@127.0.0.1:$tests_port/postgres
 
 # The Claude subscription's long-lived token, from: claude setup-token
 CLAUDE_CODE_OAUTH_TOKEN=
@@ -188,25 +233,50 @@ EOF
   echo "Created $CREDENTIALS_FILE, with new passwords for the two database roles."
 
   # With the passwords in hand, show that each role opens what it should and nothing more.
-  can_open() { PGPASSWORD=$2 psql -X -h 127.0.0.1 -p "$pg_port" -U "$1" -d "$3" -w -tAc 'SELECT 1' >/dev/null 2>&1; }
-  can_open "$REVIEWER_DB" "$db_password" "$REVIEWER_DB" \
+  can_open "$REVIEWER_DB" "$db_password" "$REVIEWER_DB" "$pg_port" \
     || fail "the role $REVIEWER_DB cannot open its database over 127.0.0.1 with its password: check listen_addresses and pg_hba.conf"
-  can_open "$REVIEWER_TESTS_ROLE" "$tests_password" postgres \
-    || fail "the role $REVIEWER_TESTS_ROLE cannot sign in over 127.0.0.1 with its password: check pg_hba.conf"
-  ! can_open "$REVIEWER_TESTS_ROLE" "$tests_password" "$REVIEWER_DB" \
+  can_open "$REVIEWER_TESTS_ROLE" "$tests_password" postgres "$tests_port" \
+    || fail "the role $REVIEWER_TESTS_ROLE cannot sign in to the tests server over 127.0.0.1 with its password: check its pg_hba.conf"
+  ! can_open "$REVIEWER_TESTS_ROLE" "$tests_password" "$REVIEWER_DB" "$pg_port" \
     || fail "the role $REVIEWER_TESTS_ROLE can open the code reviewer's database, and must not"
   unset db_password tests_password
 else
   chown root:root "$CREDENTIALS_FILE"
   chmod 0600 "$CREDENTIALS_FILE"
-  echo "$CREDENTIALS_FILE exists: its contents are left as they are, and no database password was changed."
-  for role in "$REVIEWER_DB" "$REVIEWER_TESTS_ROLE"; do
-    if [ "$(as_postgres "SELECT rolpassword IS NULL FROM pg_authid WHERE rolname = '$role'")" = t ]; then
-      echo "warning: the role '$role' has no password yet, so nothing can sign in as it. Set one with"
-      echo "           sudo -u postgres psql -c '\\password $role'"
-      echo "         and put it in that role's address in $CREDENTIALS_FILE."
-    fi
-  done
+  # The one line this script rewrites in a file that exists: the address of the tests server, which
+  # it makes itself. That covers a file written when test databases were created on the first server.
+  tests_line="^REVIEWER_TEST_DATABASES_URL=postgres://$REVIEWER_TESTS_ROLE:[^@]+@127\\.0\\.0\\.1:$tests_port/postgres\$"
+  if grep -Eq "$tests_line" "$CREDENTIALS_FILE" \
+    && [ "$(as_postgres_tests "SELECT rolpassword IS NOT NULL FROM pg_authid WHERE rolname = '$REVIEWER_TESTS_ROLE'")" = t ]; then
+    echo "$CREDENTIALS_FILE exists: its contents are left as they are, and no database password was changed."
+  else
+    tests_password=$(new_password)
+    set_password "$REVIEWER_TESTS_ROLE" "$tests_password" "$tests_cluster"
+    (
+      umask 077
+      written=no
+      # printf is the shell's own, so the password is in no process's arguments.
+      new_line() { printf 'REVIEWER_TEST_DATABASES_URL=postgres://%s:%s@127.0.0.1:%s/postgres\n' "$REVIEWER_TESTS_ROLE" "$tests_password" "$tests_port"; }
+      while IFS= read -r line || [ -n "$line" ]; do
+        case $line in
+          REVIEWER_TEST_DATABASES_URL=*) [ "$written" = yes ] || new_line; written=yes ;;
+          *) printf '%s\n' "$line" ;;
+        esac
+      done < "$CREDENTIALS_FILE" > "$CREDENTIALS_FILE.new"
+      [ "$written" = yes ] || new_line >> "$CREDENTIALS_FILE.new"
+      mv "$CREDENTIALS_FILE.new" "$CREDENTIALS_FILE"
+    )
+    can_open "$REVIEWER_TESTS_ROLE" "$tests_password" postgres "$tests_port" \
+      || fail "the role $REVIEWER_TESTS_ROLE cannot sign in to the tests server over 127.0.0.1 with its password: check its pg_hba.conf"
+    unset tests_password
+    echo "$CREDENTIALS_FILE exists: REVIEWER_TEST_DATABASES_URL now points at the tests server, with a new password."
+    echo "Nothing else in the file was changed, and the code reviewer's own database password was not."
+  fi
+  if [ "$(as_postgres "SELECT rolpassword IS NULL FROM pg_authid WHERE rolname = '$REVIEWER_DB'")" = t ]; then
+    echo "warning: the role '$REVIEWER_DB' has no password yet, so nothing can sign in as it. Set one with"
+    echo "           sudo -u postgres psql -c '\\password $REVIEWER_DB'"
+    echo "         and put it in that role's address in $CREDENTIALS_FILE."
+  fi
 fi
 
 # Without a password nobody on this machine gets in: not under the reviewer user's own name, and
@@ -295,6 +365,9 @@ Done. Left to do by hand:
   - $AGENT_USER: sign in to Claude Code (run 'claude' and follow /login) and to GitHub (gh auth login).
     Its database addresses use the local socket, for example:
       postgresql:///widgets_demo?host=/var/run/postgresql
+    A database that tests create and empty goes on the second server, which does not wait for
+    the disk and can lose everything on it in a power cut:
+      postgresql:///widgets_test?host=/var/run/postgresql&port=$tests_port
   - $REVIEWER_USER: do NOT sign in to anything as this user. Its credentials reach the code
     reviewer's services only from $CREDENTIALS_FILE, which root alone can read.
 EOF
