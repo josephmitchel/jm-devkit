@@ -54,6 +54,13 @@ test('the backups\' public key is in root\'s directory, and the nightly bundles 
   assert.equal(paths.backupWorkDir, '/var/lib/apps-machine/backups/work');
 });
 
+test('a deploy\'s dumps are in the backup directory by app, its checkout waits beside the releases, and GitHub\'s host keys are root\'s', () => {
+  const paths = machinePaths();
+  assert.equal(paths.deployDumps('sample'), '/var/lib/apps-machine/backups/deploys/sample');
+  assert.equal(paths.incomingRelease('sample'), '/var/lib/apps-machine/apps/sample/incoming');
+  assert.equal(paths.githubHostKeys, '/etc/apps-machine/github-host-keys');
+});
+
 test('where the bundles are uploaded, the rclone config holding the credential, and the alive address are in root\'s directory', () => {
   const paths = machinePaths();
   assert.equal(paths.backupStorage, '/etc/apps-machine/backup-storage');

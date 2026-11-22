@@ -63,6 +63,22 @@ export function machinePrograms({ users = [], groups = [], taken = [], port = 54
   };
 }
 
+/** Each call a fake `run` recorded, as the command line it stands for. */
+export const commandLines = (calls) => calls.map(({ program, args }) => [program, ...args].join(' '));
+
+/** A file's permission bits. */
+export const mode = (file) => fs.statSync(file).mode & 0o777;
+
+/**
+ * The stand-in `pg_dump`, for a `respond`: when the call is `dumpDatabase`'s, writes a dump naming
+ * its database to the file asked for, root's alone and not text, and returns true.
+ */
+export function standInDump(program, args) {
+  if (program !== '/bin/sh' || !args[1]?.includes('pg_dump')) return false;
+  fs.writeFileSync(args[4], `dump of ${args[3]}\0\xff`, { encoding: 'latin1', mode: 0o600 });
+  return true;
+}
+
 /** A writable stream stand-in that keeps what was written. */
 export function sink() {
   const s = { text: '', write: (chunk) => { s.text += chunk; return true; } };
@@ -97,7 +113,7 @@ export async function appsMachine(argv, { run = fakeRun().run, paths = machine()
 export function backupPrograms() {
   const after = (args, option) => args[args.indexOf(option) + 1];
   return (program, args) => {
-    if (program === '/bin/sh' && args[1].includes('pg_dump')) fs.writeFileSync(args[4], `dump of ${args[3]}\0\xff`, { encoding: 'latin1', mode: 0o600 });
+    standInDump(program, args);
     if (program === 'tar') {
       const dir = after(args, '--directory');
       const members = args.slice(args.indexOf(dir) + 1).map((name) => [name, fs.readFileSync(path.join(dir, name)).toString('base64')]);
@@ -116,6 +132,60 @@ export function openedBundle(file) {
   const { recipients, archive } = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^sealed by the stand-in age\n/, ''));
   const members = Object.entries(JSON.parse(archive)).map(([name, bytes]) => [name, Buffer.from(bytes, 'base64')]);
   return { recipients, members: Object.fromEntries(members) };
+}
+
+/**
+ * A `respond` for `fakeRun` that stands in for what a deploy of `app` runs, over `machinePrograms`.
+ * `remote` is the repository's default branch as GitHub has it, and a test changes it between
+ * deploys: `commit`, and `config`, the object or text of its project config (none when undefined).
+ * `behaviour` is how the build behaves on this machine, also a test's to change: `exits` gives the
+ * exit code of a command line run as the app's user, `healthy` whether the health path answers, and
+ * `listeners` the lines `ss` prints. `events` names each thing the deploy did, in order, with the
+ * release the service pointed at when it was migrated and when it was started.
+ */
+export function deployPrograms(paths, app, remote, behaviour = {}) {
+  const programs = machinePrograms({ users: [app] });
+  const events = [];
+  const current = () => (fs.existsSync(paths.currentRelease(app)) ? path.basename(fs.readlinkSync(paths.currentRelease(app))) : 'nothing');
+  const configText = () => (typeof remote.config === 'string' ? remote.config : JSON.stringify(remote.config));
+  const respond = (program, args, options = {}) => {
+    if (standInDump(program, args)) {
+      events.push('dump');
+    } else if (program === 'git' && args[0] === 'clone') {
+      events.push('fetch');
+      fs.mkdirSync(args.at(-1));
+      if (remote.config !== undefined) fs.writeFileSync(path.join(args.at(-1), 'devkit.json'), configText());
+    } else if (program === 'git' && args.includes('rev-parse')) {
+      return { stdout: `${remote.commit}\n` };
+    } else if (program === 'git' && args.includes('ls-tree')) {
+      events.push('config');
+      return { stdout: remote.config === undefined ? '' : 'devkit.json\n' };
+    } else if (program === 'git' && args.includes('show')) {
+      return { stdout: configText() };
+    } else if (program === 'chown' && args[0] === '-R') {
+      events.push('release');
+    } else if (program === 'runuser' && args[1] === app) {
+      const line = args.at(-1);
+      const step = Object.entries(remote.config?.deploy ?? {}).find(([, value]) => value === line)?.[0] ?? line;
+      events.push(step === 'migrate' ? `migrate, pointing at ${current()}` : step);
+      return { code: behaviour.exits?.[line] ?? 0 };
+    } else if (program === 'systemctl' && args[0] === 'stop') {
+      events.push('stop');
+    } else if (program === 'systemctl' && args[0] === 'start') {
+      events.push(`start, pointing at ${current()}`);
+    } else if (program === 'timeout' && args.includes('curl')) {
+      events.push('health');
+      return { code: behaviour.healthy === false ? 124 : 0 };
+    } else if (program === 'ss') {
+      events.push('loopback');
+      const port = remote.config?.deploy?.port;
+      return { stdout: (behaviour.listeners ?? [`LISTEN 0 511 127.0.0.1:${port} 0.0.0.0:*`]).map((line) => `${line}\n`).join('') };
+    } else if (program === 'tailscale') {
+      events.push('serve');
+    }
+    return programs(program, args, options);
+  };
+  return { respond, events };
 }
 
 /**

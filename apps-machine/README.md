@@ -86,6 +86,58 @@ The settings file is `NAME=value` lines, read by systemd and by the commands ali
 
 Running the command again with the same arguments changes nothing: no new key, no new password, no rewritten settings file. It prints the public key and the steps again, and it finishes a registration that stopped part-way. An app that is already registered is refused another repository or Serve port; its registration is the file in `/etc/apps-machine/apps/`.
 
+### deploy
+
+```
+sudo apps-machine deploy <name>
+sudo apps-machine deploy sample
+```
+
+Puts the build of a registered app's default branch, as GitHub has it at that moment, in service. It takes the app's name and nothing else: there is no way to give it a branch, a commit or a directory, and the decision behind that is `docs/adr/0005`. It runs no checks of its own; it trusts the default branch.
+
+Its steps, in this order every time. A step that fails ends the command with exit 1 and `error: the deploy stopped at <step>: <why>`, and no later step runs.
+
+| Step | What it does |
+| --- | --- |
+| `dump` | Dumps the app's database to `/var/lib/apps-machine/backups/deploys/<name>/<time>.dump`, root's alone, and prints the path. |
+| `fetch` | Clones the default branch with the app's deploy key into a checkout of root's, and reads the commit. |
+| `config` | Reads the project config from that commit, not from the checkout's files, and checks its `deploy` section. A project with no project config, no `deploy` section or an invalid one is refused here, with what is wrong. |
+| `release` | Makes the checkout the app's newest release and hands it to the app's user. |
+| `setup`, `build` | Run the section's commands in the release, as the app's user, with the app's settings in their environment. |
+| `stop` | Stops the app's service. Nothing before this step touches the running app. |
+| `migrate` | Runs the section's `migrate`, the same way, if it has one. |
+| `point`, `start` | Points the service at the new release and its `start` command, and starts it. |
+| `health` | Asks the section's `healthPath` on its `port` at `127.0.0.1` until it answers with success. |
+| `loopback` | Checks that the port is listened on at loopback and at no other address. |
+| `serve` | Maps the app's Serve port to the section's `port`. |
+| `prune` | Removes all but the three newest releases. |
+
+It ends with `<name> is running <commit>.`
+
+A release is a directory in `/var/lib/apps-machine/apps/<name>/releases/`, named for when its deploy began (UTC) and its commit: `20261121T143005Z-<commit>`. Beside it, `<that name>.json` is root's record of the `deploy` section it was deployed with. The release is a shallow clone, so a project's commands can ask git which commit they are building. Once it is the app's, root runs no git in it.
+
+The dump has the time of its deploy's release in its name. It is in `pg_dump`'s custom format, for `pg_restore`. No command removes these dumps: clear old ones by hand.
+
+The health check gives the app 90 seconds from its start. It asks again every second, gives each ask 30 seconds to be answered, and takes only a 2xx status as success: a redirect is not. The service restarts an app that exits, five seconds later, so an app that fails at start is tried again within the limit.
+
+The loopback check is why an app's `start` command must listen on `127.0.0.1`: an app open on another address can be reached around Tailscale Serve, which is what knows who is asking. For the same reason a `deploy` section's `port` cannot be a Serve port of any app on the machine, where Tailscale itself listens, and such a section is refused at `config`.
+
+The fetch accepts only the SSH host keys GitHub publishes, which the kit carries in `github-host-keys.mjs`, so the first fetch asks nothing and trusts nobody. If GitHub changes a key, a fetch fails until the kit has the new one and the setup script has been run again.
+
+#### Rehearsing with the sample app
+
+The kit is a project with an app of its own to deploy: `sample-app/`, which the `deploy` section of the kit's `devkit.json` runs. It counts its visits in a table that its one migration makes, and needs no packages. To rehearse on a machine, register the kit's own repository and deploy it:
+
+```
+sudo apps-machine register sample git@github.com:<owner>/<the kit's repository>.git 8443
+sudo apps-machine deploy sample
+curl http://127.0.0.1:4310/
+```
+
+The last line answers `The sample app at commit <commit>. Visits: 1.` Any commit merged to the kit's default branch gives the next deploy something new to switch to.
+
+To make its health check fail on purpose, add `SAMPLE_HEALTH=fail` to its settings file and deploy: `/healthz` then answers 503 while `/` still answers and names its commit, so the deploy stops at `health`. Take the line out afterwards and restart the service.
+
 ### backup
 
 ```
@@ -241,3 +293,6 @@ For whoever changes the commands. They are plain Node modules with no dependenci
 - `app-user.mjs` makes an app's Linux user and the directories it may enter.
 - `install.mjs` makes root's copy: this directory's modules and templates. A kit file outside this directory that a command imports is added to its `KIT_FILES`, or the copy on the machine will not have it.
 - `test-helpers.mjs` has the temp machine, the fake `run`, `registered(paths, { name })`, which registers an app there as the command does, and `appsMachine(argv)`, which runs a whole command and gives back its exit code and output.
+- `releases.mjs` fetches the default branch, names and lists an app's releases, records the `deploy` section each was deployed with, and prunes them. `github-host-keys.mjs` holds the host keys a fetch accepts.
+- `health.mjs` asks an app's health path until it answers or the time limit passes, and `loopback.mjs` checks what a port is listened on at.
+- `commands/deploy.mjs` is a list of named steps, `STEPS`, each a function of the world and the deploy so far. `deployPrograms` in the test helpers stands in for the programs a deploy runs.

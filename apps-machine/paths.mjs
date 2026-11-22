@@ -46,6 +46,12 @@ export function machinePaths(root = '/') {
     nightlyDir: path.join(stateDir, 'backups/nightly'),
     /** Where a backup run works: a directory per run, removed when the run ends. */
     backupWorkDir: path.join(stateDir, 'backups/work'),
+    /** The dumps a deploy takes of an app's database before it changes anything, one file per deploy. */
+    deployDumps: (app) => path.join(stateDir, 'backups/deploys', app),
+    /** Root's checkout of the commit being deployed, until it becomes a release. */
+    incomingRelease: (app) => path.join(appDir(app), 'incoming'),
+    /** The host keys root's ssh accepts from GitHub, written by a deploy before it fetches. */
+    githubHostKeys: path.join(configDir, 'github-host-keys'),
     /** Where the bundles are uploaded: one line, an rclone remote and a folder in it, `<remote>:<folder>`. */
     backupStorage: path.join(configDir, 'backup-storage'),
     /** The rclone config that defines that remote. It holds the storage credential, so it is root's alone. */
