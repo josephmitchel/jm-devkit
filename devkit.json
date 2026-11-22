@@ -10,7 +10,8 @@
         "name": "reviewer",
         "command": "cd reviewer && DATABASE_URL=postgres://nobody@127.0.0.1:1/none npm test"
       },
-      { "name": "plugin", "command": "node --test 'plugin/**/*.test.mjs'" }
+      { "name": "plugin", "command": "node --test 'plugin/**/*.test.mjs'" },
+      { "name": "apps-machine", "command": "node --test 'apps-machine/**/*.test.mjs'" }
     ]
   }
 }
