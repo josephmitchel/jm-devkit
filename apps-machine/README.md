@@ -397,4 +397,5 @@ For whoever changes the commands. They are plain Node modules with no dependenci
 - `test-helpers.mjs` has the temp machine, the fake `run`, `registered(paths, { name })`, which registers an app there as the command does, and `appsMachine(argv)`, which runs a whole command and gives back its exit code and output.
 - `releases.mjs` fetches the default branch, names and lists an app's releases, records the `deploy` section each was deployed with, and prunes them. `github-host-keys.mjs` holds the host keys a fetch accepts.
 - `health.mjs` asks an app's health path until it answers or the time limit passes, and `loopback.mjs` checks who listens on an app's port and where the app's user listens.
+- `vm/verify-units.sh` puts the backup's service and timer, and an app's service as `service.mjs` writes it, through `systemd-analyze verify`. CI runs it, and it runs anywhere systemd is, without sudo.
 - `commands/deploy.mjs` is a list of named steps, `STEPS`, each a function of the world and the deploy so far. `deployPrograms` in the test helpers stands in for the programs a deploy runs.

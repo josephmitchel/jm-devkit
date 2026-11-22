@@ -36,6 +36,8 @@ jobs:
         run: node --test 'apps-machine/**/*.test.mjs'
       - name: Check the setup scripts parse
         run: for script in vm/*.sh; do bash -n "$script"; done
+      - name: Verify the systemd units
+        run: bash vm/verify-units.sh
 
   reviewer:
     runs-on: ubuntu-latest
