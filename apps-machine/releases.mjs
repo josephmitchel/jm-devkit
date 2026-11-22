@@ -80,7 +80,8 @@ export function deployConfigOf(release) {
 
 /**
  * Turn a fetched checkout into the app's newest release, record the deploy section `config` it is
- * deployed with, and hand the release to the app's user. Returns the release directory.
+ * deployed with, and hand the release to the app's user. Returns the release directory, and leaves
+ * none when it cannot be handed over.
  */
 export function makeRelease({ run, paths }, app, { checkout, commit, stamp, config }) {
   const release = path.join(paths.releasesDir(app), `${stamp}-${commit}`);
@@ -88,17 +89,23 @@ export function makeRelease({ run, paths }, app, { checkout, commit, stamp, conf
   fs.writeFileSync(recordOf(release), `${JSON.stringify(config, null, 2)}\n`, { mode: 0o644 });
   fs.renameSync(checkout, release);
   const done = run('chown', ['-R', `${app}:${app}`, release]);
-  if (done.code !== 0) throw new Error(`could not give ${release} to ${app}: ${done.stderr.trim()}`);
+  if (done.code !== 0) {
+    removeRelease(release);
+    throw new Error(`could not give ${release} to ${app}: ${done.stderr.trim()}`);
+  }
   return release;
+}
+
+/** Remove a release and root's record of it. */
+export function removeRelease(release) {
+  fs.rmSync(release, { recursive: true, force: true });
+  fs.rmSync(recordOf(release), { force: true });
 }
 
 /** Remove all but the newest `KEPT_RELEASES` of an app's releases, and never the one its service runs. Returns what was removed. */
 export function pruneReleases(paths, app) {
   const running = servicePointsAt(paths, app)?.release;
   const old = releasesOf(paths, app).slice(0, -KEPT_RELEASES).filter((release) => release !== running);
-  for (const release of old) {
-    fs.rmSync(release, { recursive: true, force: true });
-    fs.rmSync(recordOf(release), { force: true });
-  }
+  old.forEach(removeRelease);
   return old;
 }

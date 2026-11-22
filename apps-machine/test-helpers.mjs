@@ -154,9 +154,11 @@ export function openedBundle(file) {
  * `remote` is the repository's default branch as GitHub has it, and a test changes it between
  * deploys: `commit`, and `config`, the object or text of its project config (none when undefined).
  * `behaviour` is how the build behaves on this machine, also a test's to change: `exits` gives the
- * exit code of a command line run as the app's user, `healthy` whether the health path answers, and
- * `listeners` the lines `ss` prints. `events` names each thing the deploy did, in order, with the
- * release the service pointed at when it was migrated and when it was started.
+ * exit code of a command line run as the app's user, or of any other program's whole command line,
+ * `healthy` whether the health path answers, `unhealthy` the commits whose release does not answer
+ * it while the others do, and `listeners` the lines `ss` prints. `events` names each thing the
+ * deploy did, in order, with the release the service pointed at when it was migrated and when it
+ * was started.
  */
 export function deployPrograms(paths, app, remote, behaviour = {}) {
   const programs = machinePrograms({ users: [app] });
@@ -190,7 +192,8 @@ export function deployPrograms(paths, app, remote, behaviour = {}) {
       events.push(`start, pointing at ${current()}`);
     } else if (program === 'timeout' && args.includes('curl')) {
       events.push('health');
-      return { code: behaviour.healthy === false ? 124 : 0 };
+      const answers = behaviour.healthy !== false && !behaviour.unhealthy?.some((commit) => current().endsWith(commit));
+      return { code: answers ? 0 : 124 };
     } else if (program === 'ss') {
       events.push('loopback');
       const port = remote.config?.deploy?.port;
@@ -198,7 +201,8 @@ export function deployPrograms(paths, app, remote, behaviour = {}) {
     } else if (program === 'tailscale') {
       events.push('serve');
     }
-    return programs(program, args, options);
+    const code = behaviour.exits?.[[program, ...args].join(' ')];
+    return code === undefined ? programs(program, args, options) : { code, stderr: `${program} could not do that\n` };
   };
   return { respond, events };
 }

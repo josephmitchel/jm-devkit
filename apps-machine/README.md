@@ -96,7 +96,7 @@ sudo apps-machine deploy sample
 
 Puts the build of a registered app's default branch, as GitHub has it at that moment, in service. It takes the app's name and nothing else: there is no way to give it a branch, a commit or a directory, and the decision behind that is `docs/adr/0005`. It runs no checks of its own; it trusts the default branch.
 
-Its steps, in this order every time. A step that fails ends the command with exit 1 and `error: the deploy stopped at <step>: <why>`, and no later step runs.
+Its steps, in this order every time. A step that fails ends the command with exit 1 and `error: the deploy stopped at <step>: <why>`, and no later step runs. What the command leaves behind then is under "When a deploy fails".
 
 | Step | What it does |
 | --- | --- |
@@ -125,6 +125,28 @@ The loopback check is why an app's `start` command must listen on `127.0.0.1`: a
 
 The fetch accepts only the SSH host keys GitHub publishes, which the kit carries in `github-host-keys.mjs`, so the first fetch asks nothing and trusts nobody. If GitHub changes a key, a fetch fails until the kit has the new one and the setup script has been run again.
 
+#### When a deploy fails
+
+What a failed step leaves depends on where it is in the order. Everything the command says from the failure on goes to standard error, and its last line is the `error:` line naming the step.
+
+| The step that failed | What the command leaves |
+| --- | --- |
+| `dump`, `fetch`, `config`, `release`, `setup`, `build` | Nothing was stopped: the service is as it was, on the release it was on. The release that was being made is removed. |
+| `stop`, `migrate`, `point`, `start`, `health`, `loopback` | The previous release is put back: the service is stopped, pointed at the release and the start command it had before the deploy, and started. The failed release is removed. |
+| `serve`, `prune` | The new release stays in service, because it had passed its checks. The exit is still 1, and the next deploy does again what failed. |
+
+A first deploy has no previous release. If it fails in the second row, the service is left stopped and pointing at no release, and the command says there was nothing to go back to.
+
+Going back puts the code back, not the data. The database is left as the deploy left it, which after a failed `migrate` can be part of the way through one. The command prints the dump it took at its start and the command that restores it, and the owner decides whether to run it:
+
+```
+sudo apps-machine restore <name> /var/lib/apps-machine/backups/deploys/<name>/<time>.dump
+```
+
+After starting the previous release, the command asks that release's health path, with the same limit, and says whether it answered. A previous release that does not answer on the database as it now is, is the case for the restore. The Serve mapping needs no going back: `serve` runs only after the checks, so the mapping still goes to the previous release's port.
+
+If going back cannot be finished, because the service will not stop or start, the command says so and says which release the service points at. It removes the failed release unless the service still points at it.
+
 #### Rehearsing with the sample app
 
 The kit is a project with an app of its own to deploy: `sample-app/`, which the `deploy` section of the kit's `devkit.json` runs. It counts its visits in a table that its one migration makes, and needs no packages. To rehearse on a machine, register the kit's own repository and deploy it:
@@ -137,7 +159,7 @@ curl http://127.0.0.1:4310/
 
 The last line answers `The sample app at commit <commit>. Visits: 1.` Any commit merged to the kit's default branch gives the next deploy something new to switch to.
 
-To make its health check fail on purpose, add `SAMPLE_HEALTH=fail` to its settings file and deploy: `/healthz` then answers 503 while `/` still answers and names its commit, so the deploy stops at `health`. Take the line out afterwards and restart the service.
+To make its health check fail on purpose, add `SAMPLE_HEALTH=fail` to its settings file and deploy: `/healthz` then answers 503 while `/` still answers and names its commit, so the deploy stops at `health` after 90 seconds and puts the previous release back. The setting is still on when that release starts, so its `/healthz` fails as well: the command waits another 90 seconds and says the previous release was started but did not answer. `curl http://127.0.0.1:4310/` then names the previous commit, and `ls /var/lib/apps-machine/apps/sample/releases/` shows the failed release gone. Take the line out afterwards and restart the service with `sudo systemctl restart app-sample.service`.
 
 ### backup
 
