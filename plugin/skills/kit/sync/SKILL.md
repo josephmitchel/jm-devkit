@@ -1,12 +1,12 @@
 ---
 name: sync
-description: Bring the project's kit-owned files level with the installed kit, and open a pull request with the change. Removes a kit-owned file the kit has retired; removing the sweep workflow moves the project's code reviewer to the development machine.
+description: Bring the project's kit-owned files level with the installed kit, and open a pull request with the change. Removes a kit-owned file the kit has retired; removing the sweep workflow moves the project's code reviewer to the development machine. Checks the merge rule on the project's default branch.
 disable-model-invocation: true
 ---
 
 Sync brings this project's kit-owned files level with the kit the plugin was installed from. It runs only because the user asked; never start it on your own, and never suggest running it on a schedule.
 
-The generator is the only thing that writes or removes a kit-owned file: `${CLAUDE_PLUGIN_ROOT}/generator/generate.mjs` (its README beside it gives the exit codes). It removes a **retired** file: a kit-owned file the kit no longer writes. Sync writes and removes the files the generator lists, sets the `kit` field of `devkit.json`, and changes nothing else. Every other file in the project is project-owned or not the kit's at all, including the rest of `devkit.json`: leave them alone even when they look out of date. If a kit-owned file cannot be made what the user wants by the generator, the change belongs in `devkit.json` or in the kit, not in the file.
+The generator is the only thing that writes or removes a kit-owned file: `${CLAUDE_PLUGIN_ROOT}/generator/generate.mjs` (its README beside it gives the exit codes). It removes a **retired** file: a kit-owned file the kit no longer writes. Sync writes and removes the files the generator lists, sets the `kit` field of `devkit.json`, and changes nothing else in the project. Every other file in the project is project-owned or not the kit's at all, including the rest of `devkit.json`: leave them alone even when they look out of date. If a kit-owned file cannot be made what the user wants by the generator, the change belongs in `devkit.json` or in the kit, not in the file.
 
 Shell state does not carry between commands, so write out each path in full.
 
@@ -14,7 +14,14 @@ Shell state does not carry between commands, so write out each path in full.
 
 Find the project root with `git rev-parse --show-toplevel`. If it has no `devkit.json`, tell the user the project is not under the kit and to run `/devkit:install`, and stop.
 
-Run `node "${CLAUDE_PLUGIN_ROOT}/generator/generate.mjs" <root> --check`:
+Check the **merge rule**, the rule every project's default branch carries on GitHub (ADR 0006 in the kit): run `node "${CLAUDE_PLUGIN_ROOT}/install/merge-rule.mjs" <owner/name>`, with `<owner/name>` from `gh repo view --json nameWithOwner -q .nameWithOwner`. Only that script changes a rule, and it only adds: when the `gh` login has admin rights on the repository it creates the rule where the default branch has none, and adds each CI check that a rule for the default branch alone does not require. Keep what it prints. The message that ends this sync, at whichever stop below, gives the user every line of it as it is:
+
+- A line starting `in place`, `create merge rule` or `add required checks` says how the rule stands or what the script just did. `in place, as far as this account can see` is how the rule stands for a `gh` login without admin rights, and asks nothing of the user here.
+- A line starting `printf` is the one command that does what the line before it says: keep it whole, on a line of its own under that line, for the user to run.
+- Any other line is left for the user.
+- On exit 1, give the user what it printed on stderr as well: the rule could not be checked, or GitHub refused the change.
+
+Then run `node "${CLAUDE_PLUGIN_ROOT}/generator/generate.mjs" <root> --check`:
 
 - **Exit 0**: tell the user the project is level with the kit. Stop: no branch, no commit, no pull request.
 - **Exit 2**: `devkit.json` is not valid. Show the user the errors from stderr and stop. `devkit.json` is the user's file; do not fix it for them unasked.
@@ -49,4 +56,4 @@ Run the check again in `<tmp>`. It must exit 0; if it does not, show the user wh
 - `git -C <tmp> push -u origin devkit-sync-<kit>`, then `gh pr create` from `<tmp>` with the base set to the default branch. The body says which kit-owned files were written or removed and why, in a sentence each, and names the kit commit as a link to `https://github.com/josephmitchel/jm-devkit/commit/<kit>`. A move's title and opening section come from `moving-to-the-machine.md`.
 - Remove the worktree with `git -C <root> worktree remove <tmp>` (the branch stays: it is the pull request's).
 
-Give the user the pull request's link. Merging is theirs.
+Give the user the pull request's link and what the merge rule script printed. Merging is theirs.

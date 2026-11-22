@@ -10,6 +10,8 @@ Install brings the project in the current directory under the kit's **process mo
 
 The code reviewer runs on the development machine and finds its projects through its GitHub App: a project with the App installed, a `devkit.json` on its default branch and no code reviewer workflow there is swept that night. So install sets nothing up on GitHub Actions: it writes no workflow, sets no repository secret and gives the project no sweep slot.
 
+Install also sees that the project's default branch carries the **merge rule**, which every project under the kit has whichever modules it uses.
+
 The flow has four steps, and the third is a hard stop:
 
 1. Work out the project's state, changing nothing.
@@ -27,6 +29,7 @@ The scripts below are the parts that must not be left to judgement. Run each as 
 | `generator/generate.mjs <dir> [--check]` | Writes the kit-owned files from `<dir>/devkit.json` and removes the retired ones, printing `wrote <path>` or `removed <path>`; with `--check`, lists the ones behind, and says on stderr which of them are retired. | 0 level, 1 behind, 2 no or invalid `devkit.json` |
 | `install/settings.mjs <dir> [--dry-run]` | Removes the permission rules in `.claude/settings.json` that make an agent ask before a plain `git commit` or `git push`. | 0, or 2 not JSON |
 | `install/label.mjs <repo> [--dry-run]` | Creates `review-now` if the repo lacks it. Prints `create review-now`. | 0, 1 gh failed |
+| `install/merge-rule.mjs <repo> [--dry-run]` | Reads the repo's rulesets and its CI workflow. Creates the merge rule if the default branch lacks it, and adds each CI check a rule for the default branch alone does not require. Prints `in place`, or a line for each thing it did or leaves to the owner. | 0 whatever the rule's state, 1 gh failed |
 
 `<repo>` is `owner/name`. `app.mjs` reads the App's client id and private key from `~/.config/jm-devkit/` (`secrets.env` and `reviewer-app-private-key.pem`, both readable only by the owner; `DEVKIT_CONFIG_DIR` points it elsewhere). Never read, print, `source` or copy a secret value yourself: only the script touches them.
 
@@ -44,6 +47,7 @@ The scripts below are the parts that must not be left to judgement. Run each as 
    - **Copies of what the plugin supplies**: see "What the plugin now supplies".
    - **Permission prompts**: `settings.mjs <worktree> --dry-run`.
    - **Labels**: `label.mjs $REPO --dry-run`.
+   - **Merge rule**: `merge-rule.mjs $REPO --dry-run`. See "The merge rule" for where each line it prints goes.
 
 The plan is **blocked** by anything that stops it being carried out: an invalid `devkit.json`, or GitHub refusing the App's credentials. Show the script's message in the plan as it is (it names the file and what is wrong, never a value), and stop after the plan: the owner fixes it and runs install again.
 
@@ -88,6 +92,20 @@ When the plan removes one, read `${CLAUDE_PLUGIN_ROOT}/skills/kit/sync/moving-to
 
 If the owner answers the plan by saying the project should stay on GitHub Actions for now, take the workflow out of the plan and leave it exactly as it is. In step 4, after the generator has run, put a workflow it removed back with `git -C <worktree> checkout -- <path>`; `--check` then lists that path alone.
 
+## The merge rule
+
+The **merge rule** is the rule every project's default branch carries on GitHub; ADR 0006 in the kit says what it is and what rests on it. Only `merge-rule.mjs` changes it, and it only adds: it creates the rule where the default branch has none, and adds each CI check that a rule for the default branch alone does not require. Both need admin rights on the repository, which an agent's `gh` login may not have.
+
+Each line the script prints goes into the plan by how it starts:
+
+- `in place` and nothing more: under "Merge rule". Nothing is left to do.
+- `in place, as far as this account can see`: under "Left for you", the whole line as it is. The `gh` login is not shown who may bypass the rule, so an account with admin rights has still to confirm that nobody can, with the command the line ends on. A project is registered on the apps machine only after that.
+- `create merge rule` or `add required checks`: under "Merge rule", as it is. Step 4 makes the change.
+- `printf`: the one command that does what the line before it says. Keep it whole, on a line of its own under that line, for the owner to run.
+- Any other line is the owner's, and goes under "Left for you" as it is: the rule is missing or lacks checks and the `gh` login could not add them, the rule is weaker than the kit's, or CI's jobs could not be required.
+
+On exit 1 the script could not read GitHub, or GitHub refused the change: what it printed on stderr goes under "Left for you" with whatever it printed on stdout, as a check or a change that could not be made. Nothing here blocks the plan.
+
 ## 3. The plan
 
 Print one plan in this shape, leaving out empty groups, then stop and wait for the owner. One yes covers all of it. If the owner changes something, print the revised plan and wait again.
@@ -106,12 +124,15 @@ Remove or edit
   .claude/settings.json                edit: remove permissions.ask "Bash(git commit:*)"
 Labels
   review-now                           create
+Merge rule
+  create merge rule: requires the CI checks unit, typecheck
 Delivered as
   a pull request from devkit-install-<commit> into main
 Left for you
   Install the code reviewer's GitHub App on <owner/name>:
   https://github.com/settings/installations
   <what discussions.mjs printed, as it is>
+  <each line merge-rule.mjs printed for the owner, as it is>
   After merging: remove the four repository secrets, and take <owner/name> out of the Worker's list
 Blocked
   <a script's message, verbatim>
@@ -122,13 +143,14 @@ Blocked
 - **The App**, when `app.mjs installed` says `not installed`. A `gh` login cannot add a repository to an App's installation (GitHub answers 403: only a token authorised by a GitHub App can).
 - **The App, unconfirmed**, when `app.mjs installed` exits 3. Say that the App's credentials are not where this session can read them, so whether the App is installed on the project was not checked, and that `code-reviewer projects`, which the owner runs on the development machine, lists the project if it is. Do not print the install link as though the App were missing.
 - **Discussions**, when `discussions.mjs` does not print `ready`. The code reviewer posts each night's summary as a discussion in the project, and a discussion category can only be created in the project's settings on GitHub: GitHub's API has no call for it. The check is what the owner's `gh` login sees. Whether the App has been granted read and write access to Discussions is a separate thing, set once on the App.
+- **The merge rule**, for each line `merge-rule.mjs` printed for the owner: see "The merge rule".
 - **The steps after a move**, when the plan removes a code reviewer workflow.
 
-**An empty plan**: when there is nothing to write, remove or create, say `<owner/name> is level with the kit (<commit>): nothing to do.`, add the "Left for you" lines that apply, remove the scratch worktree and stop. No branch, no commit, no pull request.
+**An empty plan**: when there is nothing to write, remove, create or add, say `<owner/name> is level with the kit (<commit>): nothing to do.`, then `Merge rule: in place` when that is all the script printed, add the "Left for you" lines that apply, remove the scratch worktree and stop. No branch, no commit, no pull request.
 
 ## 4. Do it
 
-Only after the owner confirms the plan, and only the plan:
+Only after the owner confirms the plan, and only the plan. A plan with nothing under "Write" or "Remove or edit" has no files to deliver: it has no "Delivered as" group, and steps 1 to 5 are skipped.
 
 1. In the scratch worktree, `git switch -c devkit-install-<commit>`.
 2. Write `devkit.json`, then run `generate.mjs <worktree>` to write the kit-owned files and remove the retired ones: never write, edit or remove a kit-owned file by hand. Copy `${CLAUDE_PLUGIN_ROOT}/install/coding-standards.md` to `CODING_STANDARDS.md` if the plan says so.
@@ -136,6 +158,7 @@ Only after the owner confirms the plan, and only the plan:
 4. Check: `generate.mjs <worktree> --check` exits 0 and `settings.mjs <worktree> --dry-run` prints nothing.
 5. Commit with a message that says what changed and why, push, and open the pull request with `gh pr create`. The body is the plan, each item with its reason, and the steps left for the owner.
 6. `label.mjs $REPO`. This changes the repository at once, not on merge.
-7. Remove the scratch worktree, and report: the pull request's link, the label, and the steps left for the owner.
+7. `merge-rule.mjs $REPO`, when the plan has a change under "Merge rule". This too changes the repository at once. If it exits 1, or prints a line for the owner that the plan did not have, that joins the steps left for the owner.
+8. Remove the scratch worktree, and report: the pull request's link, the label, what the merge rule script printed, and the steps left for the owner.
 
-Running install again once the pull request is merged, the App is installed and the discussion category exists shows an empty plan with nothing left for the owner.
+Running install again once the pull request is merged, the App is installed and the discussion category exists shows an empty plan with nothing left for the owner but, for a `gh` login without admin rights, the merge rule's bypass list to confirm.

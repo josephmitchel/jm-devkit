@@ -68,6 +68,10 @@ _Avoid_: setup, init, onboarding, bootstrap
 Bringing a project's own copies of kit files up to the kit's current state.
 _Avoid_: update (what the plugin does on its own), upgrade
 
+**Merge rule**:
+The rule on a project's default branch on GitHub: a commit is there only through a pull request whose CI passed, and nobody may bypass that.
+_Avoid_: branch protection (GitHub's older setting), merge gate, ruleset (how GitHub holds the rule)
+
 **Development machine**:
 The owner's machine that agents and the code reviewer work on unattended. It holds projects' checkouts and seeded data only, never an app's real data or production keys.
 _Avoid_: dev VM, dev box, sandbox, server, the owner's machine (he owns both machines)
