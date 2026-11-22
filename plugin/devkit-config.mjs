@@ -38,6 +38,11 @@ export function parseDevkitConfig(text) {
   return checkDevkitConfig(value);
 }
 
+/** The checked `deploy` section of a devkit.json's text, or null when the project has none. */
+export function parseDeployConfig(text) {
+  return parseDevkitConfig(text).deploy ?? null;
+}
+
 /** Validate an already-parsed devkit.json, returning it unchanged or throwing with every error. */
 export function checkDevkitConfig(value) {
   const errors = validate(devkitSchema(), value, '');
