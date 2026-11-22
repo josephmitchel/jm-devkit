@@ -13,5 +13,13 @@
       { "name": "plugin", "command": "node --test 'plugin/**/*.test.mjs'" },
       { "name": "apps-machine", "command": "node --test 'apps-machine/**/*.test.mjs'" }
     ]
+  },
+  "deploy": {
+    "setup": "node sample-app/setup.mjs",
+    "build": "node sample-app/build.mjs",
+    "migrate": "node sample-app/migrate.mjs",
+    "start": "node sample-app/server.mjs",
+    "port": 4310,
+    "healthPath": "/healthz"
   }
 }
