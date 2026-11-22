@@ -56,6 +56,7 @@ function sampleMachine({ data = 'as it is now', deployed = true } = {}) {
       state.data ??= '';
     } else if (/^ALTER ROLE/.test(input)) {
       state.events.push('password');
+      if (state.fails.password) return failing('password', 'psql: said this');
       state.password = /PASSWORD '(.*)'/.exec(input)[1];
     } else if (program === 'systemctl' && args[0] === 'stop') {
       state.events.push('stop');
@@ -378,11 +379,18 @@ test('a restore that fails once the service is stopped leaves it stopped, says s
 });
 
 test('a restore that fails after the settings were put back names the settings file it replaced too', async () => {
-  const { paths, state, restore } = sampleMachine();
-  state.fails.start = true;
-  const done = await restore('sample', lastNight(), '--settings');
-  assert.equal(done.code, 1);
-  assert.ok(done.err.includes(`Its settings file as it was is in ${path.join(paths.restoreDumps('sample'), `${STAMP}.env`)}\n`));
+  for (const [failing, step] of [['password', 'settings'], ['start', 'start']]) {
+    const { paths, state, restore } = sampleMachine();
+    const replaced = fs.readFileSync(paths.settingsFile('sample'));
+    state.fails[failing] = true;
+    const done = await restore('sample', lastNight(), '--settings');
+    assert.equal(done.code, 1, failing);
+    const kept = path.join(paths.restoreDumps('sample'), `${STAMP}.env`);
+    assert.ok(done.err.includes(`Its settings file as it was is in ${kept}\n`), failing);
+    assert.deepEqual(fs.readFileSync(kept), replaced);
+    assert.match(done.err, new RegExp(`^error: the restore of sample stopped at ${step}: `, 'm'));
+    assert.equal(state.running, false);
+  }
 });
 
 test('an app that has never been deployed gets its database back, and nothing is started', async () => {

@@ -82,8 +82,10 @@ function restore(world, { name, file, bundled, withSettings }) {
       out.write(`Restoring ${name}'s database from ${bundled ? `the bundle of ${source.date}` : file}\n`);
       restoreDatabase(world, name, source.dump);
       step = 'settings';
-      if (withSettings) before.settings = putSettingsBack(world, name, source.settings, `${kept}.env`);
-      else if (bundled) out.write(`Left ${name}'s settings file as it is\n`);
+      if (withSettings) {
+        before.settings = keptSettings(paths, name, `${kept}.env`);
+        putSettingsBack(world, name, source.settings);
+      } else if (bundled) out.write(`Left ${name}'s settings file as it is\n`);
       if (answers) {
         step = 'start';
         out.write(`Starting ${serviceName(name)}\n`);
@@ -151,22 +153,24 @@ function newWorkDir(paths) {
   return fs.mkdtempSync(path.join(paths.backupWorkDir, `${process.pid}-`));
 }
 
+/** Copy the app's settings file as it is to `keep`, root's alone. Returns `keep`, or null when the app has no settings file. */
+function keptSettings(paths, name, keep) {
+  if (!fs.existsSync(paths.settingsFile(name))) return null;
+  fs.writeFileSync(keep, fs.readFileSync(paths.settingsFile(name)), { mode: 0o600 });
+  return keep;
+}
+
 /**
- * Replace the app's settings file with the bundle's, byte for byte, keeping the one replaced in
- * `keep`. On a machine built again the app's role has a new password, so the role is given the one
- * the file put back names. Returns `keep`, or null when there was no file to keep.
+ * Replace the app's settings file with the bundle's, byte for byte. On a machine built again the
+ * app's role has a new password, so the role is given the one the file put back names.
  */
-function putSettingsBack(world, name, from, keep) {
+function putSettingsBack(world, name, from) {
   const { paths, out, err } = world;
-  const current = paths.settingsFile(name);
-  const had = fs.existsSync(current);
-  if (had) fs.writeFileSync(keep, fs.readFileSync(current), { mode: 0o600 });
   writeSettings(paths, name, fs.readFileSync(from));
   out.write(`Put ${name}'s settings file back from the bundle\n`);
   const password = passwordIn(paths, name);
   if (password) setDatabasePassword(world, name, password);
-  else err.write(`warning: the settings file put back does not hold DATABASE_URL as register writes it, so ${name}'s database password is as it was. If ${name} cannot open its database, correct DATABASE_URL in ${current}\n`);
-  return had ? keep : null;
+  else err.write(`warning: the settings file put back does not hold DATABASE_URL as register writes it, so ${name}'s database password is as it was. If ${name} cannot open its database, correct DATABASE_URL in ${paths.settingsFile(name)}\n`);
 }
 
 function passwordIn(paths, name) {
