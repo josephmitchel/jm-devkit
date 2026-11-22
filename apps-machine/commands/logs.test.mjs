@@ -1,7 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { appsMachine, fakeRun, machine, registered } from '../test-helpers.mjs';
+import fs from 'node:fs';
+import path from 'node:path';
+
+import { run as realRun } from '../run.mjs';
+import { appsMachine, fakeRun, machine, registered, tempDir } from '../test-helpers.mjs';
 
 const journal = (unit, since) => ({ program: 'journalctl', args: ['--quiet', '--no-pager', `--unit=${unit}`, `--since=${since}`], live: true });
 
@@ -77,6 +81,49 @@ test('logs takes a name and at most a period', async () => {
   for (const args of [[], ['sample', '1d', '--reverse']]) {
     const { run, calls } = fakeRun();
     assert.deepEqual(await appsMachine(['logs', ...args], { paths, run }), { code: 2, out: '', err: 'usage: apps-machine logs <name> [<period>]\n' });
+    assert.deepEqual(calls, []);
+  }
+});
+
+/** The sudo rule as the setup script writes it for `account`: the script's own `COMMAND` and `logs_rule`, run by bash. */
+function sudoRuleFor(account) {
+  const setup = fs.readFileSync(path.join(import.meta.dirname, '../../vm/apps-machine-setup.sh'), 'utf8');
+  const lines = [/^COMMAND=\S+$/m, /^logs_rule\(\) \{ .* \}$/m].map((line) => line.exec(setup)?.[0]);
+  assert.ok(lines.every(Boolean), 'the setup script has no COMMAND or no logs_rule');
+  return realRun('bash', ['-c', `${lines.join('\n')}\nlogs_rule "$1"`, 'bash', account]).stdout;
+}
+
+test('the setup script\'s sudo rule lets one account run the logs command as root without a password, and names nothing else', () => {
+  assert.equal(sudoRuleFor('owner'), 'owner ALL=(root) NOPASSWD: /usr/local/sbin/apps-machine logs *\n');
+});
+
+test('the setup script writes the rule only for a name sudo reads as one account, and never for root', () => {
+  const setup = fs.readFileSync(path.join(import.meta.dirname, '../../vm/apps-machine-setup.sh'), 'utf8');
+  const [, isAnAccount] = /^if (\[\[ "\$LOGS_ACCOUNT" =~ \S+ \]\] && \[ "\$LOGS_ACCOUNT" != root \]); then$/m.exec(setup);
+  const getsTheRule = { owner: true, second_admin: true, 'admin-2': true, _admin: true, '': false, root: false, ALL: false, Owner: false, '%sudo': false, '#0': false, '+admins': false, '!owner': false, 'owner,ALL': false, 'owner ALL': false, 'owner\nALL': false };
+  for (const [account, expected] of Object.entries(getsTheRule)) {
+    assert.equal(realRun('bash', ['-c', `LOGS_ACCOUNT=$1; ${isAnAccount}`, 'bash', account]).code === 0, expected, JSON.stringify(account));
+  }
+});
+
+test('visudo accepts the rule as the setup script writes it', (t) => {
+  const visudo = ['/usr/sbin/visudo', '/usr/bin/visudo'].find((program) => fs.existsSync(program));
+  if (!visudo) return t.skip('this machine has no visudo');
+  const file = path.join(tempDir(), 'apps-machine-logs');
+  fs.writeFileSync(file, sudoRuleFor('owner'));
+  assert.equal(realRun(visudo, ['-cf', file]).code, 0);
+  fs.writeFileSync(file, sudoRuleFor('owner').replace(')', ''));
+  assert.notEqual(realRun(visudo, ['-cf', file]).code, 0);
+});
+
+test('the sudo rule reaches no other command: sudo lets through only arguments that begin with logs, and a command is run by its exact name', async () => {
+  const paths = machine();
+  registered(paths, { name: 'sample' });
+  for (const argv of [['logs deploy', 'sample'], ['logs ', 'deploy', 'sample'], ['logs\tdeploy', 'sample'], ['logs sample'], ['logs *']]) {
+    const { run, calls } = fakeRun();
+    const result = await appsMachine(argv, { paths, run });
+    assert.equal(result.code, 2, JSON.stringify(argv));
+    assert.match(result.err, /^usage: apps-machine <command>\n/);
     assert.deepEqual(calls, []);
   }
 });

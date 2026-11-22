@@ -11,7 +11,7 @@ git clone <the kit's address> jm-devkit
 sudo bash jm-devkit/vm/apps-machine-setup.sh
 ```
 
-It installs Node, Postgres, Tailscale, git and the tools the backups use (`age` and `rclone`), makes `/etc/apps-machine` and `/var/lib/apps-machine/backups` for root alone, and installs the `apps-machine` commands for root. It ends by running `apps-machine list`, which on a new machine prints `No app is registered.`
+It installs Node, Postgres, Tailscale, git and the tools the backups use (`age` and `rclone`), makes `/etc/apps-machine` and `/var/lib/apps-machine/backups` for root alone, installs the `apps-machine` commands for root, and lets the admin account that ran it run `apps-machine logs` without a password ("The sudo rule" under `logs`). It ends by running `apps-machine list`, which on a new machine prints `No app is registered.`
 
 It installs no agent tooling and makes no user for agents and none for the code reviewer. It refuses to run without sudo, on anything but Ubuntu, from a copy of the script outside a checkout of the kit, and on the development machine.
 
@@ -49,6 +49,7 @@ The Node and Postgres versions, and the other steps this script shares with the 
 | `/var/lib/apps-machine/backups/work/` | A directory per backup run or restore for what is unencrypted on the way, removed when the run ends. Empty between runs. |
 | `/var/lib/apps-machine/backups/deploys/<name>/` | The dump each deploy of an app took before it changed anything, as `<time>.dump`. Nothing removes these. |
 | `/var/lib/apps-machine/backups/restores/<name>/` | What each restore of an app replaced: the database as `<time>.dump`, and the settings file as `<time>.env` when `--settings` replaced it. Nothing removes these. |
+| `/etc/sudoers.d/apps-machine-logs` | The rule that lets the admin account run `apps-machine logs` without a password. The setup script writes it. |
 
 ## The commands
 
@@ -305,11 +306,21 @@ ssh apps-machine.example sudo apps-machine logs sample | ssh development-machine
 
 The log passes through his device, so neither machine connects to the other and nothing on the development machine can ask for it. Name a file the agent can read. A failure is printed on his own screen and not into the file.
 
-That line has no terminal for `sudo` to ask for a password on, so it works only where `sudo` lets the owner's account run this command without one. Adding `-t` to `ssh` is not the way round it: the prompt and a terminal's line endings would go into the file. One way is a rule for this command alone, made on the apps machine with `sudo visudo -f /etc/sudoers.d/apps-machine-logs`:
+That line has no terminal for `sudo` to ask for a password on, so it works only where `sudo` lets the owner's account run this command without one. Adding `-t` to `ssh` is not the way round it: the prompt and a terminal's line endings would go into the file.
+
+#### The sudo rule
+
+The setup script installs a rule for this command alone, as `/etc/sudoers.d/apps-machine-logs`, root's and mode 0440:
 
 ```
 <account> ALL=(root) NOPASSWD: /usr/local/sbin/apps-machine logs *
 ```
+
+`<account>` is the admin account that ran the setup script with sudo, and no other: a run from a second account replaces the rule with one for that account. A run as root itself, with no account behind it, installs no rule, leaves one that is there as it is, and says so when it ends; so does a run from an account whose name is anything but lowercase letters, digits, `_` and `-`, which `sudo` could read as more than one account. The script has `visudo` check the rule before it is put in place, and a later run changes nothing when the file is already right.
+
+The rule lets that account run `logs`, with any arguments, and nothing else of `apps-machine`: `sudo` lets through only a command line whose arguments begin with `logs`, and `apps-machine` runs a command only by its exact name. `logs` itself takes a registered app's name and a period, and refuses anything else before it reads the journal. Every other command still asks for the password.
+
+To take the rule away, `sudo rm /etc/sudoers.d/apps-machine-logs`. The next run of the setup script with sudo from an admin account installs it again.
 
 ### restore
 

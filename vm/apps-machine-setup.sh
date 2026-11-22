@@ -39,6 +39,11 @@ BACKUP_PUBLIC_KEY=${BACKUP_PUBLIC_KEY:-}
 BACKUP_STORAGE_FILE=/etc/apps-machine/backup-storage
 RCLONE_CONFIG_FILE=/etc/apps-machine/rclone.conf
 ALIVE_ADDRESS_FILE=/etc/apps-machine/backup-alive-address
+# The admin account that ran this script with sudo may run the logs command without a password,
+# so that a line with no terminal can fetch an app's log: one rule, in a file of its own.
+LOGS_ACCOUNT=${SUDO_USER:-}
+LOGS_SUDOERS_FILE=/etc/sudoers.d/apps-machine-logs
+logs_rule() { printf '%s ALL=(root) NOPASSWD: %s logs *\n' "$1" "$COMMAND"; }
 
 require_sudo_on_ubuntu
 [ -f "$CHECKOUT/apps-machine/install.mjs" ] \
@@ -128,6 +133,30 @@ fi
 chmod 0600 "$BACKUP_STORAGE_FILE" "$ALIVE_ADDRESS_FILE"
 [ ! -e "$RCLONE_CONFIG_FILE" ] || chmod 0600 "$RCLONE_CONFIG_FILE"
 
+step "The sudo rule for apps-machine logs"
+# A name goes into the rule only if sudo reads it as one account and nothing wider.
+if [[ "$LOGS_ACCOUNT" =~ ^[a-z_][a-z0-9_-]*$ ]] && [ "$LOGS_ACCOUNT" != root ]; then
+  logs_rule_for=$LOGS_ACCOUNT
+  rule_file=$(mktemp)
+  logs_rule "$LOGS_ACCOUNT" > "$rule_file"
+  if ! visudo -cf "$rule_file"; then
+    rm -f "$rule_file"
+    fail "visudo does not accept the rule for $LOGS_ACCOUNT, so $LOGS_SUDOERS_FILE was not written"
+  fi
+  if cmp -s "$rule_file" "$LOGS_SUDOERS_FILE" && [ "$(stat -c '%U:%G %a' "$LOGS_SUDOERS_FILE")" = "root:root 440" ]; then
+    echo "$LOGS_SUDOERS_FILE already holds the rule for $LOGS_ACCOUNT."
+  else
+    # sudo passes over a name with a dot in it, so it never reads a file that is part-written.
+    install -m 0440 -o root -g root "$rule_file" "$LOGS_SUDOERS_FILE.new"
+    mv -f "$LOGS_SUDOERS_FILE.new" "$LOGS_SUDOERS_FILE"
+    echo "Wrote the rule for $LOGS_ACCOUNT to $LOGS_SUDOERS_FILE."
+  fi
+  rm -f "$rule_file"
+else
+  logs_rule_for=
+  echo "No rule is installed: this run has no admin account to give it to."
+fi
+
 step "Check: the commands run, and the apps registered here"
 hash -r
 command -v apps-machine >/dev/null || fail "$COMMAND is not on root's path, which is $PATH"
@@ -174,3 +203,19 @@ root can read and never on a command line:
     Without one the backups run, and nothing notices when they stop.
 apps-machine/README.md says more about both.
 EOF
+if [ -n "$logs_rule_for" ]; then
+  cat <<EOF
+
+$logs_rule_for may run 'sudo apps-machine logs <name> [<period>]' without a password, and nothing
+else of apps-machine: the rule is $LOGS_SUDOERS_FILE, for the account that ran this script.
+  To take it away:  sudo rm $LOGS_SUDOERS_FILE
+EOF
+else
+  cat <<EOF
+
+No sudo rule for 'apps-machine logs' was installed. The rule is for the admin account that runs
+this script with sudo, and this run had none: it was run as root itself, or from an account whose
+name sudo might not read as one account. $LOGS_SUDOERS_FILE is left as it was.
+To install the rule, run this script with sudo from the admin account.
+EOF
+fi
