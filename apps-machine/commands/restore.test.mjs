@@ -363,6 +363,17 @@ test('a restore interrupted while it waits for the app to answer stops the servi
   assert.deepEqual(filesUnder(m.paths.backupDir).filter((file) => !file.startsWith('restores/sample/')), []);
 });
 
+test('a restore interrupted before it knows what the file is removes nothing, and says the file is still there', async () => {
+  const { paths, state } = sampleMachine();
+  const bundle = lastNight();
+  const { run } = fakeRun(() => { throw new Interrupted('SIGINT'); });
+  const done = await appsMachine(['restore', 'sample', bundle], { run, paths, now: NOW });
+  assert.equal(done.code, 1);
+  assert.equal(done.err, `error: interrupted by SIGINT: ${bundle} is still on this machine, where a decrypted bundle is unencrypted\n`);
+  assert.ok(fs.existsSync(bundle));
+  assert.deepEqual(state.events, []);
+});
+
 test('a bundle given through a link is itself removed', async () => {
   const { paths, restore } = sampleMachine();
   const bundle = lastNight();

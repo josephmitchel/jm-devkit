@@ -26,7 +26,7 @@ export function command(args, world) {
     throw new UsageError(left.length > 0 ? `still on this machine, where a decrypted bundle is unencrypted: ${left.map((file) => path.resolve(file)).join(', ')}` : '');
   }
   const file = fileAt(given);
-  const bundled = isBundle(world, file);
+  const bundled = knownBundle(world, file);
   try {
     restore(world, { name, file, bundled, withSettings: options.length > 0 });
   } finally {
@@ -34,6 +34,15 @@ export function command(args, world) {
       fs.rmSync(file, { force: true });
       world.out.write(`Removed the decrypted bundle ${file}\n`);
     }
+  }
+}
+
+/** Whether the file is a decrypted bundle. When that could not be found out, nothing removes it, and the error says it is still there. */
+function knownBundle(world, file) {
+  try {
+    return isBundle(world, file);
+  } catch (e) {
+    throw new Error(`${e.message}: ${file} is still on this machine, where a decrypted bundle is unencrypted`);
   }
 }
 
