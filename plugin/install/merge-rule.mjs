@@ -1,12 +1,14 @@
 #!/usr/bin/env node
 // The merge rule on a project's default branch: reads the project's rulesets and its CI workflow,
-// creates the rule where it is missing, and adds the CI checks an existing rule lacks. It changes
-// nothing else: a rule is never removed, loosened or made active here. docs/adr/0006 says what the
-// rule is for and what rests on it; MERGE_RULE below is the rule itself.
+// creates the rule where it is missing, and adds the CI checks an existing rule lacks when that
+// ruleset is for the default branch alone. It changes nothing else: a rule is never removed,
+// loosened or made active here. docs/adr/0006 says what the rule is for and what rests on it;
+// MERGE_RULE below is the rule itself.
 //
 //   node merge-rule.mjs <owner/repo> [--dry-run]
 //
-// Prints `in place` when the rule is there and whole. Otherwise one line for each thing:
+// Prints `in place` when the rule is there and whole, with `, as far as this account can see: ...`
+// after it when the account is not shown who may bypass the rule. Otherwise one line for each thing:
 //   create merge rule: ...      it created the rule (with --dry-run, would)
 //   add required checks: ...    it added them to the rule (with --dry-run, would)
 //   anything else               for the owner: what is missing or weaker, with the command that
@@ -66,14 +68,22 @@ export function mergeRuleset(checks) {
   return { ...ruleset, rules };
 }
 
-/** Whether `ruleset` applies to the default branch, as far as its conditions can be read without matching patterns. */
-function coversDefaultBranch(ruleset, defaultBranch) {
-  const refs = ['~DEFAULT_BRANCH', '~ALL', `refs/heads/${defaultBranch}`];
+/**
+ * How far `ruleset` reaches, as far as its conditions can be read without matching patterns:
+ * 'only' the default branch, 'more' than it, or null when it is not known to cover it. Only a
+ * ruleset for the default branch alone is ever written to: a check added to a broader one would be
+ * required on every branch it covers.
+ */
+function reach(ruleset, defaultBranch) {
+  const own = ['~DEFAULT_BRANCH', `refs/heads/${defaultBranch}`];
   const { include = [], exclude = [] } = ruleset.conditions?.ref_name ?? {};
-  return include.some((ref) => refs.includes(ref)) && exclude.every((ref) => !refs.includes(ref) && !/[*?[]/.test(ref));
+  const covers = include.some((ref) => ref === '~ALL' || own.includes(ref)) && exclude.every((ref) => ref !== '~ALL' && !own.includes(ref) && !/[*?[{]/.test(ref));
+  if (!covers) return null;
+  return include.every((ref) => own.includes(ref)) ? 'only' : 'more';
 }
 
 const ruleOf = (ruleset, type) => (ruleset.rules ?? []).find((rule) => rule.type === type);
+const requiredChecks = (ruleset) => (ruleOf(ruleset, STATUS_CHECKS)?.parameters?.required_status_checks ?? []).map((check) => check.context);
 
 /** A ruleset that holds no part of the merge rule is some other rule, and is not judged as this one. */
 function holdsPartOfTheRule(ruleset) {
@@ -94,8 +104,8 @@ export function compare(ruleset, checks) {
   for (const restriction of MERGE_RULE.restrictions) {
     if (!ruleOf(ruleset, restriction.rule.type)) weaker.push(restriction.weaker);
   }
-  const required = new Set((ruleOf(ruleset, STATUS_CHECKS)?.parameters?.required_status_checks ?? []).map((check) => check.context));
-  return { weaker, missing: checks.filter((check) => !required.has(check)) };
+  const required = requiredChecks(ruleset);
+  return { weaker, missing: checks.filter((check) => !required.includes(check)) };
 }
 
 /** `ruleset` as GitHub is asked to hold it once it also requires `checks`: everything it had, and those. */
@@ -118,59 +128,90 @@ function command({ method, path, body }) {
 }
 
 /**
- * What to say and do about the merge rule of a project in `state` (`project`, `defaultBranch`,
- * `admin`, `rulesets`, `ci`). Returns `{ change, report }`: `change` is the one request that puts
- * the rule in place or adds checks, with the line that says so, or null; `report` is the lines for
- * the owner. Neither means the rule is in place, and `unseen` then says whether that is only as
- * far as this account can see.
+ * The ruleset judged as the project's merge rule, with its `reach`, `weaker` and `missing`, or
+ * undefined when the default branch has none. A whole one comes first; short of that, one in force
+ * before one that is not, then one for the default branch alone, then the one that lacks least.
  */
-export function decide({ project, defaultBranch, admin, rulesets, ci }) {
+function judgedRuleset(rulesets, defaultBranch, checks) {
+  const shortfalls = ({ weaker, missing }) => weaker.length + missing.length;
+  const rank = (found) => ((shortfalls(found) ? 4 : 0) + (found.ruleset.enforcement === 'active' ? 0 : 2) + (found.reach === 'only' ? 0 : 1)) * 1000 + shortfalls(found);
+  return rulesets
+    .map((ruleset) => ({ ruleset, reach: reach(ruleset, defaultBranch), ...compare(ruleset, checks) }))
+    .filter((found) => found.reach && holdsPartOfTheRule(found.ruleset))
+    .sort((a, b) => rank(a) - rank(b))[0];
+}
+
+/**
+ * What to say and do about the merge rule of a project in `state`: `project`, `defaultBranch`,
+ * `admin`, `rulesets`, `ci`, and `refused` when GitHub has just refused this account the change.
+ * Returns `{ change, report, inPlace }`: `change` is the one request that creates the rule or adds
+ * checks, with the line that says so, or null; `report` is the lines for the owner; `inPlace` is
+ * the line to print when there is neither.
+ */
+export function decide({ project, defaultBranch, admin, refused = false, rulesets, ci }) {
   const report = [];
   let change = null;
-  const candidates = rulesets
-    .filter((ruleset) => coversDefaultBranch(ruleset, defaultBranch) && holdsPartOfTheRule(ruleset))
-    .map((ruleset) => ({ ruleset, ...compare(ruleset, ci.checks) }))
-    .sort((a, b) => a.weaker.length + a.missing.length - (b.weaker.length + b.missing.length));
-  const [closest] = candidates;
-  const noRights = `and this account has no admin rights on the project to add ${closest ? 'them' : 'it'}. Run this as an account that has them:`;
-  const propose = (line, request, otherwise) => {
+  const judged = judgedRuleset(rulesets, defaultBranch, ci.checks);
+  const named = `the ruleset "${judged?.ruleset.name}"`;
+  const url = `https://github.com/${project}/rules/${judged?.ruleset.id}`;
+  const propose = (line, request, said, note = '') => {
+    const them = judged ? 'them' : 'it';
+    const whyNot = refused ? `GitHub refused this account when it tried to add ${them}` : `this account has no admin rights on the project to add ${them}`;
     if (admin) change = { line, ...request };
-    else report.push(`${otherwise}, ${noRights}\n${command(request)}`);
+    else report.push(`${said}, and ${whyNot}.${note} Run this as an account that has ${refused ? 'admin rights on the project' : 'them'}:\n${command(request)}`);
   };
 
-  if (!closest) {
+  if (!judged) {
     propose(
       `create merge rule: ${ci.checks.length ? `requires the CI checks ${ci.checks.join(', ')}` : 'no required checks'}`,
       { what: 'create the merge rule on', method: 'POST', path: `repos/${project}/rulesets`, body: mergeRuleset(ci.checks) },
       `${project} has no merge rule on its default branch`,
     );
   } else {
-    const { ruleset, weaker, missing } = closest;
-    const rule = `The merge rule of ${project} (the ruleset "${ruleset.name}")`;
-    if (weaker.length) {
-      report.push(
-        `${rule} is weaker than the kit's: ${weaker.join('; ')}. Install and sync never change these: put them right at https://github.com/${project}/rules/${ruleset.id}`,
-      );
-    }
-    if (missing.length) {
-      propose(
-        `add required checks: ${missing.join(', ')}`,
-        { what: 'add required checks to the merge rule of', method: 'PUT', path: `repos/${project}/rulesets/${ruleset.id}`, body: withChecks(ruleset, missing) },
-        `${rule} does not require the CI checks ${missing.join(', ')}`,
-      );
+    const { ruleset, weaker, missing } = judged;
+    const rule = `The merge rule of ${project} (${named})`;
+    const lacks = `does not require the CI checks ${missing.join(', ')}`;
+    if (judged.reach === 'more') {
+      const short = [...weaker, ...(missing.length ? [`it ${lacks}`] : [])];
+      if (short.length) {
+        report.push(`${rule} is weaker than the kit's: ${short.join('; ')}. It covers more than the default branch, so install and sync do not change it: put these right at ${url}`);
+      }
+    } else {
+      if (weaker.length) {
+        const later = missing.length && !admin ? ` It also ${lacks}: once the rest is right, the next install or sync adds them or gives the command that does.` : '';
+        report.push(`${rule} is weaker than the kit's: ${weaker.join('; ')}. Install and sync never change these: put them right at ${url}${later}`);
+      }
+      // A printed command carries the ruleset as read, so it is given only when running it late could undo nothing but a check.
+      if (missing.length && (admin || !weaker.length)) {
+        propose(
+          `add required checks: ${missing.join(', ')}`,
+          { what: 'add required checks to the merge rule of', method: 'PUT', path: `repos/${project}/rulesets/${ruleset.id}`, body: withChecks(ruleset, missing) },
+          `${rule} ${lacks}`,
+          ' The command sends the whole ruleset as it was read just now, with the checks added, so run it before the ruleset is changed again.',
+        );
+      }
     }
   }
 
   const workflow = `${CI_WORKFLOW} on ${defaultBranch}`;
   if (ci.problem) {
+    const required = judged ? requiredChecks(judged.ruleset) : [];
+    const waiting = ci.unrun ? required.filter((check) => ci.unrun.includes(check)) : required;
     report.push(
-      `${project}'s CI workflow (${workflow}) ${ci.problem}, so the merge rule cannot require its jobs. They become required at the next install or sync after that is put right.`,
+      waiting.length
+        ? `${project}'s CI workflow (${workflow}) ${ci.problem}, and the merge rule (${named}) still requires the checks ${waiting.join(', ')}. ` +
+            `A pull request that nothing reports them on waits for them and cannot merge: put the workflow right, or take them out of the ruleset at ${url}`
+        : `${project}'s CI workflow (${workflow}) ${ci.problem}, so the merge rule cannot require its jobs. They become required at the next install or sync after that is put right.`,
     );
   }
   for (const { job, why } of ci.unsure) {
     report.push(`The merge rule does not cover the CI job ${job} of ${project} (${workflow}): it ${why}. Requiring its checks in the rule is yours.`);
   }
-  return { change, report, unseen: Boolean(closest) && !closest.ruleset.bypass_actors };
+  const inPlace = judged?.ruleset.bypass_actors
+    ? 'in place'
+    : `in place, as far as this account can see: who may bypass a ruleset is shown only to an account with admin rights on ${project}. ` +
+      `For such an account this prints [] when nobody may: gh api repos/${project}/rulesets/${judged?.ruleset.id} --jq .bypass_actors`;
+  return { change, report, inPlace };
 }
 
 /** The project's state as `gh` shows it to the account running it. Throws when GitHub cannot be read. */
@@ -199,7 +240,7 @@ export function readState(project, gh = realGh) {
     defaultBranch: repo.default_branch,
     admin: repo.permissions?.admin === true,
     rulesets,
-    ci: absent ? { checks: [], unsure: [], problem: 'is missing' } : ciChecks(file.stdout),
+    ci: absent ? { checks: [], unsure: [], problem: 'is missing', unrun: null } : ciChecks(file.stdout, repo.default_branch),
   };
 }
 
@@ -212,27 +253,26 @@ export function main(argv, { gh = realGh, out = process.stdout, err = process.st
     err.write('usage: node merge-rule.mjs <owner/repo> [--dry-run]\n');
     return 2;
   }
-  let decision;
+  let state;
   try {
-    decision = decide(readState(project, gh));
+    state = readState(project, gh);
   } catch (e) {
     err.write(`${e.message}\n`);
     return 1;
   }
-  const { change, report, unseen } = decision;
-  const lines = [...report];
+  const { change, report, inPlace } = decide(state);
+  let lines = report.length ? report : [inPlace];
   let code = 0;
   if (change) {
     const run = dryRun ? { code: 0 } : gh(['api', '--method', change.method, change.path, '--input', '-'], { input: JSON.stringify(change.body) });
-    if (run.code === 0) lines.unshift(change.line);
+    if (run.code === 0) lines = [change.line, ...report];
     else {
       err.write(`could not ${change.what} ${project}: ${run.stderr.trim()}\n`);
+      lines = decide({ ...state, admin: false, refused: true }).report;
       code = 1;
     }
-  } else if (!report.length) {
-    lines.push(unseen ? `in place, as far as this account can see: who may bypass a ruleset is shown only to an account with admin rights on ${project}` : 'in place');
   }
-  if (lines.length) out.write(`${lines.join('\n')}\n`);
+  out.write(`${lines.join('\n')}\n`);
   return code;
 }
 

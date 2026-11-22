@@ -164,7 +164,9 @@ test('an account without admin rights is not shown who may bypass the rule, and 
   const { gh, calls } = projectWith({ admin: false, rulesets: [ruleset()] });
   assert.deepEqual(run([REPO], gh), {
     code: 0,
-    out: 'in place, as far as this account can see: who may bypass a ruleset is shown only to an account with admin rights on owner/project\n',
+    out:
+      'in place, as far as this account can see: who may bypass a ruleset is shown only to an account with admin rights on owner/project. ' +
+      'For such an account this prints [] when nobody may: gh api repos/owner/project/rulesets/7 --jq .bypass_actors\n',
     err: '',
   });
   assert.deepEqual(writes(calls), []);
@@ -244,7 +246,8 @@ test('without admin rights a missing required check is reported with the command
   assert.deepEqual(rest, []);
   assert.equal(
     said,
-    'The merge rule of owner/project (the ruleset "main merge gate") does not require the CI checks lint, and this account has no admin rights on the project to add them. Run this as an account that has them:',
+    'The merge rule of owner/project (the ruleset "main merge gate") does not require the CI checks lint, and this account has no admin rights on the project to add them. ' +
+      'The command sends the whole ruleset as it was read just now, with the checks added, so run it before the ruleset is changed again. Run this as an account that has them:',
   );
   const [, body] = command.match(/^printf '%s' '(.*)' \| gh api --method PUT repos\/owner\/project\/rulesets\/7 --input -$/);
   const sent = JSON.parse(body);
@@ -252,6 +255,51 @@ test('without admin rights a missing required check is reported with the command
   assert.deepEqual(sent.rules.slice(0, -1), had.rules.slice(0, -1));
   assert.deepEqual(sent.rules.at(-1).parameters.required_status_checks.map((c) => c.context), ['unit', 'lint']);
   assert.deepEqual(writes(calls), []);
+});
+
+test('without admin rights a rule that is weaker and lacks a check gets no command, which could undo the fix: the next run gives it', () => {
+  const bypass = [{ actor_id: 5, actor_type: 'RepositoryRole', bypass_mode: 'always' }];
+  for (const [changes, named] of [
+    [{ enforcement: 'disabled' }, 'it is not active (enforcement: disabled)'],
+    [{ current_user_can_bypass: 'always', bypass_actors: bypass }, 'this account can bypass it'],
+    [{ rules: without('deletion') }, 'it lets the default branch be deleted'],
+  ]) {
+    const had = ruleset({ ...changes, rules: [...without('required_status_checks', changes.rules), statusChecks('unit')] });
+    const { gh, calls } = projectWith({ admin: false, rulesets: [had] });
+    assert.deepEqual(run([REPO], gh), {
+      code: 0,
+      out:
+        `The merge rule of owner/project (the ruleset "main merge gate") is weaker than the kit's: ${named}. ` +
+        'Install and sync never change these: put them right at https://github.com/owner/project/rules/7 ' +
+        'It also does not require the CI checks lint: once the rest is right, the next install or sync adds them or gives the command that does.\n',
+      err: '',
+    });
+    assert.deepEqual(writes(calls), []);
+  }
+});
+
+test('a ruleset that covers more than the default branch is judged but never written to, and no command is given for it', () => {
+  const everyBranch = { ref_name: { exclude: [], include: ['~ALL'] } };
+  const releasesToo = { ref_name: { exclude: [], include: ['refs/heads/main', 'refs/heads/release/*'] } };
+  for (const admin of [true, false]) {
+    for (const [conditions, rules, named] of [
+      [everyBranch, [{ type: 'deletion' }], 'it allows force-pushes; it does not require a pull request; it does not require the CI checks unit, lint'],
+      [releasesToo, without('required_status_checks'), 'it does not require the CI checks unit, lint'],
+      [releasesToo, [...without('required_status_checks'), statusChecks('unit')], 'it does not require the CI checks lint'],
+    ]) {
+      const { gh, calls } = projectWith({ admin, rulesets: [ruleset({ conditions, rules })] });
+      assert.deepEqual(run([REPO], gh), {
+        code: 0,
+        out:
+          `The merge rule of owner/project (the ruleset "main merge gate") is weaker than the kit's: ${named}. ` +
+          'It covers more than the default branch, so install and sync do not change it: put these right at https://github.com/owner/project/rules/7\n',
+        err: '',
+      });
+      assert.deepEqual(writes(calls), []);
+    }
+    const whole = ruleset({ conditions: releasesToo });
+    assert.match(run([REPO], projectWith({ admin, rulesets: [whole] }).gh).out, /^in place/);
+  }
 });
 
 test('a weaker rule that also lacks a check gets the check, and what is weaker is still reported', () => {
@@ -302,12 +350,46 @@ test('a ruleset naming the default branch by its ref is the rule; one that leave
   }
 });
 
-test('with several rulesets on the default branch, the one closest to the rule is the one judged', () => {
+const judged = (out) => out.match(/the ruleset "([^"]*)"/)?.[1];
+const everyBranch = { ref_name: { exclude: [], include: ['~ALL'] } };
+
+test('with several rulesets on the default branch, a whole one means in place whatever the others lack', () => {
   const partial = ruleset({ id: 3, name: 'no force-push', rules: [{ type: 'non_fast_forward' }] });
-  assert.equal(run([REPO], projectWith({ rulesets: [partial, ruleset()] }).gh).out, 'in place\n');
-  const inactive = ruleset({ id: 9, name: 'gate', enforcement: 'disabled' });
-  const result = run([REPO], projectWith({ rulesets: [partial, inactive] }).gh);
-  assert.match(result.out, /^The merge rule of owner\/project \(the ruleset "gate"\) is weaker than the kit's: it is not active \(enforcement: disabled\)\. .*\/rules\/9\n$/);
+  for (const whole of [ruleset(), ruleset({ conditions: everyBranch })]) {
+    for (const rulesets of [[partial, whole], [whole, partial]]) {
+      const { gh, calls } = projectWith({ rulesets });
+      assert.equal(run([REPO], gh).out, 'in place\n');
+      assert.deepEqual(writes(calls), []);
+    }
+  }
+});
+
+test('a ruleset in force is judged before a whole one that is not: a disabled draft does not hide the live rule', () => {
+  const live = ruleset({ id: 1, name: 'live', rules: without('required_status_checks') });
+  const draft = ruleset({ id: 2, name: 'draft', enforcement: 'disabled' });
+  for (const rulesets of [[live, draft], [draft, live]]) {
+    const { gh, calls } = projectWith({ rulesets });
+    assert.equal(run([REPO], gh).out, 'add required checks: unit, lint\n');
+    assert.equal(writes(calls)[0].args[3], `repos/${REPO}/rulesets/1`);
+    assert.equal(judged(run([REPO], projectWith({ admin: false, rulesets }).gh).out), 'live');
+  }
+});
+
+test('among rulesets in force, one for the default branch alone is judged before a broader one, then the one that lacks least', () => {
+  const lacking = without('required_status_checks');
+  const broad = ruleset({ id: 1, name: 'all branches', conditions: everyBranch, rules: lacking });
+  const own = ruleset({ id: 2, name: 'default branch', rules: without('deletion', lacking) });
+  for (const rulesets of [[broad, own], [own, broad]]) {
+    const { gh, calls } = projectWith({ rulesets });
+    assert.equal(judged(run([REPO], gh).out), 'default branch');
+    assert.equal(writes(calls)[0].args[3], `repos/${REPO}/rulesets/2`);
+  }
+  const closer = ruleset({ id: 3, name: 'closer', rules: lacking });
+  for (const rulesets of [[own, closer], [closer, own]]) {
+    const { gh, calls } = projectWith({ rulesets });
+    assert.equal(run([REPO], gh).out, 'add required checks: unit, lint\n');
+    assert.equal(writes(calls)[0].args[3], `repos/${REPO}/rulesets/3`);
+  }
 });
 
 test('a project with no CI workflow gets the rule without required checks, and is told its jobs are not required', () => {
@@ -332,6 +414,25 @@ test('a CI workflow that does not run on every pull request has none of its jobs
   assert.deepEqual(writes(calls), []);
 });
 
+test("a CI workflow whose pull_request trigger is filtered to the project's default branch still has its jobs required", () => {
+  const workflow = CI.replace('  pull_request:\n', '  pull_request:\n    branches: [trunk]\n');
+  assert.equal(run([REPO], projectWith({ workflow, branch: 'trunk', rulesets: [ruleset()] }).gh).out, 'in place\n');
+  assert.match(run([REPO], projectWith({ workflow, branch: 'main', rulesets: [ruleset()] }).gh).out, /runs on some pull requests only/);
+});
+
+test('a rule that still requires the jobs of a workflow that no longer runs on every pull request, or is gone, is said to leave pull requests waiting', () => {
+  const filtered = CI.replace('  pull_request:\n', '  pull_request:\n    paths: [src/**]\n');
+  const rules = [...without('required_status_checks'), statusChecks('unit', 'lint', 'security/scan')];
+  const waits = (problem, checks) =>
+    `owner/project's CI workflow (.github/workflows/ci.yml on main) ${problem}, and the merge rule (the ruleset "main merge gate") still requires the checks ${checks}. ` +
+    'A pull request that nothing reports them on waits for them and cannot merge: put the workflow right, or take them out of the ruleset at https://github.com/owner/project/rules/7\n';
+  const some = projectWith({ workflow: filtered, rulesets: [ruleset({ rules })] });
+  assert.deepEqual(run([REPO], some.gh), { code: 0, out: waits('runs on some pull requests only: its pull_request trigger has filters', 'unit, lint'), err: '' });
+  const gone = projectWith({ workflow: null, rulesets: [ruleset({ rules })] });
+  assert.deepEqual(run([REPO], gone.gh), { code: 0, out: waits('is missing', 'unit, lint, security/scan'), err: '' });
+  assert.deepEqual([...writes(some.calls), ...writes(gone.calls)], []);
+});
+
 test('a CI job whose check names are not certain is not required, and the owner is told which and why', () => {
   const matrix = `${CI}  browsers:\n    strategy:\n      matrix:\n        browser: [firefox, chromium]\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm run e2e\n`;
   const told =
@@ -354,7 +455,7 @@ test('nothing it asks of GitHub can loosen a rule: every rule, check and setting
     ruleset({
       enforcement: 'disabled',
       bypass_actors: bypass,
-      conditions: { ref_name: { exclude: ['refs/heads/scratch'], include: ['~ALL'] } },
+      conditions: { ref_name: { exclude: ['refs/heads/scratch'], include: ['refs/heads/main', '~DEFAULT_BRANCH'] } },
       rules: [{ type: 'deletion' }, statusChecks('unit', 'other')],
     }),
   ]) {
@@ -387,11 +488,27 @@ test('when GitHub cannot be read it exits 1 saying what could not be read, and c
   assert.deepEqual(run([REPO], noRulesets.gh), { code: 1, out: '', err: "could not read the rulesets of owner/project: GitHub's answer is not JSON\n" });
 });
 
-test('when GitHub refuses the change it exits 1 with what gh said, and does not say the change was made', () => {
+test('when GitHub refuses the change it exits 1 with what gh said, and leaves the change to the owner as it would without admin rights', () => {
   const created = run([REPO], projectWith({ refuse: 'HTTP 403: Resource not accessible\n' }).gh);
-  assert.deepEqual(created, { code: 1, out: '', err: 'could not create the merge rule on owner/project: HTTP 403: Resource not accessible\n' });
+  assert.equal(created.code, 1);
+  assert.equal(created.err, 'could not create the merge rule on owner/project: HTTP 403: Resource not accessible\n');
+  const [said, command, ...rest] = created.out.trimEnd().split('\n');
+  assert.deepEqual(rest, []);
+  assert.equal(said, 'owner/project has no merge rule on its default branch, and GitHub refused this account when it tried to add it. Run this as an account that has admin rights on the project:');
+  assert.deepEqual(JSON.parse(command.match(/^printf '%s' '(.*)' \| gh api --method POST repos\/owner\/project\/rulesets --input -$/)[1]), CREATED);
+
   const added = run([REPO], projectWith({ refuse: 'HTTP 422\n', rulesets: [ruleset({ rules: without('required_status_checks') })] }).gh);
-  assert.deepEqual(added, { code: 1, out: '', err: 'could not add required checks to the merge rule of owner/project: HTTP 422\n' });
+  assert.equal(added.code, 1);
+  assert.equal(added.err, 'could not add required checks to the merge rule of owner/project: HTTP 422\n');
+  assert.match(
+    added.out,
+    /^The merge rule of owner\/project \(the ruleset "main merge gate"\) does not require the CI checks unit, lint, and GitHub refused this account when it tried to add them\. .* Run this as an account that has admin rights on the project:\nprintf '%s' '.*' \| gh api --method PUT repos\/owner\/project\/rulesets\/7 --input -\n$/,
+  );
+
+  const weaker = run([REPO], projectWith({ refuse: 'HTTP 422\n', rulesets: [ruleset({ enforcement: 'disabled', rules: without('required_status_checks') })] }).gh);
+  assert.equal(weaker.code, 1);
+  assert.match(weaker.out, /is weaker than the kit's: it is not active .* It also does not require the CI checks unit, lint: once the rest is right, /);
+  assert.doesNotMatch(weaker.out, /printf|add required checks:/);
 });
 
 test('bad arguments exit 2', () => {
