@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { appsMachine, backupPrograms, fakeRun, machine, openedBundle, registered } from '../test-helpers.mjs';
+import { appsMachine, backupPrograms, fakeRun, machine, openedBundle, registered, sink } from '../test-helpers.mjs';
+import { bundleEveryApp } from './backup.mjs';
 
 const PUBLIC_KEY = 'age1madeupmadeupmadeupmadeupmadeupmadeupmadeupmadeupmadeupma\n';
 const NIGHT = () => new Date(2026, 10, 21, 3, 0, 0);
@@ -160,4 +161,63 @@ test('an app whose bundle was not made tonight keeps its old bundles', async () 
   });
   assert.equal(result.code, 1);
   assert.deepEqual(fs.readdirSync(paths.nightlyDir).sort(), ['example_app-2026-11-21.tar.age', 'sample-2026-11-01.tar.age']);
+});
+
+test('what a run that was killed left behind is removed by the next run, and a run still going is left alone', async () => {
+  const paths = machineWithKey('sample');
+  const killed = path.join(paths.backupWorkDir, '999999999-AbCdEf');
+  const going = path.join(paths.backupWorkDir, `${process.pid}-AbCdEf`);
+  for (const dir of [killed, going]) {
+    fs.mkdirSync(path.join(dir, 'sample/members'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'sample/members/database.dump'), 'unencrypted');
+  }
+  const result = await backup(paths);
+  assert.equal(result.code, 0);
+  assert.deepEqual(fs.readdirSync(paths.backupWorkDir), [path.basename(going)]);
+});
+
+test('a second run on the same date replaces the app\'s bundle, and the date is the machine\'s own', async () => {
+  const paths = machineWithKey('sample');
+  await backup(paths, { now: () => new Date(2026, 10, 21, 0, 0, 1) });
+  fs.writeFileSync(paths.settingsFile('sample'), 'CHANGED=since\n');
+  await backup(paths, { now: () => new Date(2026, 10, 21, 23, 59, 59) });
+  assert.deepEqual(fs.readdirSync(paths.nightlyDir), ['sample-2026-11-21.tar.age']);
+  assert.equal(openedBundle(path.join(paths.nightlyDir, 'sample-2026-11-21.tar.age')).members['settings.env'].toString(), 'CHANGED=since\n');
+  await backup(paths, { now: () => new Date(2026, 10, 22, 0, 0, 0) });
+  assert.deepEqual(fs.readdirSync(paths.nightlyDir), ['sample-2026-11-21.tar.age', 'sample-2026-11-22.tar.age']);
+});
+
+test('with no app registered there is nothing to back up, and the run says so', async () => {
+  const paths = machineWithKey();
+  const result = await backup(paths);
+  assert.deepEqual({ code: result.code, out: result.out, err: result.err }, { code: 0, out: 'No app is registered: there is nothing to back up.\n', err: '' });
+  assert.deepEqual(result.calls, []);
+});
+
+test('backup takes no arguments', async () => {
+  assert.deepEqual(await appsMachine(['backup', 'sample']), { code: 2, out: '', err: 'usage: apps-machine backup\n' });
+});
+
+test('the run gives back the night\'s bundles and the apps that have none, for the steps that follow', () => {
+  const paths = machineWithKey('example_app', 'other', 'sample');
+  const programs = backupPrograms();
+  const { run } = fakeRun((program, args, options) => (program === '/bin/sh' && args[3] === 'other' ? { code: 1, stderr: 'pg_dump: failed\n' } : programs(program, args, options)));
+  const night = bundleEveryApp({ run, paths, out: sink(), err: sink(), now: NIGHT });
+  assert.deepEqual(night, {
+    date: '2026-11-21',
+    bundles: [
+      { app: 'example_app', date: '2026-11-21', name: 'example_app-2026-11-21.tar.age', file: path.join(paths.nightlyDir, 'example_app-2026-11-21.tar.age') },
+      { app: 'sample', date: '2026-11-21', name: 'sample-2026-11-21.tar.age', file: path.join(paths.nightlyDir, 'sample-2026-11-21.tar.age') },
+    ],
+    failed: [{ app: 'other', reason: 'could not dump other\'s database: pg_dump: failed' }],
+  });
+});
+
+test('the timer\'s service runs this command from where the setup script links it', () => {
+  const vm = path.join(import.meta.dirname, '../../vm');
+  const setup = fs.readFileSync(path.join(vm, 'apps-machine-setup.sh'), 'utf8');
+  const service = fs.readFileSync(path.join(vm, 'systemd/apps-machine-backup.service'), 'utf8');
+  const link = /^COMMAND=(\S+)$/m.exec(setup)[1];
+  assert.deepEqual(service.match(/^ExecStart=.*$/gm), [`ExecStart=${link} backup`]);
+  assert.ok(fs.existsSync(path.join(vm, 'systemd/apps-machine-backup.timer')));
 });

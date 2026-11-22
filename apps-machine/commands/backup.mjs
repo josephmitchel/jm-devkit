@@ -21,10 +21,14 @@ export function bundleEveryApp(world) {
     throw new Error(`no public key is set for the backups, so no bundle can be encrypted: run the setup script with BACKUP_PUBLIC_KEY=<the owner's age public key>, which writes it to ${paths.backupPublicKey}`);
   }
   const night = { date: localDate(now()), bundles: [], failed: [] };
-  fs.mkdirSync(paths.backupWorkDir, { recursive: true, mode: 0o700 });
-  const workDir = fs.mkdtempSync(path.join(paths.backupWorkDir, `${process.pid}-`));
+  const apps = readRegistry(paths);
+  if (apps.length === 0) {
+    out.write('No app is registered: there is nothing to back up.\n');
+    return night;
+  }
+  const workDir = newWorkDir(paths);
   try {
-    for (const { name: app } of readRegistry(paths)) {
+    for (const { name: app } of apps) {
       try {
         const file = makeBundle(world, { app, date: night.date, workDir });
         night.bundles.push({ app, date: night.date, name: path.basename(file), file });
@@ -39,6 +43,25 @@ export function bundleEveryApp(world) {
   }
   for (const { app, name } of removeExpired(paths, night)) out.write(`${app}: removed ${name}, older than seven days\n`);
   return night;
+}
+
+const isRunning = (pid) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return e.code === 'EPERM';
+  }
+};
+
+/** A run's own directory, named for its process, after removing those of runs that were killed before they could. */
+function newWorkDir(paths) {
+  fs.mkdirSync(paths.backupWorkDir, { recursive: true, mode: 0o700 });
+  for (const name of fs.readdirSync(paths.backupWorkDir)) {
+    const owner = /^(\d+)-/.exec(name);
+    if (owner && !isRunning(Number(owner[1]))) fs.rmSync(path.join(paths.backupWorkDir, name), { recursive: true, force: true });
+  }
+  return fs.mkdtempSync(path.join(paths.backupWorkDir, `${process.pid}-`));
 }
 
 /** An app's old bundles go only once it has tonight's: a backup that keeps failing never eats the last good ones. */
