@@ -562,13 +562,16 @@ is safe to run again.
 
 The credentials reach the service only through its environment, from
 `/etc/code-reviewer/credentials.env`. Root alone can read the file; systemd reads it before the
-service drops to the `reviewer` user. The setup creates it when it is missing and never changes or
-prints one that exists. It holds one `NAME=value` per line, with no quotes:
+service drops to the `reviewer` user. The setup creates it when it is missing and never prints one.
+In one that exists it changes one line only, `REVIEWER_TEST_DATABASES_URL`, and only when that line
+does not point at the tests server the setup makes. It holds one `NAME=value` per line, with no
+quotes:
 
 - `DATABASE_URL`: the code reviewer's own database. The setup fills it in. It must be a direct
   address, not a pooled one: the locks that keep agent jobs to one at a time are held by a
   database session, and a pooler that shares sessions gives the same lock to two takers.
-- `REVIEWER_TEST_DATABASES_URL`: where projects' test databases are created. The setup fills it in.
+- `REVIEWER_TEST_DATABASES_URL`: where projects' test databases are created. The setup fills it in,
+  with the address of the tests server (below).
 - `CLAUDE_CODE_OAUTH_TOKEN`: the Claude subscription's token, from `claude setup-token`.
 - `REVIEWER_APP_CLIENT_ID`: the App's client id.
 - `REVIEWER_APP_PRIVATE_KEY`: the App's private key as one line of base64
@@ -584,11 +587,18 @@ environment and with a home of their own under `workspaces/`.
 
 The code reviewer's database is `code_reviewer`, owned by a Postgres role of the same name that
 takes a password and is no Linux user's name, so being a local user opens nothing. Nobody else may
-connect to it. A second role, `code_reviewer_tests`, may create databases and cannot connect to the
-code reviewer's: its address is `REVIEWER_TEST_DATABASES_URL`, and a project's commands are handed
-its password inside the addresses of their test databases. The setup generates both passwords,
-writes them only into the credentials file, and checks that the `reviewer` user cannot open the
-database without one.
+connect to it. The setup generates its password, writes it only into the credentials file, and
+checks that the `reviewer` user cannot open the database without one.
+
+Test databases are created on a second Postgres server on the machine, the tests server, which
+does not wait for the disk to confirm a write (`fsync` is off). A suite that empties its tables
+before every test asks for hundreds of confirmed writes each time, and on a virtual machine's disk
+a suite that takes minutes elsewhere can run past the limit on a check. A power cut can damage
+everything on the tests server, so only databases that tests create belong there, and the code
+reviewer's own database stays on the first server. The role `code_reviewer_tests` exists only on
+the tests server and may create databases: its address is `REVIEWER_TEST_DATABASES_URL`, and a
+project's commands are handed its password inside the addresses of their test databases. The
+agents' role is on both servers, so an agent's own test runs can use the tests server too.
 
 ## The PR loop
 
