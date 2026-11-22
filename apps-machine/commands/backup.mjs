@@ -49,21 +49,27 @@ export function bundleEveryApp(world) {
   return night;
 }
 
+/** The bundles in the machine's nightly directory by name, as `parseBundleName` gives them, each with its `file`. */
+function bundlesOnMachine(paths) {
+  if (!fs.existsSync(paths.nightlyDir)) return [];
+  const files = fs.readdirSync(paths.nightlyDir, { withFileTypes: true }).filter((entry) => entry.isFile()).map((entry) => entry.name);
+  return files.sort().map(parseBundleName).filter(Boolean).map((bundle) => ({ ...bundle, file: path.join(paths.nightlyDir, bundle.name) }));
+}
+
 /** An app's old bundles go only once it has tonight's: a backup that keeps failing never eats the last good ones. */
 function removeExpired(paths, night) {
   const bundled = new Set(night.bundles.map((bundle) => bundle.app));
-  const onMachine = bundled.size === 0 ? [] : fs.readdirSync(paths.nightlyDir).sort().map(parseBundleName).filter((bundle) => bundle && bundled.has(bundle.app));
-  const expired = expiredOnMachine(onMachine, night.date);
-  for (const { name } of expired) fs.rmSync(path.join(paths.nightlyDir, name));
+  const expired = expiredOnMachine(bundlesOnMachine(paths).filter((bundle) => bundled.has(bundle.app)), night.date);
+  for (const { file } of expired) fs.rmSync(file);
   return expired;
 }
 
-/** Upload each of the night's bundles. Returns the ones now on the storage; one that is not is said on `err`. */
-function uploadEach(world, storage, bundles) {
+/** Upload each bundle. Returns the ones now on the storage; one that is not is said on `err`. */
+function uploadEach(world, storage, bundles, why = '') {
   return bundles.filter((bundle) => {
     try {
       uploadBundle(world, storage, bundle);
-      world.out.write(`${bundle.app}: uploaded ${bundle.name}\n`);
+      world.out.write(`${bundle.app}: uploaded ${bundle.name}${why}\n`);
       return true;
     } catch (e) {
       if (e instanceof Interrupted) throw e;
@@ -73,15 +79,40 @@ function uploadEach(world, storage, bundles) {
   });
 }
 
-/** As on the machine, an app's old bundles go from the storage only once tonight's is there. */
-function pruneStorage(world, storage, uploaded, today) {
-  if (uploaded.length === 0) return;
+/** Of the bundles on the machine, those `stored` lacks, but for the ones the storage's own rule would give up at once. */
+function missingFromStorage(onMachine, stored, today) {
+  const names = new Set(stored.map((bundle) => bundle.name));
+  const missing = onMachine.filter((bundle) => !names.has(bundle.name));
+  const expired = new Set(expiredOnStorage([...stored, ...missing], today));
+  return missing.filter((bundle) => !expired.has(bundle));
+}
+
+/** As on the machine, an app's old bundles go from the storage, which holds `stored`, only once tonight's is there. */
+function pruneStorage(world, storage, stored, uploaded, today) {
   const apps = new Set(uploaded.map((bundle) => bundle.app));
-  const stored = bundlesOnStorage(world, storage).filter((bundle) => apps.has(bundle.app));
-  for (const bundle of expiredOnStorage(stored, today)) {
+  for (const bundle of expiredOnStorage(stored.filter((bundle) => apps.has(bundle.app)), today)) {
     removeFromStorage(world, storage, bundle);
     world.out.write(`${bundle.app}: removed ${bundle.name} from the storage\n`);
   }
+}
+
+const appsOf = (list) => list.map(({ app }) => app).join(', ');
+
+/**
+ * Upload the night's bundles, then every other bundle on the machine that the storage lacks, and
+ * prune the storage, which is listed once. What did not upload is added to `problems`.
+ */
+function uploadAndPrune(world, storage, night, problems) {
+  const uploaded = uploadEach(world, storage, night.bundles);
+  if (uploaded.length < night.bundles.length) problems.push(`no bundle was uploaded for ${appsOf(night.bundles.filter((bundle) => !uploaded.includes(bundle)))}`);
+  const tonights = new Set(night.bundles.map((bundle) => bundle.name));
+  const others = bundlesOnMachine(world.paths).filter((bundle) => !tonights.has(bundle.name));
+  if (uploaded.length === 0 && others.length === 0) return;
+  const stored = bundlesOnStorage(world, storage);
+  const missing = missingFromStorage(others, stored, night.date);
+  const caughtUp = uploadEach(world, storage, missing, ', which the storage did not have');
+  if (caughtUp.length < missing.length) problems.push(`the storage still does not have ${missing.filter((bundle) => !caughtUp.includes(bundle)).map(({ app, date }) => `${app}'s bundle of ${date}`).join(', ')}`);
+  pruneStorage(world, storage, [...stored, ...caughtUp], uploaded, night.date);
 }
 
 /** What the deploys and the restores of every registered app kept goes after its thirty days, whether or not the app has a bundle tonight. */
@@ -108,17 +139,12 @@ function sayAlive(world) {
   world.out.write('The alive request was made.\n');
 }
 
-const appsOf = (list) => list.map(({ app }) => app).join(', ');
-
 export function command(args, world) {
   if (args.length > 0) throw new UsageError();
   const night = bundleEveryApp(world);
   const problems = night.failed.length > 0 ? [`no bundle was made for ${appsOf(night.failed)}`] : [];
   try {
-    const storage = storageOf(world.paths);
-    const uploaded = uploadEach(world, storage, night.bundles);
-    if (uploaded.length < night.bundles.length) problems.push(`no bundle was uploaded for ${appsOf(night.bundles.filter((bundle) => !uploaded.includes(bundle)))}`);
-    pruneStorage(world, storage, uploaded, night.date);
+    uploadAndPrune(world, storageOf(world.paths), night, problems);
   } catch (e) {
     if (e instanceof Interrupted) throw e;
     problems.push(e.message);
