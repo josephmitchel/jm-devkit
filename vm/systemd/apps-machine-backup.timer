@@ -1,0 +1,13 @@
+# Starts the apps machine's nightly backup. Installed by vm/apps-machine-setup.sh, which turns it
+# on only once the owner's public key is set.
+[Unit]
+Description=Apps machine: start the night's backup
+
+[Timer]
+# Local time, in the machine's time zone (timedatectl).
+OnCalendar=*-*-* 03:00:00
+# A night missed because the machine was off runs when the machine is next up.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

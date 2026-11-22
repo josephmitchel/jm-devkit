@@ -39,12 +39,19 @@ test('every path is under the root it was given', () => {
 test('the setup script states each directory it makes as paths.mjs has it', () => {
   const setup = fs.readFileSync(path.join(import.meta.dirname, '../vm/apps-machine-setup.sh'), 'utf8');
   const paths = machinePaths();
-  const stated = { CONFIG_DIR: paths.configDir, STATE_DIR: paths.stateDir, BACKUP_DIR: paths.backupDir };
+  const stated = { CONFIG_DIR: paths.configDir, STATE_DIR: paths.stateDir, BACKUP_DIR: paths.backupDir, BACKUP_KEY_FILE: paths.backupPublicKey };
   for (const [variable, expected] of Object.entries(stated)) {
     const line = new RegExp(`^${variable}=(\\S+)$`, 'm').exec(setup);
     assert.ok(line, `the setup script sets no ${variable}`);
     assert.equal(line[1], expected, variable);
   }
+});
+
+test('the backups\' public key is in root\'s directory, and the nightly bundles and a run\'s work in the backup directory', () => {
+  const paths = machinePaths();
+  assert.equal(paths.backupPublicKey, '/etc/apps-machine/backup-public-key');
+  assert.equal(paths.nightlyDir, '/var/lib/apps-machine/backups/nightly');
+  assert.equal(paths.backupWorkDir, '/var/lib/apps-machine/backups/work');
 });
 
 test('a deploy\'s dumps are in the backup directory by app, its checkout waits beside the releases, and GitHub\'s host keys are root\'s', () => {

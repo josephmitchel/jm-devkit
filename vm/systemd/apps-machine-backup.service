@@ -1,0 +1,12 @@
+# The apps machine's nightly backup. Installed by vm/apps-machine-setup.sh; the timer of the same
+# name starts it. By hand: sudo apps-machine backup
+[Unit]
+Description=Apps machine: the night's backup
+After=postgresql.service
+
+[Service]
+Type=oneshot
+# Root: it reads every app's settings file and dumps every database. The link is made by the setup.
+ExecStart=/usr/local/sbin/apps-machine backup
+# Bundles and everything written on the way to one are root's alone.
+UMask=0077

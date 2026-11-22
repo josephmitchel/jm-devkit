@@ -138,6 +138,86 @@ The last line answers `The sample app at commit <commit>. Visits: 1.` Any commit
 
 To make its health check fail on purpose, add `SAMPLE_HEALTH=fail` to its settings file and deploy: `/healthz` then answers 503 while `/` still answers and names its commit, so the deploy stops at `health`. Take the line out afterwards and restart the service.
 
+### backup
+
+```
+sudo apps-machine backup
+```
+
+Makes the night's bundle of every registered app. A timer runs it each night; the owner can run it by hand at any time.
+
+For each app it dumps the database, copies the settings file as it is, puts the two in one bundle with a note of the app and the date, and encrypts the bundle with `age` to the owner's public key. The bundle is `/var/lib/apps-machine/backups/nightly/<name>-<YYYY-MM-DD>.tar.age`, root's alone (mode 0600). The date is the machine's local date, and a second run on the same date replaces that date's bundle.
+
+The private key is never on the machine, so the machine can make a bundle and cannot open one.
+
+- Everything unencrypted is written in the run's own directory under `/var/lib/apps-machine/backups/work/`, which is removed when the run ends, including when it fails. What a run that was killed left there is removed by the next run.
+- One app failing does not stop the others. The run prints what went wrong for that app, makes the other bundles, and exits 1 naming every app that has no bundle for the night.
+- Seven days of bundles are kept. Once an app has its bundle for the night, its bundles dated before the seven days ending today are removed. An app whose bundle was not made keeps the ones it has.
+
+#### The public key
+
+Make the key pair on a device of the owner's own, never on this machine or the development machine:
+
+```
+age-keygen -o backup-key.txt
+```
+
+It prints the public key, which starts `age1`. The file holds the private half: it stays on that device, with a copy somewhere safe, because no bundle can be opened without it. Give the public key to the setup script on the apps machine:
+
+```
+sudo BACKUP_PUBLIC_KEY=age1... bash jm-devkit/vm/apps-machine-setup.sh
+```
+
+The script checks that `age` can encrypt to it, writes it to `/etc/apps-machine/backup-public-key`, and turns the timer on. A later run without the setting keeps the key; a run with another key replaces it, and bundles made before then still open only with the first private key. The file is one that `age` reads recipients from: a public key per line, and lines starting `#` are comments.
+
+Until a public key is set the setup script does not turn the timer on, and the command refuses to run. Each says so and says how to set one.
+
+#### The timer
+
+`apps-machine-backup.timer` starts `apps-machine-backup.service` at 03:00 in the machine's time zone. A night missed because the machine was off runs when the machine is next up.
+
+```
+systemctl list-timers apps-machine-backup.timer
+journalctl -u apps-machine-backup.service
+```
+
+For another time of night, `sudo systemctl edit apps-machine-backup.timer` and give `OnCalendar=` twice, first empty and then with the time. The setup script leaves that file alone.
+
+#### Opening a bundle
+
+On the device that has the private key:
+
+```
+age --decrypt --identity backup-key.txt --output sample-2026-11-21.tar sample-2026-11-21.tar.age
+tar --list --file sample-2026-11-21.tar
+```
+
+A decrypted bundle is a tar archive of three files: `bundle.json` (the app and the date), `database.dump` (in `pg_dump`'s custom format, which `pg_restore` reads) and `settings.env` (the settings file as it was).
+
+### logs
+
+```
+sudo apps-machine logs <name> [<period>]
+sudo apps-machine logs sample
+sudo apps-machine logs sample 6h
+```
+
+Prints the journal of the app's service, `app-<name>.service`, oldest first: the last day, or the period given, which is a whole number and `min`, `h`, `d` or `w` (`30min`, `6h`, `3d`, `2w`). That is what the app wrote to its output and systemd's own lines about starting and stopping it. Nothing else goes to standard output: no heading, no other app's lines, and nothing read from the settings file. A period in which the service wrote nothing prints nothing. An app that is not registered is refused on standard error.
+
+To put an app's recent log on the development machine, the owner runs one line on his own device, which can reach both machines:
+
+```
+ssh apps-machine.example sudo apps-machine logs sample | ssh development-machine.example 'cat > sample.log'
+```
+
+The log passes through his device, so neither machine connects to the other and nothing on the development machine can ask for it. Name a file the agent can read. A failure is printed on his own screen and not into the file.
+
+That line has no terminal for `sudo` to ask for a password on, so it works only where `sudo` lets the owner's account run this command without one. Adding `-t` to `ssh` is not the way round it: the prompt and a terminal's line endings would go into the file. One way is a rule for this command alone, made on the apps machine with `sudo visudo -f /etc/sudoers.d/apps-machine-logs`:
+
+```
+<account> ALL=(root) NOPASSWD: /usr/local/sbin/apps-machine logs *
+```
+
 ## The code
 
 For whoever changes the commands. They are plain Node modules with no dependencies, tested with `node --test 'apps-machine/**/*.test.mjs'`, which CI runs as its own job.

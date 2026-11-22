@@ -90,6 +90,35 @@ export async function appsMachine(argv, { run = fakeRun().run, paths = machine()
 }
 
 /**
+ * A `respond` for `fakeRun` that stands in for the programs `backup` runs: a `pg_dump` that writes
+ * a dump naming its database, a `tar` that keeps each member's bytes, and an `age` whose output
+ * `openedBundle` reads back.
+ */
+export function backupPrograms() {
+  const after = (args, option) => args[args.indexOf(option) + 1];
+  return (program, args) => {
+    if (program === '/bin/sh' && args[1].includes('pg_dump')) fs.writeFileSync(args[4], `dump of ${args[3]}\0\xff`, { encoding: 'latin1', mode: 0o600 });
+    if (program === 'tar') {
+      const dir = after(args, '--directory');
+      const members = args.slice(args.indexOf(dir) + 1).map((name) => [name, fs.readFileSync(path.join(dir, name)).toString('base64')]);
+      fs.writeFileSync(after(args, '--file'), JSON.stringify(Object.fromEntries(members)));
+    }
+    if (program === 'age') {
+      const sealed = { recipients: fs.readFileSync(after(args, '--recipients-file'), 'utf8'), archive: fs.readFileSync(args.at(-1), 'utf8') };
+      fs.writeFileSync(after(args, '--output'), `sealed by the stand-in age\n${JSON.stringify(sealed)}`);
+    }
+    return {};
+  };
+}
+
+/** What a bundle made with `backupPrograms` holds: the recipients it was encrypted to, and each member's bytes. */
+export function openedBundle(file) {
+  const { recipients, archive } = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^sealed by the stand-in age\n/, ''));
+  const members = Object.entries(JSON.parse(archive)).map(([name, bytes]) => [name, Buffer.from(bytes, 'base64')]);
+  return { recipients, members: Object.fromEntries(members) };
+}
+
+/**
  * A `respond` for `fakeRun` that stands in for what a deploy of `app` runs, over `machinePrograms`.
  * `remote` is the repository's default branch as GitHub has it, and a test changes it between
  * deploys: `commit`, and `config`, the object or text of its project config (none when undefined).
