@@ -5,6 +5,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { must } from './run.mjs';
+
 function userExists({ run }, name) {
   return run('id', ['-u', name]).code === 0;
 }
@@ -18,8 +20,7 @@ export function linuxNameTaken(world, name) {
 export function ownedDir({ run }, dir, { owner, group, mode }) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { mode });
   fs.chmodSync(dir, mode);
-  const done = run('chown', [`${owner}:${group}`, dir]);
-  if (done.code !== 0) throw new Error(`could not give ${dir} to ${owner}:${group}: ${done.stderr.trim()}`);
+  must(run('chown', [`${owner}:${group}`, dir]), `could not give ${dir} to ${owner}:${group}`);
 }
 
 /**
@@ -29,12 +30,11 @@ export function ownedDir({ run }, dir, { owner, group, mode }) {
 export function createAppUser(world, app) {
   const { run, paths } = world;
   if (!userExists(world, app)) {
-    const done = run('useradd', ['--system', '--user-group', '--no-create-home', '--home-dir', paths.appHome(app), '--shell', '/usr/sbin/nologin', app]);
-    if (done.code !== 0) throw new Error(`could not make the Linux user ${app}: ${done.stderr.trim()}`);
+    must(run('useradd', ['--system', '--user-group', '--no-create-home', '--home-dir', paths.appHome(app), '--shell', '/usr/sbin/nologin', app]), `could not make the Linux user ${app}`);
   }
-  const everyApps = path.dirname(paths.appDir(app));
-  fs.mkdirSync(everyApps, { recursive: true });
-  fs.chmodSync(everyApps, 0o755);
+  const allAppsDir = path.dirname(paths.appDir(app));
+  fs.mkdirSync(allAppsDir, { recursive: true });
+  fs.chmodSync(allAppsDir, 0o755);
   ownedDir(world, paths.appDir(app), { owner: 'root', group: app, mode: 0o750 });
   ownedDir(world, paths.appHome(app), { owner: app, group: app, mode: 0o700 });
   ownedDir(world, paths.releasesDir(app), { owner: 'root', group: app, mode: 0o750 });

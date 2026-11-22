@@ -19,6 +19,12 @@ export function outliveSignals() {
   for (const signal of Object.keys(SIGNALS)) process.on(signal, () => {});
 }
 
+/** What `run` returned, when the program exited 0. Otherwise throws `<failure>: <what the program said on stderr>`. */
+export function must(done, failure) {
+  if (done.code !== 0) throw new Error(`${failure}: ${done.stderr.trim()}`);
+  return done;
+}
+
 /**
  * Run `program` with `args` and wait for it. Returns `{ code, stdout, stderr }`.
  * `input` goes to its stdin. `env`, when given, is its whole environment. `cwd` is where it runs.

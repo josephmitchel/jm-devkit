@@ -5,6 +5,7 @@ import { createAppUser, linuxNameTaken } from '../app-user.mjs';
 import { createDatabase, databaseNameTaken, setDatabasePassword } from '../database.mjs';
 import { privateDir } from '../files.mjs';
 import { checkRegistration, readRegistry, writeRegistration } from '../registry.mjs';
+import { must } from '../run.mjs';
 import { installService } from '../service.mjs';
 import { writeSettings } from '../settings.mjs';
 import { UsageError } from '../usage.mjs';
@@ -63,8 +64,7 @@ function deployKey({ run, paths }, name) {
   const key = paths.deployKey(name);
   if (!fs.existsSync(key)) {
     privateDir(paths.keysDir);
-    const done = run('ssh-keygen', ['-q', '-t', 'ed25519', '-N', '', '-C', `apps-machine: ${name}`, '-f', key]);
-    if (done.code !== 0) throw new Error(`could not make ${name}'s deploy key: ${done.stderr.trim()}`);
+    must(run('ssh-keygen', ['-q', '-t', 'ed25519', '-N', '', '-C', `apps-machine: ${name}`, '-f', key]), `could not make ${name}'s deploy key`);
   }
   fs.chmodSync(key, 0o600);
   return fs.readFileSync(`${key}.pub`, 'utf8').trim();

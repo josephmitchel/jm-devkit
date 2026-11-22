@@ -8,6 +8,7 @@ import path from 'node:path';
 import { CONFIG_FILE } from '../plugin/devkit-config.mjs';
 import { replaceFile } from './files.mjs';
 import { GITHUB_KNOWN_HOSTS } from './github-host-keys.mjs';
+import { must } from './run.mjs';
 import { servicePointsAt } from './service.mjs';
 
 /** How many releases a deploy leaves: the one it made and the two before it. */
@@ -53,10 +54,8 @@ export function fetchDefaultBranch(world, { name, repository }) {
   const { paths } = world;
   const checkout = paths.incomingRelease(name);
   fs.rmSync(checkout, { recursive: true, force: true });
-  const cloned = git(world, ['clone', '--quiet', '--depth', '1', '--no-tags', repository, checkout], { GIT_SSH_COMMAND: sshCommand(paths, name) });
-  if (cloned.code !== 0) throw new Error(`could not fetch ${repository}: ${cloned.stderr.trim()}`);
-  const head = git(world, ['-C', checkout, 'rev-parse', '--verify', 'HEAD']);
-  if (head.code !== 0) throw new Error(`could not read the commit fetched from ${repository}: ${head.stderr.trim()}`);
+  must(git(world, ['clone', '--quiet', '--depth', '1', '--no-tags', repository, checkout], { GIT_SSH_COMMAND: sshCommand(paths, name) }), `could not fetch ${repository}`);
+  const head = must(git(world, ['-C', checkout, 'rev-parse', '--verify', 'HEAD']), `could not read the commit fetched from ${repository}`);
   return { checkout, commit: head.stdout.trim() };
 }
 
@@ -86,10 +85,11 @@ export function makeRelease({ run, paths }, app, { checkout, commit, stamp, conf
   commitOf(release);
   fs.writeFileSync(recordOf(release), `${JSON.stringify(config, null, 2)}\n`, { mode: 0o644 });
   fs.renameSync(checkout, release);
-  const done = run('chown', ['-R', `${app}:${app}`, release]);
-  if (done.code !== 0) {
+  try {
+    must(run('chown', ['-R', `${app}:${app}`, release]), `could not give ${release} to ${app}`);
+  } catch (e) {
     removeRelease(release);
-    throw new Error(`could not give ${release} to ${app}: ${done.stderr.trim()}`);
+    throw e;
   }
   return release;
 }

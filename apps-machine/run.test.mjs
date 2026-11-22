@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { Interrupted, run } from './run.mjs';
+import { Interrupted, must, run } from './run.mjs';
 import { tempDir } from './test-helpers.mjs';
 
 const HOME = import.meta.dirname;
@@ -33,6 +33,12 @@ test('a live program\'s output goes to the terminal, not back to the command', (
     console.log(JSON.stringify(done));`;
   const outer = run(node, ['--input-type=module', '-e', inner]);
   assert.equal(outer.stdout, 'seen as it happens\n{"code":0,"stdout":"","stderr":""}\n');
+});
+
+test('a program that must succeed comes back when it exits 0, and is otherwise an error of the caller\'s words and the program\'s', () => {
+  const done = { code: 0, stdout: 'out\n', stderr: 'a warning\n' };
+  assert.equal(must(done, 'could not do it'), done);
+  assert.throws(() => must({ code: 3, stdout: '', stderr: 'tool: it said why\n' }, 'could not do it'), /^Error: could not do it: tool: it said why$/);
 });
 
 test('a program that cannot be started is an error naming it', () => {

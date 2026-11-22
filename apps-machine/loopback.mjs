@@ -2,6 +2,8 @@
 // that listens on any address but loopback can be reached around it, and a port another app
 // listens on answers for the wrong app.
 
+import { must } from './run.mjs';
+
 const LOOPBACK = /^(127\.\d+\.\d+\.\d+|\[::1\]|\[::ffff:127\.\d+\.\d+\.\d+\])(%lo)?$/;
 
 /**
@@ -9,12 +11,9 @@ const LOOPBACK = /^(127\.\d+\.\d+\.\d+|\[::1\]|\[::ffff:127\.\d+\.\d+\.\d+\])(%l
  * listener of that user's, on any port, is at a loopback address.
  */
 export function checkLoopbackOnly({ run }, app, port) {
-  const user = run('id', ['-u', app]);
-  if (user.code !== 0) throw new Error(`could not tell which listeners are ${app}'s: ${user.stderr.trim()}`);
-  const uid = user.stdout.trim();
-  const done = run('ss', ['-H', '-ltne']);
-  if (done.code !== 0) throw new Error(`could not list what the machine listens on: ${done.stderr.trim()}`);
-  const listeners = done.stdout.split('\n').filter((line) => line.trim() !== '').map(listener);
+  const uid = must(run('id', ['-u', app]), `could not tell which listeners are ${app}'s`).stdout.trim();
+  const listed = must(run('ss', ['-H', '-ltne']), 'could not list what the machine listens on');
+  const listeners = listed.stdout.split('\n').filter((line) => line.trim() !== '').map(listener);
   const onPort = listeners.filter((one) => one.port === String(port));
   if (onPort.length === 0) throw new Error(`nothing is listening on port ${port}`);
   const stranger = onPort.find((one) => one.uid !== uid);

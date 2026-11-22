@@ -6,6 +6,7 @@ import fs from 'node:fs';
 
 import { parseBundleName } from './bundle.mjs';
 import { valueLines } from './files.mjs';
+import { must } from './run.mjs';
 
 /** The one value of a settings file of the machine's: its first line that holds one, or null. */
 const valueIn = (file) => valueLines(file)[0] ?? null;
@@ -33,20 +34,17 @@ function rclone({ run, paths }, verb, args) {
 
 /** Put a bundle on the storage under its own name, replacing one of that name. */
 export function uploadBundle(world, storage, { app, name, file }) {
-  const done = rclone(world, 'copyto', ['--ignore-times', file, onStorage(storage, name)]);
-  if (done.code !== 0) throw new Error(`could not upload ${app}'s bundle: ${done.stderr.trim()}`);
+  must(rclone(world, 'copyto', ['--ignore-times', file, onStorage(storage, name)]), `could not upload ${app}'s bundle`);
 }
 
 /** The bundles on the storage by name, as `parseBundleName` gives them. Anything there that is not a bundle is passed over. */
 export function bundlesOnStorage(world, storage) {
-  const done = rclone(world, 'lsf', ['--files-only', storage]);
-  if (done.code !== 0) throw new Error(`could not list the bundles on the storage: ${done.stderr.trim()}`);
+  const done = must(rclone(world, 'lsf', ['--files-only', storage]), 'could not list the bundles on the storage');
   return done.stdout.split('\n').sort().map(parseBundleName).filter(Boolean);
 }
 
 export function removeFromStorage(world, storage, { name }) {
-  const done = rclone(world, 'deletefile', [onStorage(storage, name)]);
-  if (done.code !== 0) throw new Error(`could not remove ${name} from the storage: ${done.stderr.trim()}`);
+  must(rclone(world, 'deletefile', [onStorage(storage, name)]), `could not remove ${name} from the storage`);
 }
 
 const HTTP_ADDRESS = /^https?:\/\/[^\s"\\]+$/;

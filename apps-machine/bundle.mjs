@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { dumpDatabase } from './database.mjs';
+import { must } from './run.mjs';
 import { privateDir, valueLines } from './files.mjs';
 import { readSettingsFile } from './settings.mjs';
 
@@ -30,10 +31,6 @@ export function parseBundleName(name) {
 
 /** Whether the owner's public key is on the machine: its file has a line that is not a comment. Whether that line is a key is `age`'s to say. */
 export const publicKeyIsSet = (paths) => valueLines(paths.backupPublicKey).length > 0;
-
-function must(done, what) {
-  if (done.code !== 0) throw new Error(`could not ${what}: ${done.stderr.trim()}`);
-}
 
 const isRunning = (pid) => {
   try {
@@ -74,8 +71,8 @@ export function makeBundle(world, { app, date, workDir }) {
     fs.writeFileSync(path.join(members, BUNDLE_FILES.settings), readSettingsFile(paths, app), { mode: 0o600 });
     fs.writeFileSync(path.join(members, BUNDLE_FILES.manifest), `${JSON.stringify({ format: BUNDLE_FORMAT, app, date })}\n`, { mode: 0o600 });
     dumpDatabase(world, app, path.join(members, BUNDLE_FILES.dump));
-    must(run('tar', ['--create', '--file', archive, '--directory', members, ...Object.values(BUNDLE_FILES)], { cwd: paths.root }), `bundle ${app}'s dump and settings`);
-    must(run('age', ['--encrypt', '--recipients-file', paths.backupPublicKey, '--output', sealed, archive], { cwd: paths.root }), `encrypt ${app}'s bundle`);
+    must(run('tar', ['--create', '--file', archive, '--directory', members, ...Object.values(BUNDLE_FILES)], { cwd: paths.root }), `could not bundle ${app}'s dump and settings`);
+    must(run('age', ['--encrypt', '--recipients-file', paths.backupPublicKey, '--output', sealed, archive], { cwd: paths.root }), `could not encrypt ${app}'s bundle`);
     fs.chmodSync(sealed, 0o600);
     privateDir(paths.nightlyDir);
     fs.renameSync(sealed, file);
@@ -97,7 +94,7 @@ export function isBundle({ run, paths }, file) {
  */
 export function openBundle({ run, paths }, file, dir) {
   const names = Object.values(BUNDLE_FILES);
-  must(run('tar', ['--extract', '--force-local', '--file', file, '--directory', dir, '--no-same-owner', ...names], { cwd: paths.root }), `open the bundle ${file}`);
+  must(run('tar', ['--extract', '--force-local', '--file', file, '--directory', dir, '--no-same-owner', ...names], { cwd: paths.root }), `could not open the bundle ${file}`);
   const at = (name) => path.join(dir, name);
   for (const name of names) {
     if (!fs.lstatSync(at(name), { throwIfNoEntry: false })?.isFile()) throw new Error(`${file} is not a bundle: its ${name} is not a file`);

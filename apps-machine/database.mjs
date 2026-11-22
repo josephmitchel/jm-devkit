@@ -3,12 +3,18 @@
 
 import fs from 'node:fs';
 
+import { must } from './run.mjs';
+
 const AS_POSTGRES = ['-u', 'postgres', '--'];
 
 function psql({ run, paths }, sql) {
   const done = run('runuser', [...AS_POSTGRES, 'psql', '-X', '-q', '-tA', '-v', 'ON_ERROR_STOP=1', '-d', 'postgres'], { input: sql, cwd: paths.root });
-  if (done.code !== 0) throw new Error(`psql failed: ${done.stderr.trim()}`);
-  return done.stdout.trim();
+  return must(done, 'psql failed').stdout.trim();
+}
+
+/** Run a Postgres tool as the postgres user from root's shell, which opens the files for it: `tool` is its command line and redirections, with `args` as "$1" and "$2". */
+function postgresTool({ run, paths }, tool, args, first = '') {
+  return run('/bin/sh', ['-c', `${first}exec runuser ${AS_POSTGRES.join(' ')} ${tool}`, 'sh', ...args], { cwd: paths.root });
 }
 
 /** Whether a role or a database of this name is already on the machine. */
@@ -38,21 +44,18 @@ export function setDatabasePassword(world, app, password) {
  * Dump the app's database to `file`, root's alone, in pg_dump's custom format (pg_restore reads it).
  * A dump that fails leaves no file.
  */
-export function dumpDatabase({ run, paths }, app, file) {
-  const script = 'umask 077 && exec runuser -u postgres -- pg_dump --format=custom --dbname="$1" > "$2"';
-  let done;
+export function dumpDatabase(world, app, file) {
   try {
-    done = run('/bin/sh', ['-c', script, 'sh', app, file], { cwd: paths.root });
-  } finally {
-    if (done?.code !== 0) fs.rmSync(file, { force: true });
+    must(postgresTool(world, 'pg_dump --format=custom --dbname="$1" > "$2"', [app, file], 'umask 077 && '), `could not dump ${app}'s database`);
+  } catch (e) {
+    fs.rmSync(file, { force: true });
+    throw e;
   }
-  if (done.code !== 0) throw new Error(`could not dump ${app}'s database: ${done.stderr.trim()}`);
 }
 
 /** What keeps `file` from being a dump pg_restore can read, in pg_restore's words, or null when it is one. */
-export function dumpFault({ run, paths }, file) {
-  const script = 'exec runuser -u postgres -- pg_restore --list < "$1" > /dev/null';
-  const done = run('/bin/sh', ['-c', script, 'sh', file], { cwd: paths.root });
+export function dumpFault(world, file) {
+  const done = postgresTool(world, 'pg_restore --list < "$1" > /dev/null', [file]);
   return done.code === 0 ? null : done.stderr.trim() || `pg_restore exited with ${done.code}`;
 }
 
@@ -64,9 +67,7 @@ export function dumpFault({ run, paths }, file) {
 export function restoreDatabase(world, app, file) {
   psql(world, `DROP DATABASE IF EXISTS "${app}" WITH (FORCE);\n`);
   createDatabase(world, app);
-  const script = 'exec runuser -u postgres -- pg_restore --exit-on-error --no-owner --role="$1" --dbname="$1" < "$2"';
-  const done = world.run('/bin/sh', ['-c', script, 'sh', app, file], { cwd: world.paths.root });
-  if (done.code !== 0) throw new Error(`could not restore ${app}'s database: ${done.stderr.trim()}`);
+  must(postgresTool(world, 'pg_restore --exit-on-error --no-owner --role="$1" --dbname="$1" < "$2"', [app, file]), `could not restore ${app}'s database`);
 }
 
 /** The password in `address` when it is the address of the app's database as `setDatabasePassword` gives it, and null otherwise. */

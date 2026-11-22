@@ -7,6 +7,7 @@ import path from 'node:path';
 
 import { replaceFile } from './files.mjs';
 import { serviceName } from './paths.mjs';
+import { must } from './run.mjs';
 
 const TEMPLATE = path.join(import.meta.dirname, 'app.service.template');
 
@@ -20,8 +21,7 @@ export function renderUnit(paths, app) {
 }
 
 function systemctl({ run }, ...args) {
-  const done = run('systemctl', args);
-  if (done.code !== 0) throw new Error(`systemctl ${args.join(' ')} failed: ${done.stderr.trim()}`);
+  must(run('systemctl', args), `systemctl ${args.join(' ')} failed`);
 }
 
 function writeUnit(world, app) {
