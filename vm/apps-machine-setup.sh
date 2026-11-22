@@ -39,7 +39,8 @@ prepare_apt
 
 step "Base packages"
 apt-get update
-apt-get install -y ca-certificates curl git openssh-client
+# A deploy fetches with git over ssh, asks an app's health path with curl and reads its listeners with ss.
+apt-get install -y ca-certificates curl git iproute2 openssh-client
 
 step "Package sources: Node $NODE_MAJOR, Postgres $PG_MAJOR"
 add_node_source
