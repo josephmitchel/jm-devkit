@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import path from 'node:path';
 
-import { HEALTH_ANSWER_SECONDS, HEALTH_TIME_LIMIT_SECONDS, answersHealthy, mustAnswerHealthy } from './health.mjs';
+import { HEALTH_ANSWER_SECONDS, HEALTH_TIME_LIMIT_SECONDS, NOT_ANSWERED, answersHealthy, askedHealthy, mustAnswerHealthy } from './health.mjs';
 import { run as realRun } from './run.mjs';
 import { commandLines, fakeRun, machine, sink } from './test-helpers.mjs';
 
@@ -16,6 +16,16 @@ test('a command that needs the app to answer says what it asks and for how long,
   assert.throws(() => mustAnswerHealthy(silent, { port: 3000, healthPath: '/healthz' }),
     /^Error: \/healthz on port 3000 did not answer with success within 90 seconds$/);
   assert.equal(silent.out.text, asked);
+});
+
+test('a command that goes on either way asks the same, says it where it is told to, and is told whether the app answered', () => {
+  const world = { run: fakeRun(() => ({ code: 124 })).run, paths: machine(), out: sink() };
+  const err = sink();
+  assert.equal(askedHealthy(world, { port: 3000, healthPath: '/healthz' }, err), false);
+  assert.equal(askedHealthy({ ...world, run: fakeRun().run }, { port: 3000, healthPath: '/healthz' }, err), true);
+  assert.equal(err.text, 'Asking /healthz on port 3000, for 90 seconds at most\n'.repeat(2));
+  assert.equal(world.out.text, '');
+  assert.equal(NOT_ANSWERED, 'did not answer with success within 90 seconds');
 });
 
 test('an app whose health path answers with success in time is healthy', () => {

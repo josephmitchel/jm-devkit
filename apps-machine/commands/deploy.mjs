@@ -3,7 +3,7 @@ import path from 'node:path';
 
 import { parseDeployConfig } from '../../plugin/devkit-config.mjs';
 import { dumpDatabase } from '../database.mjs';
-import { HEALTH_TIME_LIMIT_SECONDS, answersHealthy } from '../health.mjs';
+import { NOT_ANSWERED, askedHealthy, mustAnswerHealthy } from '../health.mjs';
 import { checkLoopbackOnly } from '../loopback.mjs';
 import { serviceName } from '../paths.mjs';
 import { readRegistry, registrationOf } from '../registry.mjs';
@@ -120,14 +120,8 @@ function start(world, deploy) {
   startService(world, deploy.app.name);
 }
 
-function answers(world, { port, healthPath }, say) {
-  say.write(`Asking ${healthPath} on port ${port}, for ${HEALTH_TIME_LIMIT_SECONDS} seconds at most\n`);
-  return answersHealthy(world, { port, healthPath });
-}
-
 function health(world, deploy) {
-  const { port, healthPath } = deploy.config;
-  if (!answers(world, deploy.config, world.out)) throw new Error(`${healthPath} on port ${port} did not answer with success within ${HEALTH_TIME_LIMIT_SECONDS} seconds`);
+  mustAnswerHealthy(world, deploy.config);
 }
 
 function loopback(world, deploy) {
@@ -162,10 +156,9 @@ function goBack(world, deploy) {
     pointServiceAt(world, app.name, previous);
     if (previous) {
       startService(world, app.name);
-      const healthy = answers(world, deployConfigOf(previous.release), err);
-      err.write(healthy
+      err.write(askedHealthy(world, deployConfigOf(previous.release), err)
         ? 'The previous release is running again, and its health path answers.\n'
-        : `The previous release was started, but its health path did not answer with success within ${HEALTH_TIME_LIMIT_SECONDS} seconds.\n`);
+        : `The previous release was started, but its health path ${NOT_ANSWERED}.\n`);
     } else {
       err.write(`There is no previous release to go back to: ${service} is left stopped.\n`);
     }

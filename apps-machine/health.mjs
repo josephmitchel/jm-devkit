@@ -20,8 +20,16 @@ export function answersHealthy({ run }, { port, healthPath }) {
   return done.code === 0;
 }
 
-/** Ask as `answersHealthy` does, saying on `out` what is asked and for how long. Throws when the app does not answer in time. */
+/** How every command words an app that stayed silent. */
+export const NOT_ANSWERED = `did not answer with success within ${HEALTH_TIME_LIMIT_SECONDS} seconds`;
+
+/** Ask as `answersHealthy` does, saying on `say` what is asked and for how long. Returns whether the app answered. */
+export function askedHealthy(world, { port, healthPath }, say = world.out) {
+  say.write(`Asking ${healthPath} on port ${port}, for ${HEALTH_TIME_LIMIT_SECONDS} seconds at most\n`);
+  return answersHealthy(world, { port, healthPath });
+}
+
+/** Ask as `askedHealthy` does, and throw when the app does not answer in time. */
 export function mustAnswerHealthy(world, { port, healthPath }) {
-  world.out.write(`Asking ${healthPath} on port ${port}, for ${HEALTH_TIME_LIMIT_SECONDS} seconds at most\n`);
-  if (!answersHealthy(world, { port, healthPath })) throw new Error(`${healthPath} on port ${port} did not answer with success within ${HEALTH_TIME_LIMIT_SECONDS} seconds`);
+  if (!askedHealthy(world, { port, healthPath })) throw new Error(`${healthPath} on port ${port} ${NOT_ANSWERED}`);
 }
