@@ -81,7 +81,7 @@ test('restoring a night\'s bundle puts the database back as it was that night, w
   assert.equal(done.code, 0);
   assert.equal(state.data, 'as it was that night');
   assert.equal(state.running, true);
-  assert.deepEqual(state.events, ['dump', 'stop', 'drop', 'restore', 'start', 'health']);
+  assert.deepEqual(state.events, ['stop', 'dump', 'drop', 'restore', 'start', 'health']);
   assert.match(done.out, /^sample is restored and answering\.$/m);
 });
 
@@ -98,7 +98,7 @@ test('an app that does not answer after a restore is stopped again, and the rest
   state.fails.health = true;
   const done = await restore('sample', lastNight());
   assert.equal(done.code, 1);
-  assert.deepEqual(state.events, ['dump', 'stop', 'drop', 'restore', 'start', 'health', 'stop']);
+  assert.deepEqual(state.events, ['stop', 'dump', 'drop', 'restore', 'start', 'health', 'stop']);
   assert.equal(state.running, false);
   assert.equal(state.data, 'as it was that night');
   assert.equal(done.err, [
@@ -120,10 +120,10 @@ test('a running release whose record of its deploy section cannot be read is ref
   assert.deepEqual(state.events, []);
 });
 
-test('the database as it was is dumped before anything is stopped, for root alone, and the way to put it back is printed', async () => {
+test('the database as it was is dumped once the service is stopped, so the dump misses nothing the app wrote, for root alone, and the way to put it back is printed', async () => {
   const { paths, state, restore, before } = sampleMachine();
   const done = await restore('sample', lastNight());
-  assert.deepEqual(state.events.slice(0, 2), ['dump', 'stop']);
+  assert.deepEqual(state.events.slice(0, 2), ['stop', 'dump']);
   assert.deepEqual(fs.readFileSync(before), standInDumpOf('as it is now'));
   assert.equal(mode(before), 0o600);
   assert.equal(mode(paths.restoreDumps('sample')), 0o700);
@@ -149,7 +149,7 @@ test('the dump a deploy took restores as a bundle\'s does, and stays where the d
   assert.equal(done.err, '');
   assert.equal(done.code, 0);
   assert.equal(state.data, 'as it was before the deploy');
-  assert.deepEqual(state.events, ['dump', 'stop', 'drop', 'restore', 'start', 'health']);
+  assert.deepEqual(state.events, ['stop', 'dump', 'drop', 'restore', 'start', 'health']);
   assert.deepEqual(fs.readFileSync(taken), standInDumpOf('as it was before the deploy'));
   assert.doesNotMatch(done.out, /Removed/);
 });
@@ -197,7 +197,7 @@ test('the app\'s role is given the password the settings put back name, after th
   const { state, calls, restore } = sampleMachine();
   await restore('sample', lastNight(), '--settings');
   assert.equal(state.password, '0ldpassw0rd');
-  assert.deepEqual(state.events, ['dump', 'stop', 'drop', 'restore', 'password', 'start', 'health']);
+  assert.deepEqual(state.events, ['stop', 'dump', 'drop', 'restore', 'password', 'start', 'health']);
   for (const call of calls) assert.ok(!call.args.join(' ').includes('0ldpassw0rd'));
 });
 
@@ -303,15 +303,30 @@ test('an app that is not registered, and a file that is not there, are refused',
   assertRefused(await restore('sample', paths.backupDir), state, `${paths.backupDir} is not a file`);
 });
 
-test('a database that cannot be dumped first is not replaced, and nothing is stopped', async () => {
+test('when the service cannot be stopped or the database dumped, nothing is replaced and the service is started again', async () => {
+  for (const [failing, events, said] of [
+    ['dump', ['stop', 'dump', 'start'], 'the restore of sample stopped at dump: could not dump sample\'s database: pg_dump: error: said this'],
+    ['stop', ['stop', 'start'], 'the restore of sample stopped at stop: systemctl stop app-sample.service failed: systemctl: said this'],
+  ]) {
+    const { paths, state, restore } = sampleMachine();
+    state.fails[failing] = true;
+    const done = await restore('sample', lastNight());
+    assert.equal(done.code, 1, failing);
+    assert.equal(done.err, `Nothing was replaced. app-sample.service was started again.\nerror: ${said}\n`);
+    assert.equal(state.data, 'as it is now', failing);
+    assert.equal(state.running, true, failing);
+    assert.deepEqual(state.events, events, failing);
+    assert.deepEqual(filesUnder(paths.restoreDumps('sample')), [], failing);
+  }
+});
+
+test('a service that cannot be started again after a dump that failed is said, with where to look', async () => {
   const { state, restore } = sampleMachine();
-  state.fails.dump = true;
+  Object.assign(state.fails, { dump: true, start: true });
   const done = await restore('sample', lastNight());
   assert.equal(done.code, 1);
-  assert.equal(done.err, 'error: could not dump sample\'s database: pg_dump: error: said this\n');
+  assert.equal(done.err.split('\n')[0], 'Nothing was replaced, but app-sample.service could not be started again: see systemctl status app-sample.service');
   assert.equal(state.data, 'as it is now');
-  assert.equal(state.running, true);
-  assert.deepEqual(state.events, ['dump']);
 });
 
 test('the decrypted bundle is gone from the machine however the restore ends, and nothing of it is left in the backup directory', async () => {
@@ -388,9 +403,8 @@ test('the bundle\'s files are taken out only into the restore\'s own directory, 
 
 test('a restore that fails once the service is stopped leaves it stopped, says so, and names the dump taken at the start', async () => {
   for (const [failing, step, said, events] of [
-    ['stop', 'stop', 'systemctl stop app-sample.service failed: systemctl: said this', ['dump', 'stop', 'stop']],
-    ['restore', 'database', 'could not restore sample\'s database: pg_restore: error: said this', ['dump', 'stop', 'drop', 'restore', 'stop']],
-    ['start', 'start', 'systemctl start app-sample.service failed: systemctl: said this', ['dump', 'stop', 'drop', 'restore', 'start', 'stop']],
+    ['restore', 'database', 'could not restore sample\'s database: pg_restore: error: said this', ['stop', 'dump', 'drop', 'restore', 'stop']],
+    ['start', 'start', 'systemctl start app-sample.service failed: systemctl: said this', ['stop', 'dump', 'drop', 'restore', 'start', 'stop']],
   ]) {
     const { state, restore, before } = sampleMachine();
     state.fails[failing] = true;
@@ -398,13 +412,13 @@ test('a restore that fails once the service is stopped leaves it stopped, says s
     assert.equal(done.code, 1, failing);
     assert.deepEqual(state.events, events, failing);
     assert.equal(done.err, [
-      failing === 'stop' ? 'app-sample.service could not be stopped: see systemctl status app-sample.service' : 'app-sample.service is stopped.',
+      'app-sample.service is stopped.',
       `sample's database as it was before this restore is in ${before}. To put it back:`,
       `  sudo apps-machine restore sample ${before}`,
       `error: the restore of sample stopped at ${step}: ${said}`,
       '',
     ].join('\n'), failing);
-    if (failing !== 'stop') assert.equal(state.running, false, failing);
+    assert.equal(state.running, false, failing);
     assert.deepEqual(fs.readFileSync(before), standInDumpOf('as it is now'));
     assert.doesNotMatch(done.out, /is restored/);
   }
@@ -425,14 +439,14 @@ test('a restore that fails after the settings were put back names the settings f
   }
 });
 
-test('an app that has never been deployed gets its database back, and nothing is started', async () => {
+test('an app whose service points at no release, never deployed or its first deploy failed, gets its database back, and nothing is started', async () => {
   const { state, restore } = sampleMachine({ deployed: false });
   const done = await restore('sample', lastNight());
   assert.equal(done.err, '');
   assert.equal(done.code, 0);
   assert.equal(state.data, 'as it was that night');
-  assert.deepEqual(state.events, ['dump', 'stop', 'drop', 'restore']);
-  assert.match(done.out, /^sample is restored\. It has never been deployed, so nothing was started: its first deploy starts it\.$/m);
+  assert.deepEqual(state.events, ['stop', 'dump', 'drop', 'restore']);
+  assert.match(done.out, /^sample is restored\. Its service points at no release, because it has never been deployed or its first deploy failed, so nothing was started: its next deploy starts it\.$/m);
 });
 
 test('anything but a name, a file and --settings is a usage error, and nothing is run or removed', async () => {
@@ -441,8 +455,17 @@ test('anything but a name, a file and --settings is a usage error, and nothing i
     const { calls, restore } = sampleMachine();
     const done = await restore(...argv);
     assert.equal(done.code, 2, argv.join(' '));
-    assert.equal(done.err, USAGE);
+    assert.ok(done.err.endsWith(USAGE));
     assert.deepEqual(calls, []);
   }
   assert.ok(fs.existsSync(bundle));
+});
+
+test('a usage error names each file it was given and did not remove, since a decrypted bundle left behind is unencrypted', async () => {
+  const bundle = lastNight();
+  const { restore } = sampleMachine();
+  const done = await restore(bundle, 'more', '--force');
+  assert.equal(done.code, 2);
+  assert.equal(done.err, `error: still on this machine, where a decrypted bundle is unencrypted: ${bundle}\n${USAGE}`);
+  assert.equal((await restore('sample')).err, USAGE);
 });

@@ -317,8 +317,8 @@ Puts an app's database back as it was. `<file>` is a decrypted bundle, or a data
 In this order it:
 
 1. checks the file and the app, and refuses before anything is touched (below);
-2. dumps the database as it is now and prints where;
-3. stops the app's service;
+2. stops the app's service;
+3. dumps the database as it is now and prints where. The service is stopped first so that nothing the app writes falls between the dump and the restore;
 4. drops the database, makes it again for the app's role alone, and reads the dump into it. Nothing of the database as it was survives: a table a later migration added is gone, which is what going back means;
 5. with `--settings`, replaces the app's settings file with the bundle's. Without it the settings file is left as it is;
 6. starts the service and asks the app's health path until it answers, as a deploy does: the port and the path are the ones the running release was deployed with, and the app has 90 seconds.
@@ -347,14 +347,13 @@ Each of these ends with exit 1 before the service is stopped, with the database 
 - a bundle of another app, a bundle missing one of its three files, or one made in a format these commands do not read;
 - a bundle whose dump `pg_restore` cannot list: one that is not a dump, or one made by a newer Postgres than the machine's;
 - `--settings` with a dump, which holds no settings file;
-- a running release with no record of the deploy section it was deployed with, so there is nowhere to ask whether the app answers;
-- a database that cannot be dumped first.
+- a running release with no record of the deploy section it was deployed with, so there is nowhere to ask whether the app answers.
 
-Wrong arguments end with exit 2 and the usage line, and remove nothing.
+Wrong arguments end with exit 2 and the usage line, and remove nothing. Which argument was the bundle is then a guess, so the error names each file it was given that is still on the machine: a decrypted bundle left there is unencrypted until the owner removes it.
 
 #### Going back on a restore
 
-The dump taken at the start is `/var/lib/apps-machine/backups/restores/<name>/<time>.dump`, root's alone, named for the time in UTC. The command prints it with the line that puts it back:
+The dump taken before the database is replaced is `/var/lib/apps-machine/backups/restores/<name>/<time>.dump`, root's alone, named for the time in UTC. The command prints it with the line that puts it back:
 
 ```
 sudo apps-machine restore sample /var/lib/apps-machine/backups/restores/sample/20261121T143005Z.dump
@@ -364,7 +363,10 @@ With `--settings`, the settings file that was replaced is kept beside it as `<ti
 
 #### When it fails part-way
 
-From the stop on, a failure leaves the service stopped: a restore whose database is half read, or whose app does not answer, is not left running on real data. The command says the service is stopped, names the step (`stop`, `database`, `settings`, `start` or `health`), and prints the dump taken at the start and the line that puts it back. It exits 1.
+The command names the step it stopped at and exits 1.
+
+- At `stop` or `dump`, nothing was replaced: the command starts the service again and says so.
+- At `database`, `settings`, `start` or `health`, it leaves the service stopped: a restore whose database is half read, or whose app does not answer, is not left running on real data. It says the service is stopped, and prints the dump it took and the line that puts it back.
 
 #### After a failed deploy
 
@@ -376,7 +378,7 @@ A deploy dumps the database before it changes anything and prints the dump's pat
 
 On a machine built again, `register` gave the app's role a new password, and the settings put back name the old one. So the command gives the role the password in the `DATABASE_URL` it has just put back. When that line is not one `register` wrote, it leaves the password alone and warns, without printing the value.
 
-Building an app again from nothing is: the setup script, `register`, `restore --settings` with the last bundle, the new deploy key added on GitHub, then `deploy`. An app that has never been deployed has nothing to start: the restore says so, and the first deploy starts it on the restored data.
+Building an app again from nothing is: the setup script, `register`, `restore --settings` with the last bundle, the new deploy key added on GitHub, then `deploy`. An app whose service points at no release, because it has never been deployed or its first deploy failed, has nothing to start: the restore says so, and the next deploy starts it on the restored data.
 
 ## The code
 

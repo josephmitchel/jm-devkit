@@ -20,7 +20,10 @@ const ENCRYPTED = 'age-encryption.org/v1';
 export function command(args, world) {
   const options = args.filter((arg) => arg.startsWith('-'));
   const [name, given, ...others] = args.filter((arg) => !arg.startsWith('-'));
-  if (given === undefined || others.length > 0 || options.some((option) => option !== '--settings')) throw new UsageError();
+  if (given === undefined || others.length > 0 || options.some((option) => option !== '--settings')) {
+    const left = [name, given, ...others].filter((arg) => arg !== undefined && fs.statSync(arg, { throwIfNoEntry: false })?.isFile());
+    throw new UsageError(left.length > 0 ? `still on this machine, where a decrypted bundle is unencrypted: ${left.map((file) => path.resolve(file)).join(', ')}` : '');
+  }
   const file = fileAt(given);
   const bundled = isBundle(world, file);
   try {
@@ -54,7 +57,7 @@ function startsWith(file, text) {
   return start.toString('latin1') === text;
 }
 
-/** Everything that can refuse comes before the service is stopped; from the stop on, a failure leaves it stopped and says how to go back. */
+/** Everything that can refuse comes before the service is stopped. The dump is taken once it is, so nothing the app writes is in neither database. */
 function restore(world, { name, file, bundled, withSettings }) {
   const { paths, out, err, now } = world;
   registrationOf(paths, name);
@@ -67,17 +70,17 @@ function restore(world, { name, file, bundled, withSettings }) {
     if (fault) throw new Error(bundled ? `the dump in ${file} cannot be restored: ${fault}` : `${file} is neither a decrypted bundle nor a database dump: ${fault}`);
     if (!bundled && withSettings) throw new Error(`${file} is a dump, which holds no settings file: leave out --settings`);
     const running = servicePointsAt(paths, name);
-    const answers = running && deploySectionOf(name, running.release);
+    const deployedWith = running && deploySectionOf(name, running.release);
 
     const kept = newKeptName(paths.restoreDumps(name), stampOf(now()));
     const before = { dump: `${kept}.dump`, settings: null };
-    dumpDatabase(world, name, before.dump);
-    out.write(`Dumped ${name}'s database as it is now to ${before.dump}\n`);
-
     let step = 'stop';
     try {
       out.write(`Stopping ${serviceName(name)}\n`);
       stopService(world, name);
+      step = 'dump';
+      dumpDatabase(world, name, before.dump);
+      out.write(`Dumped ${name}'s database as it is now to ${before.dump}\n`);
       step = 'database';
       out.write(`Restoring ${name}'s database from ${bundled ? `the bundle of ${source.date}` : file}\n`);
       restoreDatabase(world, name, source.dump);
@@ -86,23 +89,22 @@ function restore(world, { name, file, bundled, withSettings }) {
         before.settings = keptSettings(paths, name, `${kept}.env`);
         putSettingsBack(world, name, source.settings);
       } else if (bundled) out.write(`Left ${name}'s settings file as it is\n`);
-      if (answers) {
+      if (deployedWith) {
         step = 'start';
         out.write(`Starting ${serviceName(name)}\n`);
         startService(world, name);
         step = 'health';
-        mustAnswerHealthy(world, answers);
+        mustAnswerHealthy(world, deployedWith);
       }
     } catch (e) {
-      err.write([
-        `${serviceName(name)} ${stoppedAgain(world, name) ? 'is stopped.' : `could not be stopped: see systemctl status ${serviceName(name)}`}`,
-        ...wayBack(name, before),
-        '',
-      ].join('\n'));
+      const replaced = step !== 'stop' && step !== 'dump';
+      err.write(`${(replaced ? [stoppedAgain(world, name), ...wayBack(name, before)] : [startedAgain(world, name, running)]).join('\n')}\n`);
       throw new Error(`the restore of ${name} stopped at ${step}: ${e.message}`);
     }
     out.write([
-      answers ? `${name} is restored and answering.` : `${name} is restored. It has never been deployed, so nothing was started: its first deploy starts it.`,
+      deployedWith
+        ? `${name} is restored and answering.`
+        : `${name} is restored. Its service points at no release, because it has never been deployed or its first deploy failed, so nothing was started: its next deploy starts it.`,
       ...wayBack(name, before),
       '',
     ].join('\n'));
@@ -139,9 +141,20 @@ function wayBack(name, before) {
 function stoppedAgain(world, name) {
   try {
     stopService(world, name);
-    return true;
+    return `${serviceName(name)} is stopped.`;
   } catch {
-    return false;
+    return `${serviceName(name)} could not be stopped: see systemctl status ${serviceName(name)}`;
+  }
+}
+
+/** After a failure before the database was touched: the service goes back to running what it ran. */
+function startedAgain(world, name, running) {
+  if (!running) return 'Nothing was replaced.';
+  try {
+    startService(world, name);
+    return `Nothing was replaced. ${serviceName(name)} was started again.`;
+  } catch {
+    return `Nothing was replaced, but ${serviceName(name)} could not be started again: see systemctl status ${serviceName(name)}`;
   }
 }
 
