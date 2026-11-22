@@ -38,9 +38,16 @@ The Node and Postgres versions, and the other steps this script shares with the 
 | `/etc/apps-machine/apps/<name>.json` | One registration per app: its name, repository and Serve port. |
 | `/etc/apps-machine/settings/<name>.env` | An app's settings file, root's alone (mode 0600). |
 | `/etc/apps-machine/keys/<name>` | The private half of an app's deploy key, root's alone. The public half is beside it, ending `.pub`. |
+| `/etc/apps-machine/github-host-keys` | The SSH host keys a fetch accepts from GitHub, written from the kit at each deploy. |
+| `/etc/apps-machine/backup-public-key` | The owner's public key, which every backup bundle is encrypted to. The setup script writes it. |
+| `/etc/apps-machine/backup-storage`, `rclone.conf` | Where the bundles are uploaded, and the `rclone` config that defines that remote and holds its credential. Written by hand, root's alone (mode 0600). |
+| `/etc/apps-machine/backup-alive-address` | The address requested after a night in which nothing went wrong. Written by hand, root's alone (mode 0600). |
 | `/etc/systemd/system/app-<name>.service` | An app's service. |
 | `/var/lib/apps-machine/apps/<name>/` | An app's own directory, closed to every other app: `home/` is its Linux user's home, `releases/` holds its releases, and `current` links to the one its service runs. |
 | `/var/lib/apps-machine/backups/` | Database dumps and backup bundles, root's alone (mode 0700). |
+| `/var/lib/apps-machine/backups/nightly/` | The nights' encrypted bundles, `<name>-<date>.tar.age`. The backup removes an app's after seven days. |
+| `/var/lib/apps-machine/backups/work/` | A directory per backup run or restore for what is unencrypted on the way, removed when the run ends. Empty between runs. |
+| `/var/lib/apps-machine/backups/deploys/<name>/` | The dump each deploy of an app took before it changed anything, as `<time>.dump`. Nothing removes these. |
 | `/var/lib/apps-machine/backups/restores/<name>/` | What each restore of an app replaced: the database as `<time>.dump`, and the settings file as `<time>.env` when `--settings` replaced it. Nothing removes these. |
 
 ## The commands
@@ -71,7 +78,7 @@ sudo apps-machine register sample git@github.com:example/sample.git 8443
 
 Gives an app everything it needs before its first deploy. Register a project only once the kit's install reports its merge rule in place: a deploy trusts the default branch and runs no checks of its own.
 
-- `<name>` names the app's Linux user, its Postgres role and its database: a lowercase letter, then lowercase letters, digits or underscores, 31 characters at most. A name the machine or Postgres already uses for something else is refused.
+- `<name>` names the app's Linux user, its Postgres role and its database: a lowercase letter, then lowercase letters, digits or underscores, 31 characters at most, and not starting `pg_`, which Postgres keeps for itself. A name the machine or Postgres already uses for something else is refused.
 - `<repository>` is the project's GitHub SSH address, `git@github.com:<owner>/<name>.git`.
 - `<serve-port>` is the port the app is reached on at the machine's Tailscale address. A port another app has is refused.
 
@@ -179,6 +186,7 @@ The private key is never on the machine, so the machine can make a bundle and ca
 - One app failing does not stop the others. The run prints what went wrong for that app, makes the other bundles, and exits 1 naming every app that has no bundle for the night.
 - Seven days of bundles are kept. Once an app has its bundle for the night, its bundles dated before the seven days ending today are removed. An app whose bundle was not made keeps the ones it has.
 - Each bundle made is then uploaded to the storage under its own name. One that does not upload does not stop the others: the run prints what `rclone` said, and exits 1 naming every app whose bundle is not on the storage.
+- Only the night's own bundles are uploaded. A bundle that did not upload is not tried again by a later night: it stays on the machine for its seven days, and running `sudo apps-machine backup` again the same day makes and uploads that day's bundles afresh.
 - The alive request is made last, once, and only by a night in which nothing went wrong. Its absence is the alarm.
 
 #### The storage
@@ -390,7 +398,7 @@ For whoever changes the commands. They are plain Node modules with no dependenci
 - `files.mjs` is how root's files are written (beside the file and renamed in, with the mode set whatever the umask), how a directory is closed to everyone but root, and how the files the owner writes by hand are read: the lines that are neither blank nor `#` comments.
 - `registry.mjs` reads and writes the registrations, and is where a name, a repository and a Serve port are checked.
 - `settings.mjs` reads an app's settings file, and runs a command as the app's user with those values in its environment.
-- `database.mjs` makes an app's role and database, and dumps the database to a file.
+- `database.mjs` makes an app's role and database, dumps the database to a file, says whether a file is a dump `pg_restore` can read, and puts a dump back in place of the database.
 - `service.mjs` writes an app's unit from `app.service.template`, stops and starts the service, and points it at a release.
 - `serve.mjs` maps an app's Serve port to its local port.
 - `app-user.mjs` makes an app's Linux user and the directories it may enter.
@@ -399,4 +407,7 @@ For whoever changes the commands. They are plain Node modules with no dependenci
 - `releases.mjs` fetches the default branch, names and lists an app's releases, records the `deploy` section each was deployed with, and prunes them. `github-host-keys.mjs` holds the host keys a fetch accepts.
 - `health.mjs` asks an app's health path until it answers or the time limit passes, and `loopback.mjs` checks who listens on an app's port and where the app's user listens.
 - `vm/verify-units.sh` puts the backup's service and timer, and an app's service as `service.mjs` writes it, through `systemd-analyze verify`. CI runs it, and it runs anywhere systemd is, without sudo.
-- `commands/deploy.mjs` is a list of named steps, `STEPS`, each a function of the world and the deploy so far. `deployPrograms` in the test helpers stands in for the programs a deploy runs.
+- `commands/deploy.mjs` is a list of named steps, `STEPS`, each a function of the world and the deploy so far, with what the command does when that step fails. `deployPrograms` in the test helpers stands in for the programs a deploy runs. A test holds the two tables under "deploy" above to `STEPS`.
+- `bundle.mjs` names, makes and opens a backup bundle, says whether the public key is set, and makes a run's own work directory. `retention.mjs` is the two rules for which bundles are given up, on the machine and on the storage, as functions of a list of bundles and today's date.
+- `offsite.mjs` reads where the bundles go and the alive address, uploads, lists and removes bundles on the storage with `rclone`, and makes the alive request with `curl`.
+- `commands/backup.mjs` bundles every app, uploads, prunes and makes the alive request; `commands/restore.mjs` checks the file and the app, then stops, dumps, replaces and starts; `commands/logs.mjs` hands the app's journal to the terminal.
