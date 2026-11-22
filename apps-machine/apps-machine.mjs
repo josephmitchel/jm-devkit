@@ -12,6 +12,7 @@ export const COMMANDS = {
   list: await import('./commands/list.mjs'),
   register: await import('./commands/register.mjs'),
   backup: await import('./commands/backup.mjs'),
+  logs: await import('./commands/logs.mjs'),
 };
 
 function usage() {

@@ -142,6 +142,30 @@ tar --list --file sample-2026-11-21.tar
 
 A decrypted bundle is a tar archive of three files: `bundle.json` (the app and the date), `database.dump` (in `pg_dump`'s custom format, which `pg_restore` reads) and `settings.env` (the settings file as it was).
 
+### logs
+
+```
+sudo apps-machine logs <name> [<period>]
+sudo apps-machine logs sample
+sudo apps-machine logs sample 6h
+```
+
+Prints the journal of the app's service, `app-<name>.service`, oldest first: the last day, or the period given, which is a whole number and `min`, `h`, `d` or `w` (`30min`, `6h`, `3d`, `2w`). That is what the app wrote to its output and systemd's own lines about starting and stopping it. Nothing else goes to standard output: no heading, no other app's lines, and nothing read from the settings file. A period in which the service wrote nothing prints nothing. An app that is not registered is refused on standard error.
+
+To put an app's recent log on the development machine, the owner runs one line on his own device, which can reach both machines:
+
+```
+ssh apps-machine.example sudo apps-machine logs sample | ssh development-machine.example 'cat > sample.log'
+```
+
+The log passes through his device, so neither machine connects to the other and nothing on the development machine can ask for it. Name a file the agent can read. A failure is printed on his own screen and not into the file.
+
+That line has no terminal for `sudo` to ask for a password on, so it works only where `sudo` lets the owner's account run this command without one. Adding `-t` to `ssh` is not the way round it: the prompt and a terminal's line endings would go into the file. One way is a rule for this command alone, made on the apps machine with `sudo visudo -f /etc/sudoers.d/apps-machine-logs`:
+
+```
+<account> ALL=(root) NOPASSWD: /usr/local/sbin/apps-machine logs *
+```
+
 ## The code
 
 For whoever changes the commands. They are plain Node modules with no dependencies, tested with `node --test 'apps-machine/**/*.test.mjs'`, which CI runs as its own job.
