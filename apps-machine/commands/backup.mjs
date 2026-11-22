@@ -2,12 +2,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { makeBundle, parseBundleName, publicKeyIsSet } from '../bundle.mjs';
+import { aliveAddressOf, bundlesOnStorage, removeFromStorage, requestAlive, storageOf, uploadBundle } from '../offsite.mjs';
 import { readRegistry } from '../registry.mjs';
-import { expiredOnMachine } from '../retention.mjs';
+import { expiredOnMachine, expiredOnStorage } from '../retention.mjs';
 import { UsageError } from '../usage.mjs';
 
 export const usage = 'apps-machine backup';
-export const summary = 'bundle every app\'s database and settings file for the night, encrypted to the owner\'s public key';
+export const summary = 'bundle every app\'s database and settings file for the night, encrypted to the owner\'s public key, and upload the bundles';
 
 const localDate = (at) => [at.getFullYear(), at.getMonth() + 1, at.getDate()].map((part) => String(part).padStart(2, '0')).join('-');
 
@@ -73,8 +74,56 @@ function removeExpired(paths, night) {
   return expired;
 }
 
+/** Upload each of the night's bundles. Returns the ones now on the storage; one that is not is said on `err`. */
+function uploadEach(world, storage, bundles) {
+  return bundles.filter((bundle) => {
+    try {
+      uploadBundle(world, storage, bundle);
+      world.out.write(`${bundle.app}: uploaded ${bundle.name}\n`);
+      return true;
+    } catch (e) {
+      world.err.write(`${bundle.app}: ${e.message}\n`);
+      return false;
+    }
+  });
+}
+
+/** As on the machine, an app's old bundles go from the storage only once tonight's is there. */
+function pruneStorage(world, storage, uploaded, today) {
+  if (uploaded.length === 0) return;
+  const apps = new Set(uploaded.map((bundle) => bundle.app));
+  const stored = bundlesOnStorage(world, storage).filter((bundle) => apps.has(bundle.app));
+  for (const bundle of expiredOnStorage(stored, today)) {
+    removeFromStorage(world, storage, bundle);
+    world.out.write(`${bundle.app}: removed ${bundle.name} from the storage\n`);
+  }
+}
+
+/** The request whose absence is the alarm: made only by a night in which nothing went wrong. */
+function sayAlive(world) {
+  const address = aliveAddressOf(world.paths);
+  if (address === null) {
+    world.err.write(`warning: no alive address is set in ${world.paths.backupAliveAddress}, so nothing is watching whether the backups run\n`);
+    return;
+  }
+  requestAlive(world, address);
+  world.out.write('The alive request was made.\n');
+}
+
+const appsOf = (list) => list.map(({ app }) => app).join(', ');
+
 export function command(args, world) {
   if (args.length > 0) throw new UsageError();
   const night = bundleEveryApp(world);
-  if (night.failed.length > 0) throw new Error(`no bundle was made for ${night.failed.map((failure) => failure.app).join(', ')}`);
+  const problems = night.failed.length > 0 ? [`no bundle was made for ${appsOf(night.failed)}`] : [];
+  try {
+    const storage = storageOf(world.paths);
+    const uploaded = uploadEach(world, storage, night.bundles);
+    if (uploaded.length < night.bundles.length) problems.push(`no bundle was uploaded for ${appsOf(night.bundles.filter((bundle) => !uploaded.includes(bundle)))}`);
+    pruneStorage(world, storage, uploaded, night.date);
+  } catch (e) {
+    problems.push(e.message);
+  }
+  if (problems.length > 0) throw new Error(problems.join('; '));
+  sayAlive(world);
 }
