@@ -44,8 +44,8 @@ require_sudo_on_ubuntu
 [ -f "$CHECKOUT/apps-machine/install.mjs" ] \
   || fail "no commands in $CHECKOUT/apps-machine: run this script from a checkout of the kit, not from a copy of the file"
 # What dev-vm-setup.sh leaves behind. Agents work on that machine, and none may reach this one.
-[ ! -e /etc/code-reviewer ] \
-  || fail "this is the development machine (it has /etc/code-reviewer): the apps machine is a machine of its own"
+[ ! -e "$REVIEWER_CONFIG_DIR" ] \
+  || fail "this is the development machine (it has $REVIEWER_CONFIG_DIR): the apps machine is a machine of its own"
 
 prepare_apt
 

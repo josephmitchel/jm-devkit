@@ -5,6 +5,9 @@ NODE_MAJOR=24
 NODE_MIN=24.15.0
 PG_MAJOR=16
 keyrings=/etc/apt/keyrings
+# Where the development machine keeps the code reviewer's credentials. The apps machine's script
+# refuses to run where this directory is.
+REVIEWER_CONFIG_DIR=/etc/code-reviewer
 
 step() { printf '\n== %s\n' "$1"; }
 fail() { printf 'error: %s\n' "$1" >&2; exit 1; }

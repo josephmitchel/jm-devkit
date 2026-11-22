@@ -30,7 +30,7 @@ REVIEWER_USER=reviewer
 KIT_REPO=https://github.com/josephmitchel/jm-devkit.git
 REVIEWER_VAR=/var/lib/code-reviewer
 KIT_DIR=$REVIEWER_VAR/kit
-CREDENTIALS_FILE=/etc/code-reviewer/credentials.env
+CREDENTIALS_FILE=$REVIEWER_CONFIG_DIR/credentials.env
 # Its two Postgres roles. Neither is the name of a Linux user, so neither can be opened over the
 # local socket by being that user: each takes its password.
 REVIEWER_DB=code_reviewer
