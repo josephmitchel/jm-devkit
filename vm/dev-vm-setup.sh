@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds the dev VM from a fresh Ubuntu Server LTS install: toolchains, Postgres,
+# Builds the development machine from a fresh Ubuntu Server LTS install: toolchains, Postgres,
 # the two unprivileged users (one for agents, one for the code reviewer), and the
 # code reviewer as a service of its own user, started by a timer.
 # Safe to run again. Run it from the admin account, from a checkout of the kit:
@@ -12,13 +12,16 @@ set -euo pipefail
 
 # The units come from beside this script, in the admin's checkout. Never from the code reviewer's
 # own checkout: its user can write there, and a unit installed from here is run by root.
-UNITS_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/systemd
+VM_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+UNITS_DIR=$VM_DIR/systemd
 
-NODE_MAJOR=24
-NODE_MIN=24.15.0
+# The steps this script shares with the apps machine's, and the Node and Postgres versions.
+[ -f "$VM_DIR/machine-steps.sh" ] \
+  || { echo "error: no machine-steps.sh in $VM_DIR: run this script from a checkout of the kit, not from a copy of the file" >&2; exit 1; }
+. "$VM_DIR/machine-steps.sh"
+
 GO_VERSION=1.26.5
 GO_SHA256=5c2c3b16caefa1d968a94c1daca04a7ca301a496d9b086e17ad77bb81393f053
-PG_MAJOR=16
 PLAYWRIGHT_VERSION=1.63.0
 AGENT_USER=agent
 REVIEWER_USER=reviewer
@@ -39,13 +42,7 @@ CREDENTIAL_NAMES=(DATABASE_URL REVIEWER_TEST_DATABASES_URL CLAUDE_CODE_OAUTH_TOK
 NIGHTLY_AT=${NIGHTLY_AT:-}
 POLL_EVERY=${POLL_EVERY:-}
 
-step() { printf '\n== %s\n' "$1"; }
-fail() { printf 'error: %s\n' "$1" >&2; exit 1; }
-
-[ "$(id -u)" -eq 0 ] || fail "run with sudo"
-[ "$(dpkg --print-architecture)" = amd64 ] || fail "this script expects amd64"
-. /etc/os-release
-[ "$ID" = ubuntu ] || fail "this script expects Ubuntu"
+require_sudo_on_ubuntu
 [ -f "$UNITS_DIR/code-reviewer-nightly.service" ] \
   || fail "no units in $UNITS_DIR: run this script from a checkout of the kit, not from a copy of the file"
 [[ -z "$NIGHTLY_AT" || "$NIGHTLY_AT" =~ ^([01][0-9]|2[0-3]):[0-5][0-9]$ ]] \
@@ -53,31 +50,23 @@ fail() { printf 'error: %s\n' "$1" >&2; exit 1; }
 [[ -z "$POLL_EVERY" || "$POLL_EVERY" =~ ^[1-9][0-9]*(s|min|h)$ ]] \
   || fail "POLL_EVERY must be a length of time such as 3min, 90s or 1h, not '$POLL_EVERY'"
 
-cd /
-export DEBIAN_FRONTEND=noninteractive
-keyrings=/etc/apt/keyrings
-install -d -m 0755 "$keyrings"
+prepare_apt
 
 step "Base packages"
 apt-get update
 apt-get install -y build-essential ca-certificates curl git jq ripgrep tmux unzip
 
 step "Package sources: Node $NODE_MAJOR, Postgres $PG_MAJOR, GitHub CLI"
-curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key -o "$keyrings/nodesource.asc"
-echo "deb [arch=amd64 signed-by=$keyrings/nodesource.asc] https://deb.nodesource.com/node_$NODE_MAJOR.x nodistro main" \
-  > /etc/apt/sources.list.d/nodesource.list
-curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc -o "$keyrings/pgdg.asc"
-echo "deb [arch=amd64 signed-by=$keyrings/pgdg.asc] https://apt.postgresql.org/pub/repos/apt $VERSION_CODENAME-pgdg main" \
-  > /etc/apt/sources.list.d/pgdg.list
+add_node_source
+add_postgres_source
 curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o "$keyrings/githubcli.gpg"
 echo "deb [arch=amd64 signed-by=$keyrings/githubcli.gpg] https://cli.github.com/packages stable main" \
   > /etc/apt/sources.list.d/github-cli.list
-chmod 0644 "$keyrings"/nodesource.asc "$keyrings"/pgdg.asc "$keyrings"/githubcli.gpg
+chmod 0644 "$keyrings/githubcli.gpg"
 apt-get update
 apt-get install -y nodejs "postgresql-$PG_MAJOR" gh
 
-node_version=$(node -p 'process.versions.node')
-dpkg --compare-versions "$node_version" ge "$NODE_MIN" || fail "node $node_version is older than $NODE_MIN"
+check_node_version
 
 step "Go $GO_VERSION"
 if [ "$(cat /usr/local/go/VERSION 2>/dev/null | head -1)" != "go$GO_VERSION" ]; then
@@ -91,10 +80,7 @@ fi
 ln -sf /usr/local/go/bin/go /usr/local/go/bin/gofmt /usr/local/bin/
 
 step "Tailscale"
-if ! command -v tailscale >/dev/null; then
-  curl -fsSL https://tailscale.com/install.sh | sh
-  echo "Tailscale is installed but not joined: run 'sudo tailscale up --ssh'."
-fi
+install_tailscale
 
 step "Users: $AGENT_USER and $REVIEWER_USER"
 for user in "$AGENT_USER" "$REVIEWER_USER"; do
@@ -313,11 +299,6 @@ as_reviewer git config --global credential.helper "!node '$KIT_DIR/reviewer/bin/
 
 step "The code reviewer's services and timers"
 changed=no
-install_unit() { # <source> <destination>
-  cmp -s "$1" "$2" && return 0
-  install -D -m 0644 -o root -g root "$1" "$2"
-  changed=yes
-}
 # Every service and timer in vm/systemd is installed, so a second pair drops in beside the first.
 for unit in "$UNITS_DIR"/code-reviewer-*.service "$UNITS_DIR"/code-reviewer-*.timer; do
   install_unit "$unit" "/etc/systemd/system/$(basename "$unit")"

@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# Builds the apps machine from a fresh Ubuntu Server LTS install: Node, Postgres, Tailscale, git,
+# the tools the backups need, and the kit's apps-machine commands for root.
+# It installs no agent tooling, and makes no user for agents and none for the code reviewer.
+# Safe to run again. Run it from the admin account, from a checkout of the kit:
+#   sudo bash vm/apps-machine-setup.sh
+# The owner's notes for the machine are in apps-machine/README.md.
+set -euo pipefail
+
+VM_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# The admin's checkout this script is in.
+CHECKOUT=$(dirname "$VM_DIR")
+
+# The steps this script shares with the development machine's, and the Node and Postgres versions.
+[ -f "$VM_DIR/machine-steps.sh" ] \
+  || { echo "error: no machine-steps.sh in $VM_DIR: run this script from a checkout of the kit, not from a copy of the file" >&2; exit 1; }
+. "$VM_DIR/machine-steps.sh"
+
+# The commands are copied from the admin's checkout into a directory of root's, and root runs them
+# from the copy: never from the checkout, and never from anywhere another user can write.
+COMMANDS_DIR=/usr/local/lib/apps-machine
+COMMAND=/usr/local/sbin/apps-machine
+# Root's alone. apps-machine/paths.mjs names the same directory.
+CONFIG_DIR=/etc/apps-machine
+
+require_sudo_on_ubuntu
+[ -f "$CHECKOUT/apps-machine/install.mjs" ] \
+  || fail "no commands in $CHECKOUT/apps-machine: run this script from a checkout of the kit, not from a copy of the file"
+# What dev-vm-setup.sh leaves behind. Agents work on that machine, and none may reach this one.
+[ ! -e /etc/code-reviewer ] \
+  || fail "this is the development machine (it has /etc/code-reviewer): the apps machine is a machine of its own"
+
+prepare_apt
+
+step "Base packages"
+apt-get update
+apt-get install -y ca-certificates curl git
+
+step "Package sources: Node $NODE_MAJOR, Postgres $PG_MAJOR"
+add_node_source
+add_postgres_source
+apt-get update
+apt-get install -y nodejs "postgresql-$PG_MAJOR"
+
+check_node_version
+
+step "Backup tools: age and rclone"
+apt-get install -y age rclone
+
+step "Tailscale"
+install_tailscale
+
+step "The machine's settings directory"
+install -d -m 0700 -o root -g root "$CONFIG_DIR"
+
+step "The apps-machine commands"
+node "$CHECKOUT/apps-machine/install.mjs" "$COMMANDS_DIR"
+ln -sfn "$COMMANDS_DIR/apps-machine/apps-machine.mjs" "$COMMAND"
+
+step "Check: the commands run, and the apps registered here"
+hash -r
+command -v apps-machine >/dev/null || fail "$COMMAND is not on root's path, which is $PATH"
+apps-machine list
+
+cat <<EOF
+
+Done. Left to do by hand:
+  - Join Tailscale, if this machine has not: sudo tailscale up --ssh
+After a change to the kit, update the checkout and run this script again: it installs the
+commands as the checkout has them.
+EOF
