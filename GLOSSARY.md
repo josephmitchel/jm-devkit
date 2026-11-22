@@ -46,7 +46,7 @@ _Avoid_: convention, standing instruction, agent rule
 
 **Project config**:
 A project's own declaration of how it uses the kit: its modules, and the facts about itself the kit needs.
-_Avoid_: stamp, manifest, registration
+_Avoid_: stamp, manifest, registration (what the apps machine holds for an app)
 
 **Kit-owned file**:
 A file in a project that the kit generates from the project config and replaces on every sync. A project changes it only through its project config. One the kit stops generating is **retired**: sync removes it from a project that still has it.
@@ -70,11 +70,15 @@ _Avoid_: update (what the plugin does on its own), upgrade
 
 **Development machine**:
 The owner's machine that agents and the code reviewer work on unattended. It holds projects' checkouts and seeded data only, never an app's real data or production keys.
-_Avoid_: dev VM, dev box, sandbox, server
+_Avoid_: dev VM, dev box, sandbox, server, the owner's machine (he owns both machines)
 
 **Apps machine**:
 The owner's machine that runs the real copies of his apps, and holds their real data and production keys. Only the owner acts on it: no agent, and not the code reviewer, has an account, a key or a route onto it.
 _Avoid_: prod box, production server, server, host
+
+**Registration**:
+What the apps machine holds for an app it is to run: the app's name, its repository and the port it is reached on. The owner makes it by hand on the apps machine, and it is never in the project's repository.
+_Avoid_: project config (a project's own declaration, kept in its repository), enrolment, app config
 
 **Upstream**:
 Matt Pocock's skills, which the plugin's skills were forked from and which are pulled in again only on purpose.

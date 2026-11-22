@@ -1,7 +1,7 @@
 // The sweep workflow as the generator last wrote it. Nothing writes it any more: generate.mjs
 // knows the file only as retired, and writing removes it. A project that has not moved to the
-// owner's machine still runs its copy, so the text stays here, tested, as the record of what that
-// copy is, until the last project has moved.
+// development machine still runs its copy, so the text stays here, tested, as the record of what
+// that copy is, until the last project has moved.
 
 export const ACTION = 'josephmitchel/jm-devkit/reviewer@main';
 

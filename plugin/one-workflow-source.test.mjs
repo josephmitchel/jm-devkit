@@ -56,7 +56,7 @@ function templateLines(path, text) {
   return hits;
 }
 
-// The kit is a project too, and until it moves to the owner's machine it keeps its own copy of the
+// The kit is a project too, and until it moves to the development machine it keeps its own copy of the
 // retired workflow, which names the action. That copy passes only while it is exactly the
 // workflow's last form for the kit's devkit.json: a hand edit makes it a template. Once the kit
 // has moved there is no copy, and nothing here asks for one.

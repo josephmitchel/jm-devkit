@@ -114,7 +114,7 @@ test('--check lists a project that still has the sweep workflow as behind, says 
   const run = cli(dir, '--check');
   assert.equal(run.code, 1);
   assert.equal(run.stdout, `${SWEEP_WORKFLOW}\n`);
-  assert.match(run.stderr, /^\.github\/workflows\/nightly-sweep\.yml is retired: removing it moves the project's code reviewer from GitHub Actions to the owner's machine$/m);
+  assert.match(run.stderr, /^\.github\/workflows\/nightly-sweep\.yml is retired: removing it moves the project's code reviewer from GitHub Actions to the development machine$/m);
   assert.equal(fs.readFileSync(file, 'utf8'), workflow);
 });
 

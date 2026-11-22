@@ -25,7 +25,7 @@
       "pattern": "^[0-9a-f]{7,40}$"
     },
     "sweep": {
-      "description": "Retired, and ignored by a code reviewer that runs on the owner's machine, which sweeps every project in one nightly run. Still accepted so that a project whose sweep is still dispatched by GitHub Actions keeps validating.",
+      "description": "Retired, and ignored by a code reviewer that runs on the development machine, which sweeps every project in one nightly run. Still accepted so that a project whose sweep is still dispatched by GitHub Actions keeps validating.",
       "type": "object",
       "required": ["hour"],
       "additionalProperties": false,
@@ -84,7 +84,7 @@
           "items": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" }
         },
         "services": {
-          "description": "Retired, and ignored by the code reviewer: on the owner's machine the tests get their databases from `databases`. Still accepted for a project whose tests still run in GitHub Actions: services the tests need, in the shape of a GitHub Actions job's `services:` map, keyed by the service's id. The project's sweep workflow carries them on the jobs that run the tests (`sweep` and `review-now`), as the generator wrote them before that workflow was retired; changing them here no longer changes the workflow. Their connection details reach the tests through `env`.",
+          "description": "Retired, and ignored by the code reviewer: on the development machine the tests get their databases from `databases`. Still accepted for a project whose tests still run in GitHub Actions: services the tests need, in the shape of a GitHub Actions job's `services:` map, keyed by the service's id. The project's sweep workflow carries them on the jobs that run the tests (`sweep` and `review-now`), as the generator wrote them before that workflow was retired; changing them here no longer changes the workflow. Their connection details reach the tests through `env`.",
           "type": "object",
           "propertyNames": { "pattern": "^[A-Za-z_][A-Za-z0-9_-]*$" },
           "additionalProperties": {
@@ -147,7 +147,7 @@
       }
     },
     "nightly": {
-      "description": "What the code reviewer does for the project each night besides its sweep. Read only by a code reviewer that runs on the owner's machine: a project whose sweep is still dispatched by GitHub Actions may set it, and nothing there runs it.",
+      "description": "What the code reviewer does for the project each night besides its sweep. Read only by a code reviewer that runs on the development machine: a project whose sweep is still dispatched by GitHub Actions may set it, and nothing there runs it.",
       "type": "object",
       "additionalProperties": false,
       "properties": {
