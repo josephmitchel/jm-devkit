@@ -41,6 +41,7 @@ The Node and Postgres versions, and the other steps this script shares with the 
 | `/etc/systemd/system/app-<name>.service` | An app's service. |
 | `/var/lib/apps-machine/apps/<name>/` | An app's own directory, closed to every other app: `home/` is its Linux user's home, `releases/` holds its releases, and `current` links to the one its service runs. |
 | `/var/lib/apps-machine/backups/` | Database dumps and backup bundles, root's alone (mode 0700). |
+| `/var/lib/apps-machine/backups/restores/<name>/` | What each restore of an app replaced: the database as `<time>.dump`, and the settings file as `<time>.env` when `--settings` replaced it. Nothing removes these. |
 
 ## The commands
 
