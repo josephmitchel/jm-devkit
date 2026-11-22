@@ -18,7 +18,6 @@ export function writeSettings(paths, app, text) {
   const file = paths.settingsFile(app);
   fs.mkdirSync(paths.settingsDir, { recursive: true, mode: 0o700 });
   fs.chmodSync(paths.settingsDir, 0o700);
-  fs.rmSync(`${file}.new`, { force: true });
   fs.writeFileSync(`${file}.new`, text, { mode: 0o600 });
   fs.renameSync(`${file}.new`, file);
 }

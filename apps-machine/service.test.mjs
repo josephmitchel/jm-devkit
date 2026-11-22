@@ -131,6 +131,14 @@ test('a service can be pointed back at what it pointed at before', () => {
   assert.deepEqual(fs.readdirSync(paths.appDir('sample')).sort(), ['current', 'releases', 'start']);
 });
 
+test('a pointing that was cut short does not stop the next one', () => {
+  const { paths, release } = withRelease();
+  fs.symlinkSync('releases/gone', `${paths.currentRelease('sample')}.new`);
+  pointServiceAt({ run: fakeRun().run, paths }, 'sample', { release, start: 'npm start' });
+  assert.deepEqual(servicePointsAt(paths, 'sample'), { release, start: 'npm start' });
+  assert.deepEqual(fs.readdirSync(paths.appDir('sample')).sort(), ['current', 'releases', 'start']);
+});
+
 test('a service pointed at nothing has no current release, as before a first deploy', () => {
   const { paths, release } = withRelease();
   const world = { run: fakeRun().run, paths };

@@ -24,7 +24,6 @@ function systemctl({ run }, ...args) {
 }
 
 function replaceFile(file, text) {
-  fs.rmSync(`${file}.new`, { force: true });
   fs.writeFileSync(`${file}.new`, text, { mode: 0o644 });
   fs.chmodSync(`${file}.new`, 0o644);
   fs.renameSync(`${file}.new`, file);

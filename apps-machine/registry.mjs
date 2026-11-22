@@ -58,7 +58,6 @@ export function writeRegistration(paths, fields) {
   if (fs.existsSync(file) && fs.readFileSync(file, 'utf8') === text) return registration;
   fs.mkdirSync(paths.appsDir, { recursive: true, mode: 0o700 });
   fs.chmodSync(paths.appsDir, 0o700);
-  fs.rmSync(`${file}.new`, { force: true });
   fs.writeFileSync(`${file}.new`, text, { mode: 0o600 });
   fs.renameSync(`${file}.new`, file);
   return registration;
