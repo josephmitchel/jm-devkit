@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { machinePaths, serviceName } from './paths.mjs';
+import { machine, mode } from './test-helpers.mjs';
 
 test('on a real machine the registrations are in /etc/apps-machine/apps', () => {
   const paths = machinePaths();
@@ -45,6 +46,14 @@ test('the setup script states each directory it makes as paths.mjs has it', () =
     assert.ok(line, `the setup script sets no ${variable}`);
     assert.equal(line[1], expected, variable);
   }
+});
+
+test('the tests\' machine has the directories the setup script makes, with the modes it gives them', () => {
+  const setup = fs.readFileSync(path.join(import.meta.dirname, '../vm/apps-machine-setup.sh'), 'utf8');
+  const made = Object.fromEntries([...setup.matchAll(/^install -d -m (0[0-7]{3}) -o root -g root "\$(\w+)"$/gm)].map(([, octal, variable]) => [variable, parseInt(octal, 8)]));
+  assert.deepEqual(made, { CONFIG_DIR: 0o700, STATE_DIR: 0o755, BACKUP_DIR: 0o700 });
+  const paths = machine();
+  assert.deepEqual({ CONFIG_DIR: mode(paths.configDir), STATE_DIR: mode(paths.stateDir), BACKUP_DIR: mode(paths.backupDir) }, made);
 });
 
 test('the backups\' public key is in root\'s directory, and the nightly bundles and a run\'s work in the backup directory', () => {
