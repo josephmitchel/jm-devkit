@@ -166,6 +166,78 @@ That line has no terminal for `sudo` to ask for a password on, so it works only 
 <account> ALL=(root) NOPASSWD: /usr/local/sbin/apps-machine logs *
 ```
 
+### restore
+
+```
+sudo apps-machine restore <name> <file> [--settings]
+sudo apps-machine restore sample sample-2026-11-20.tar
+sudo apps-machine restore sample sample-2026-11-20.tar --settings
+sudo apps-machine restore sample /var/lib/apps-machine/backups/deploys/sample/20261121T143005Z.dump
+```
+
+Puts an app's database back as it was. `<file>` is a decrypted bundle, or a database dump: the one a deploy took before it started, or the one an earlier restore took.
+
+In this order it:
+
+1. checks the file and the app, and refuses before anything is touched (below);
+2. dumps the database as it is now and prints where;
+3. stops the app's service;
+4. drops the database, makes it again for the app's role alone, and reads the dump into it. Nothing of the database as it was survives: a table a later migration added is gone, which is what going back means;
+5. with `--settings`, replaces the app's settings file with the bundle's. Without it the settings file is left as it is;
+6. starts the service and asks the app's health path until it answers, as a deploy does.
+
+A decrypted bundle is removed from the machine when the command ends, whether the restore worked, failed or was refused. A dump is left where it is: it is root's alone already, and it is still the way back.
+
+#### Bringing a bundle to the machine
+
+The machine cannot decrypt a bundle, so that happens on the device that holds the private key. Take the encrypted bundle from the storage onto that device (the last seven nights are also on the machine, in `/var/lib/apps-machine/backups/nightly/`), then:
+
+```
+age --decrypt --identity backup-key.txt --output sample-2026-11-20.tar sample-2026-11-20.tar.age
+scp sample-2026-11-20.tar apps-machine.example:
+ssh -t apps-machine.example sudo apps-machine restore sample sample-2026-11-20.tar
+rm sample-2026-11-20.tar
+```
+
+The decrypted bundle holds the database and the production keys in the clear. The command removes the copy on the machine; the last line removes the one on the device.
+
+#### What it refuses
+
+Each of these ends with exit 1 before the service is stopped, with the database and the settings file as they were:
+
+- an app that is not registered;
+- a file that is neither a bundle nor a dump `pg_restore` can read, which is left where it is. A bundle that is still encrypted is told apart and the message says so;
+- a bundle of another app, a bundle missing one of its three files, or one made in a format these commands do not read;
+- a bundle whose dump `pg_restore` cannot read: one cut short, or made by a newer Postgres than the machine's;
+- `--settings` with a dump, which holds no settings file;
+- a database that cannot be dumped first.
+
+#### Going back on a restore
+
+The dump taken at the start is `/var/lib/apps-machine/backups/restores/<name>/<time>.dump`, root's alone, named for the time in UTC. The command prints it with the line that puts it back:
+
+```
+sudo apps-machine restore sample /var/lib/apps-machine/backups/restores/sample/20261121T143005Z.dump
+```
+
+With `--settings`, the settings file that was replaced is kept beside it as `<time>.env`; putting that back is `sudo install -m 600 <that file> /etc/apps-machine/settings/<name>.env`. Nothing removes these files, the seven-day rule included: remove them by hand once the restore is known to be right.
+
+#### When it fails part-way
+
+From the stop on, a failure leaves the service stopped: a restore whose database is half read, or whose app does not answer, is not left running on real data. The command says the service is stopped, names the step (`stop`, `database`, `settings`, `start` or `health`), and prints the dump taken at the start and the line that puts it back. It exits 1.
+
+#### After a failed deploy
+
+A deploy dumps the database before it changes anything and prints the dump's path. When a deploy's migration has left the database in a state the previous release cannot use, restoring that dump puts the data back to match the code the deploy went back to.
+
+#### The settings file, and a machine built again
+
+`--settings` is for when the settings themselves are lost or wrong: a machine built again, or a key in the file that the restored data was encrypted with. The bundle's file replaces the app's byte for byte, root's alone (mode 0600).
+
+On a machine built again, `register` gave the app's role a new password, and the settings put back name the old one. So the command gives the role the password in the `DATABASE_URL` it has just put back. When that line is not one `register` wrote, it leaves the password alone and warns, without printing the value.
+
+Building an app again from nothing is: the setup script, `register`, `restore --settings` with the last bundle, the new deploy key added on GitHub, then `deploy`. An app that has never been deployed has nothing to start: the restore says so, and the first deploy starts it on the restored data.
+
 ## The code
 
 For whoever changes the commands. They are plain Node modules with no dependencies, tested with `node --test 'apps-machine/**/*.test.mjs'`, which CI runs as its own job.
