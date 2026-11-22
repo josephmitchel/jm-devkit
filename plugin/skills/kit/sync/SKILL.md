@@ -14,11 +14,12 @@ Shell state does not carry between commands, so write out each path in full.
 
 Find the project root with `git rev-parse --show-toplevel`. If it has no `devkit.json`, tell the user the project is not under the kit and to run `/devkit:install`, and stop.
 
-Check the **merge rule**, the rule every project's default branch carries on GitHub (ADR 0006 in the kit): run `node "${CLAUDE_PLUGIN_ROOT}/install/merge-rule.mjs" <owner/name>`, with `<owner/name>` from `gh repo view --json nameWithOwner -q .nameWithOwner`. Only that script changes a rule, and it only adds: when the `gh` login has admin rights on the repository it creates the rule where the default branch has none and adds each CI check an existing rule does not require. Keep what it prints. The message that ends this sync, at whichever stop below, gives the user every line of it as it is:
+Check the **merge rule**, the rule every project's default branch carries on GitHub (ADR 0006 in the kit): run `node "${CLAUDE_PLUGIN_ROOT}/install/merge-rule.mjs" <owner/name>`, with `<owner/name>` from `gh repo view --json nameWithOwner -q .nameWithOwner`. Only that script changes a rule, and it only adds: when the `gh` login has admin rights on the repository it creates the rule where the default branch has none, and adds each CI check that a rule for the default branch alone does not require. Keep what it prints. The message that ends this sync, at whichever stop below, gives the user every line of it as it is:
 
-- A line starting `in place`, `create merge rule` or `add required checks` says how the rule stands or what the script just did.
-- Any other line is left for the user. When it ends `Run this as an account that has them:`, the line after it is the one command that does it: keep the command whole, on a line of its own, for the user to run.
-- On exit 1, give the user what it printed on stderr: the rule could not be checked.
+- A line starting `in place`, `create merge rule` or `add required checks` says how the rule stands or what the script just did. `in place, as far as this account can see` is how the rule stands for a `gh` login without admin rights, and asks nothing of the user here.
+- A line starting `printf` is the one command that does what the line before it says: keep it whole, on a line of its own under that line, for the user to run.
+- Any other line is left for the user.
+- On exit 1, give the user what it printed on stderr as well: the rule could not be checked, or GitHub refused the change.
 
 Then run `node "${CLAUDE_PLUGIN_ROOT}/generator/generate.mjs" <root> --check`:
 

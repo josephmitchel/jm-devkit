@@ -29,7 +29,7 @@ The scripts below are the parts that must not be left to judgement. Run each as 
 | `generator/generate.mjs <dir> [--check]` | Writes the kit-owned files from `<dir>/devkit.json` and removes the retired ones, printing `wrote <path>` or `removed <path>`; with `--check`, lists the ones behind, and says on stderr which of them are retired. | 0 level, 1 behind, 2 no or invalid `devkit.json` |
 | `install/settings.mjs <dir> [--dry-run]` | Removes the permission rules in `.claude/settings.json` that make an agent ask before a plain `git commit` or `git push`. | 0, or 2 not JSON |
 | `install/label.mjs <repo> [--dry-run]` | Creates `review-now` if the repo lacks it. Prints `create review-now`. | 0, 1 gh failed |
-| `install/merge-rule.mjs <repo> [--dry-run]` | Reads the repo's rulesets and its CI workflow. Creates the merge rule if the default branch lacks it, and adds each CI check the rule does not require. Prints `in place`, or a line for each thing it did or leaves to the owner. | 0 whatever the rule's state, 1 gh failed |
+| `install/merge-rule.mjs <repo> [--dry-run]` | Reads the repo's rulesets and its CI workflow. Creates the merge rule if the default branch lacks it, and adds each CI check a rule for the default branch alone does not require. Prints `in place`, or a line for each thing it did or leaves to the owner. | 0 whatever the rule's state, 1 gh failed |
 
 `<repo>` is `owner/name`. `app.mjs` reads the App's client id and private key from `~/.config/jm-devkit/` (`secrets.env` and `reviewer-app-private-key.pem`, both readable only by the owner; `DEVKIT_CONFIG_DIR` points it elsewhere). Never read, print, `source` or copy a secret value yourself: only the script touches them.
 
@@ -94,15 +94,17 @@ If the owner answers the plan by saying the project should stay on GitHub Action
 
 ## The merge rule
 
-The **merge rule** is the rule every project's default branch carries on GitHub; ADR 0006 in the kit says what it is and what rests on it. Only `merge-rule.mjs` changes it, and it only adds: it creates the rule where the default branch has none, and adds each CI check an existing rule does not require. Both need admin rights on the repository, which an agent's `gh` login may not have.
+The **merge rule** is the rule every project's default branch carries on GitHub; ADR 0006 in the kit says what it is and what rests on it. Only `merge-rule.mjs` changes it, and it only adds: it creates the rule where the default branch has none, and adds each CI check that a rule for the default branch alone does not require. Both need admin rights on the repository, which an agent's `gh` login may not have.
 
 Each line the script prints goes into the plan by how it starts:
 
-- `in place`: under "Merge rule", the whole line as it is. Nothing is left to do.
+- `in place` and nothing more: under "Merge rule". Nothing is left to do.
+- `in place, as far as this account can see`: under "Left for you", the whole line as it is. The `gh` login is not shown who may bypass the rule, so an account with admin rights has still to confirm that nobody can, with the command the line ends on. A project is registered on the apps machine only after that.
 - `create merge rule` or `add required checks`: under "Merge rule", as it is. Step 4 makes the change.
-- Any other line is the owner's, and goes under "Left for you" as it is. It says the rule is missing or lacks checks and the `gh` login has no admin rights to add them, or the rule is weaker than the kit's, or a CI job's checks could not be required. When the line ends `Run this as an account that has them:`, the line after it is the one command that does it: keep the command whole, on a line of its own, for the owner to run.
+- `printf`: the one command that does what the line before it says. Keep it whole, on a line of its own under that line, for the owner to run.
+- Any other line is the owner's, and goes under "Left for you" as it is: the rule is missing or lacks checks and the `gh` login could not add them, the rule is weaker than the kit's, or CI's jobs could not be required.
 
-On exit 1 the script could not read GitHub, or GitHub refused the change: what it printed on stderr goes under "Left for you", as a check that could not be made. Nothing here blocks the plan.
+On exit 1 the script could not read GitHub, or GitHub refused the change: what it printed on stderr goes under "Left for you" with whatever it printed on stdout, as a check or a change that could not be made. Nothing here blocks the plan.
 
 ## 3. The plan
 
@@ -144,7 +146,7 @@ Blocked
 - **The merge rule**, for each line `merge-rule.mjs` printed for the owner: see "The merge rule".
 - **The steps after a move**, when the plan removes a code reviewer workflow.
 
-**An empty plan**: when there is nothing to write, remove, create or add, say `<owner/name> is level with the kit (<commit>): nothing to do.`, then `Merge rule: ` followed by the script's `in place` line when it printed one, add the "Left for you" lines that apply, remove the scratch worktree and stop. No branch, no commit, no pull request.
+**An empty plan**: when there is nothing to write, remove, create or add, say `<owner/name> is level with the kit (<commit>): nothing to do.`, then `Merge rule: in place` when that is all the script printed, add the "Left for you" lines that apply, remove the scratch worktree and stop. No branch, no commit, no pull request.
 
 ## 4. Do it
 
@@ -159,4 +161,4 @@ Only after the owner confirms the plan, and only the plan. A plan with nothing u
 7. `merge-rule.mjs $REPO`, when the plan has a change under "Merge rule". This too changes the repository at once. If it exits 1, or prints a line for the owner that the plan did not have, that joins the steps left for the owner.
 8. Remove the scratch worktree, and report: the pull request's link, the label, what the merge rule script printed, and the steps left for the owner.
 
-Running install again once the pull request is merged, the App is installed and the discussion category exists shows an empty plan with the merge rule `in place` and nothing left for the owner.
+Running install again once the pull request is merged, the App is installed and the discussion category exists shows an empty plan with nothing left for the owner but, for a `gh` login without admin rights, the merge rule's bypass list to confirm.
