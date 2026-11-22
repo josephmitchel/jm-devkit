@@ -131,7 +131,7 @@ function health(world, deploy) {
 }
 
 function loopback(world, deploy) {
-  checkLoopbackOnly(world, deploy.config.port);
+  checkLoopbackOnly(world, deploy.app.name, deploy.config.port);
 }
 
 function serve(world, deploy) {

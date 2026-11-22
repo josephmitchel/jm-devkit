@@ -111,7 +111,7 @@ Its steps, in this order every time. A step that fails ends the command with exi
 | `migrate` | Runs the section's `migrate`, the same way, if it has one. |
 | `point`, `start` | Points the service at the new release and its `start` command, and starts it. |
 | `health` | Asks the section's `healthPath` on its `port` at `127.0.0.1` until it answers with success. |
-| `loopback` | Checks that the port is listened on at loopback and at no other address. |
+| `loopback` | Checks that the app's user, and nobody else, listens on the port, and that the app's user listens at loopback and at no other address, on that port or any other. |
 | `serve` | Maps the app's Serve port to the section's `port`. |
 | `prune` | Removes all but the three newest releases. |
 
@@ -123,7 +123,7 @@ The dump has the time of its deploy's release in its name. It is in `pg_dump`'s 
 
 The health check gives the app 90 seconds from its start. It asks again every second, gives each ask 30 seconds to be answered, and takes only a 2xx status as success: a redirect is not. The service restarts an app that exits, five seconds later, so an app that fails at start is tried again within the limit.
 
-The loopback check is why an app's `start` command must listen on `127.0.0.1`: an app open on another address can be reached around Tailscale Serve, which is what knows who is asking. For the same reason a `deploy` section's `port` cannot be a Serve port of any app on the machine, where Tailscale itself listens, and such a section is refused at `config`.
+The loopback check is why an app's `start` command must listen on `127.0.0.1`: an app open on another address can be reached around Tailscale Serve, which is what knows who is asking. It looks at every TCP port the app's Linux user listens on once the app has answered, not only the section's `port`, so a second listener the app opens elsewhere is refused too. It also refuses a `port` that another user of the machine listens on: two apps given the same `port` would otherwise have the first answer for the second. For the same reason a `deploy` section's `port` cannot be a Serve port of any app on the machine, where Tailscale itself listens, and such a section is refused at `config`.
 
 The fetch accepts only the SSH host keys GitHub publishes, which the kit carries in `github-host-keys.mjs`, so the first fetch asks nothing and trusts nobody. If GitHub changes a key, a fetch fails until the kit has the new one and the setup script has been run again.
 
@@ -396,5 +396,5 @@ For whoever changes the commands. They are plain Node modules with no dependenci
 - `install.mjs` makes root's copy: this directory's modules and templates. A kit file outside this directory that a command imports is added to its `KIT_FILES`, or the copy on the machine will not have it.
 - `test-helpers.mjs` has the temp machine, the fake `run`, `registered(paths, { name })`, which registers an app there as the command does, and `appsMachine(argv)`, which runs a whole command and gives back its exit code and output.
 - `releases.mjs` fetches the default branch, names and lists an app's releases, records the `deploy` section each was deployed with, and prunes them. `github-host-keys.mjs` holds the host keys a fetch accepts.
-- `health.mjs` asks an app's health path until it answers or the time limit passes, and `loopback.mjs` checks what a port is listened on at.
+- `health.mjs` asks an app's health path until it answers or the time limit passes, and `loopback.mjs` checks who listens on an app's port and where the app's user listens.
 - `commands/deploy.mjs` is a list of named steps, `STEPS`, each a function of the world and the deploy so far. `deployPrograms` in the test helpers stands in for the programs a deploy runs.

@@ -49,7 +49,7 @@ export function machinePrograms({ users = [], groups = [], taken = [], port = 54
   const present = new Set(users);
   const enabled = new Set();
   return (program, args, { input = '' } = {}) => {
-    if (program === 'id') return { code: present.has(args.at(-1)) ? 0 : 1 };
+    if (program === 'id') return present.has(args.at(-1)) ? { stdout: `${standInUid(args.at(-1))}\n` } : { code: 1, stderr: `id: ${args.at(-1)}: no such user\n` };
     if (program === 'getent' && args[0] === 'group') return { code: groups.includes(args.at(-1)) ? 0 : 2 };
     if (program === 'useradd') present.add(args.at(-1));
     if (program === 'systemctl' && args[0] === 'is-enabled') return { code: enabled.has(args.at(-1)) ? 0 : 1 };
@@ -64,6 +64,12 @@ export function machinePrograms({ users = [], groups = [], taken = [], port = 54
     return {};
   };
 }
+
+/** The uid the stand-in `id` gives a Linux user. */
+export const standInUid = (user) => 1000 + [...user].reduce((sum, letter) => sum + letter.charCodeAt(0), 0);
+
+/** A line of `ss -H -ltne` for a TCP listener at `address` and `port` whose socket is the user `uid`'s: root's has no uid. */
+export const listening = (address, port, uid = 0) => `LISTEN 0      511    ${address}:${port}    0.0.0.0:* ${uid ? `uid:${uid} ` : ''}ino:4242 sk:2a cgroup:/system.slice/made-up.service <->`;
 
 /** Each call a fake `run` recorded, as the command line it stands for. */
 export const commandLines = (calls) => calls.map(({ program, args }) => [program, ...args].join(' '));
@@ -201,7 +207,7 @@ export function deployPrograms(paths, app, remote, behaviour = {}) {
     } else if (program === 'ss') {
       events.push('loopback');
       const port = remote.config?.deploy?.port;
-      return { stdout: (behaviour.listeners ?? [`LISTEN 0 511 127.0.0.1:${port} 0.0.0.0:*`]).map((line) => `${line}\n`).join('') };
+      return { stdout: (behaviour.listeners ?? [listening('127.0.0.1', port, standInUid(app))]).map((line) => `${line}\n`).join('') };
     } else if (program === 'tailscale') {
       events.push('serve');
     }

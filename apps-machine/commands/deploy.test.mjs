@@ -6,7 +6,7 @@ import path from 'node:path';
 import { commitOf, deployConfigOf, releasesOf } from '../releases.mjs';
 import { servicePointsAt } from '../service.mjs';
 import { readSettings, writeSettings } from '../settings.mjs';
-import { appsMachine, commandLines, deployPrograms, fakeRun, machine, mode, registered } from '../test-helpers.mjs';
+import { appsMachine, commandLines, deployPrograms, fakeRun, listening, machine, mode, registered, standInUid } from '../test-helpers.mjs';
 
 const A = 'a'.repeat(40);
 const B = 'b'.repeat(40);
@@ -287,7 +287,8 @@ test('a failing migrate, health path or loopback check ends with the previous re
   for (const [behaviour, message] of [
     [{ exits: { 'npm run migrate': 1 } }, 'the deploy stopped at migrate: `npm run migrate` exited with 1'],
     [{ unhealthy: [B] }, 'the deploy stopped at health: /healthz on port 3000 did not answer with success within 90 seconds'],
-    [{ listeners: ['LISTEN 0 511 0.0.0.0:3000 0.0.0.0:*'] }, 'the deploy stopped at loopback: port 3000 is open on 0.0.0.0: an app listens on loopback only (127.0.0.1)'],
+    [{ listeners: [listening('0.0.0.0', 3000, standInUid('sample'))] }, 'the deploy stopped at loopback: sample listens on 0.0.0.0, port 3000: an app listens on loopback only (127.0.0.1)'],
+    [{ listeners: [listening('127.0.0.1', 3000, standInUid('example_app'))] }, `the deploy stopped at loopback: port 3000 is listened on by another user of this machine (uid ${standInUid('example_app')}), not by sample: two apps cannot have the same port`],
   ]) {
     const w = await deployedOnce();
     Object.assign(w.behaviour, behaviour);
@@ -355,7 +356,7 @@ test('a failed first deploy leaves the service stopped, pointing at nothing, and
   for (const [behaviour, step] of [
     [{ exits: { 'npm run migrate': 1 } }, 'migrate'],
     [{ healthy: false }, 'health'],
-    [{ listeners: ['LISTEN 0 511 0.0.0.0:3000 0.0.0.0:*'] }, 'loopback'],
+    [{ listeners: [listening('0.0.0.0', 3000, standInUid('sample'))] }, 'loopback'],
   ]) {
     const { paths, calls, deploy } = world({ behaviour });
     const done = await deploy();
