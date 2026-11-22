@@ -26,7 +26,7 @@ PLAYWRIGHT_VERSION=1.63.0
 AGENT_USER=agent
 REVIEWER_USER=reviewer
 
-# The code reviewer. The units in vm/systemd name the same paths.
+# The code reviewer. Its units, vm/systemd/code-reviewer-*, name the same paths.
 KIT_REPO=https://github.com/josephmitchel/jm-devkit.git
 REVIEWER_VAR=/var/lib/code-reviewer
 KIT_DIR=$REVIEWER_VAR/kit
@@ -299,7 +299,8 @@ as_reviewer git config --global credential.helper "!node '$KIT_DIR/reviewer/bin/
 
 step "The code reviewer's services and timers"
 changed=no
-# Every service and timer in vm/systemd is installed, so a second pair drops in beside the first.
+# Every code-reviewer-* service and timer in vm/systemd is installed, so a second pair drops in
+# beside the first. The other units there are the apps machine's, and are not installed here.
 for unit in "$UNITS_DIR"/code-reviewer-*.service "$UNITS_DIR"/code-reviewer-*.timer; do
   install_unit "$unit" "/etc/systemd/system/$(basename "$unit")"
 done

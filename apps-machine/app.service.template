@@ -1,5 +1,6 @@
 # The service of one app on the apps machine. `apps-machine register` writes a unit from this
-# template for each app, with the app's name and paths where the double braces are.
+# template for each app, with the app's name and paths where the double braces are, and each
+# deploy writes it again if this template has changed.
 [Unit]
 Description=App {{app}}
 Wants=network-online.target

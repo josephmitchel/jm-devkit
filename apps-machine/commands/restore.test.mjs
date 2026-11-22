@@ -14,11 +14,9 @@ const STAMP = '20261121T143005Z';
 const NIGHT_SETTINGS = 'DATABASE_URL=postgres://sample:0ldpassw0rd@127.0.0.1:5432/sample\nKEY="that night\'s"\n';
 
 /**
- * A machine with `sample` registered and stand-ins for what a restore runs on it. `tar` is the
- * machine's own. Postgres is `state.data`, the text the database holds (null while it is dropped):
- * a dump of it is the stand-in dump holding that text, so a restore is seen to bring data back, and
- * nothing else is a dump. `state.running` is the service, `state.events` names what was done in order, and a
- * name in `state.fails` makes that fail. Deployed, the app's release answers on port 4310 at /healthz.
+ * A machine with `sample` registered, the machine's own `tar`, and stand-ins for the rest. Postgres
+ * is `state.data`, the text the database holds: a dump of it is the stand-in dump of that text.
+ * `state.running` is the service, `state.events` what was done, and a name in `state.fails` fails.
  */
 function sampleMachine({ data = 'as it is now', deployed = true } = {}) {
   const paths = machine();

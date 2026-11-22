@@ -156,15 +156,10 @@ export function openedBundle(file) {
 }
 
 /**
- * A `respond` for `fakeRun` that stands in for what a deploy of `app` runs, over `machinePrograms`.
- * `remote` is the repository's default branch as GitHub has it, and a test changes it between
- * deploys: `commit`, and `config`, the object or text of its project config (none when undefined).
- * `behaviour` is how the build behaves on this machine, also a test's to change: `exits` gives the
- * exit code of a command line run as the app's user, or of any other program's whole command line,
- * `healthy` whether the health path answers, `interruptedAt: 'health'` an interrupt while it is first asked, `unhealthy` the commits whose release does not answer
- * it while the others do, and `listeners` the lines `ss` prints. `events` names each thing the
- * deploy did, in order, with the release the service pointed at when it was migrated and when it
- * was started.
+ * A `respond` for `fakeRun` standing in for what a deploy of `app` runs. `remote` is the default
+ * branch as GitHub has it (`commit`, `config`); `behaviour` is how the build behaves here
+ * (`exits` by command line, `healthy`, `unhealthy` commits, `interruptedAt`, `listeners`). A test
+ * changes either between deploys. `events` names what the deploy did, in order.
  */
 export function deployPrograms(paths, app, remote, behaviour = {}) {
   const programs = machinePrograms({ users: [app] });

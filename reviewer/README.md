@@ -629,7 +629,7 @@ intake → audit (scout + 10 auditors) → synthesis ──┬─ clean → gate
 - `src/queue.ts` — the queue of reviews as decisions: who has the machine, which review starts next, and what a review's run leaves of its event; `src/queue-run.ts` — one turn of the queue; `src/locks.ts` — every advisory lock the code reviewer takes (migrations, a pass, the two that keep agent jobs to one at a time, a project's nightly checks) and the proof that a lock holds; `src/reply-authority.ts` — whose comment counts as the owner's word
 - `src/failure-side.ts` — which side a failed run is on, from the type of its error; `src/failure-issue.ts` — what a failure issue says and when it is opened, commented on and closed; `src/failure-report.ts` — which places a finished run is reported to, and the reporting (`reportRun`)
 - `bin/update.mjs` — brings the code reviewer's own checkout up to date before a nightly run; `src/project-row.ts` — creates a project's row the first time it is met
-- `../vm/dev-vm-setup.sh` — the development machine's setup; `../vm/systemd/` — the units it installs for the code reviewer
+- `../vm/dev-vm-setup.sh` — the development machine's setup; `../vm/systemd/code-reviewer-*` — the units it installs for the code reviewer (the other units there are the apps machine's)
 - `src/agents/run-agent.ts` — Agent SDK wrapper (structured output, session recording, resume)
 - `worker/` — the Cloudflare Worker that starts each repo's sweep on time, as the App (`worker/README.md`)
 - `prompts/` — auditor definitions (ISO 25010 verbatim) and pipeline role prompts; `prompts/sweep/` — the sweep's framing of scout, auditor, synthesis and the ticket judge

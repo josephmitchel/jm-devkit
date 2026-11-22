@@ -1,6 +1,6 @@
 // An app's service: one systemd unit per app, written from `app.service.template`. The unit runs
-// whatever `paths.startFile` holds, from wherever `paths.currentRelease` links to, so pointing the
-// service at a release is writing those two and never the unit.
+// whatever `paths.startFile` holds, from wherever `paths.currentRelease` links to, so a release
+// never changes the unit: pointing the service rewrites the unit only when the template has changed.
 
 import fs from 'node:fs';
 import path from 'node:path';

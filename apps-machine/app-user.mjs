@@ -1,5 +1,6 @@
 // An app's Linux user, named for the app: no shell, no password, no group but its own. What it may
-// read is settled by who owns each directory, so every directory an app has is made by `ownedDir`.
+// read is settled by who owns each directory: `ownedDir` makes the ones `register` gives it, and
+// `makeRelease` in releases.mjs hands it each release.
 
 import fs from 'node:fs';
 import path from 'node:path';

@@ -1,8 +1,6 @@
-// An app's releases: one directory per deploy in `paths.releasesDir`, named for when the deploy
-// began and the commit it holds, `20261121T143005Z-<commit>`, so names sort oldest first and a
-// release's commit is read from its name. A release is a shallow clone of the repository's default
-// branch, fetched by root and then handed to the app's user. From then on root runs no git in it,
-// and reads the release's deploy section from its own record of it, `<release>.json`, beside the release.
+// An app's releases: one directory per deploy, named `20261121T143005Z-<commit>` so names sort
+// oldest first. Root fetches a release and hands it to the app's user; from then on root runs no
+// git in it, and reads its deploy section from root's own record, `<release>.json`, beside it.
 
 import fs from 'node:fs';
 import path from 'node:path';

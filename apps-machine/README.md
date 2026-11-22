@@ -384,7 +384,7 @@ Building an app again from nothing is: the setup script, `register`, `restore --
 
 For whoever changes the commands. They are plain Node modules with no dependencies, tested with `node --test 'apps-machine/**/*.test.mjs'`, which CI runs as its own job.
 
-- `apps-machine.mjs` is the entry point. Each command is a module in `commands/` exporting `usage`, `summary` and `command(args, { run, paths, out, err })`, which returns when done and throws to fail (a `UsageError` from `usage.mjs` for bad arguments). Adding a command is one line in `COMMANDS`.
+- `apps-machine.mjs` is the entry point. Each command is a module in `commands/` exporting `usage`, `summary` and `command(args, { run, paths, out, err, now })`, which returns when done and throws to fail (a `UsageError` from `usage.mjs` for bad arguments). Adding a command is one line in `COMMANDS`.
 - `run.mjs` is the one way a command starts a program, and the only module that may: a test fails if another one imports Node's process-starting modules. Tests pass a fake `run` instead. It throws `Interrupted`, once, for a program that SIGINT, SIGTERM or SIGHUP ended; the entry point keeps the process alive through those signals, so a command's `finally` and its failure handling run. Code that catches an error and goes on to the next app rethrows an `Interrupted`.
 - `paths.mjs` holds every path on the machine under one root, which tests point at a temp dir. A command takes its paths from there, never from a literal.
 - `registry.mjs` reads and writes the registrations, and is where a name, a repository and a Serve port are checked.

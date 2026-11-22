@@ -1,10 +1,6 @@
 #!/usr/bin/env node
 // Copies the commands, and the kit files they import, from this checkout into a directory of
-// root's. The setup script runs it; root's commands then run from the copy, never the checkout.
-//
-//   node install.mjs <absolute directory>
-//
-// Exit 0 done, 2 bad arguments.
+// root's, for root to run them from: node install.mjs <absolute directory>
 
 import fs from 'node:fs';
 import path from 'node:path';
