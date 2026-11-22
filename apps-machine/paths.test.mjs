@@ -46,3 +46,10 @@ test('the setup script states each directory it makes as paths.mjs has it', () =
     assert.equal(line[1], expected, variable);
   }
 });
+
+test('a deploy\'s dumps are in the backup directory by app, its checkout waits beside the releases, and GitHub\'s host keys are root\'s', () => {
+  const paths = machinePaths();
+  assert.equal(paths.deployDumps('sample'), '/var/lib/apps-machine/backups/deploys/sample');
+  assert.equal(paths.incomingRelease('sample'), '/var/lib/apps-machine/apps/sample/incoming');
+  assert.equal(paths.githubHostKeys, '/etc/apps-machine/github-host-keys');
+});

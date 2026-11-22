@@ -40,5 +40,11 @@ export function machinePaths(root = '/') {
     /** The start command of the current release, which the service runs with `sh`. */
     startFile: (app) => path.join(appDir(app), 'start'),
     unitFile: (app) => path.join(root, 'etc/systemd/system', serviceName(app)),
+    /** The dumps a deploy takes of an app's database before it changes anything, one file per deploy. */
+    deployDumps: (app) => path.join(stateDir, 'backups/deploys', app),
+    /** Root's checkout of the commit being deployed, until it becomes a release. */
+    incomingRelease: (app) => path.join(appDir(app), 'incoming'),
+    /** The host keys root's ssh accepts from GitHub, written by a deploy before it fetches. */
+    githubHostKeys: path.join(configDir, 'github-host-keys'),
   };
 }
