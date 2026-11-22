@@ -4,7 +4,7 @@ import path from 'node:path';
 import { makeBundle, newWorkDir, parseBundleName, publicKeyIsSet } from '../bundle.mjs';
 import { aliveAddressOf, bundlesOnStorage, removeFromStorage, requestAlive, storageOf, uploadBundle } from '../offsite.mjs';
 import { readRegistry } from '../registry.mjs';
-import { expiredOnMachine, expiredOnStorage } from '../retention.mjs';
+import { DAYS_KEPT_ON_MACHINE, expiredOnMachine, expiredOnStorage } from '../retention.mjs';
 import { Interrupted } from '../run.mjs';
 import { UsageError } from '../usage.mjs';
 
@@ -44,7 +44,7 @@ export function bundleEveryApp(world) {
   } finally {
     fs.rmSync(workDir, { recursive: true, force: true });
   }
-  for (const { app, name } of removeExpired(paths, night)) out.write(`${app}: removed ${name}, older than seven days\n`);
+  for (const { app, name } of removeExpired(paths, night)) out.write(`${app}: removed ${name}, older than ${DAYS_KEPT_ON_MACHINE} days\n`);
   return night;
 }
 

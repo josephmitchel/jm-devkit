@@ -40,15 +40,6 @@ export const STEPS = [
   ['prune', prune, keepNew],
 ];
 
-/** A deploy that a step ended. `step` is that step's name in `STEPS`. */
-export class DeployStopped extends Error {
-  constructor(step, cause) {
-    super(`the deploy stopped at ${step}: ${cause.message}`);
-    this.name = 'DeployStopped';
-    this.step = step;
-  }
-}
-
 export function command(args, world) {
   if (args.length !== 1 || args[0].startsWith('-')) {
     throw new UsageError(args.length > 1 ? 'a deploy takes an app\'s name and nothing else: what it deploys is the default branch as GitHub has it' : '');
@@ -62,7 +53,7 @@ export function command(args, world) {
         step(world, deploy);
       } catch (e) {
         afterFailure(world, deploy);
-        throw new DeployStopped(name, e);
+        throw new Error(`the deploy stopped at ${name}: ${e.message}`);
       }
     }
   } finally {

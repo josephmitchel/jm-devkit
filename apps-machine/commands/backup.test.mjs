@@ -173,9 +173,9 @@ test('bundles older than seven days are removed once the app has its bundle for 
   assert.equal(result.out, [
     `example_app: ${paths.nightlyDir}/example_app-2026-11-21.tar.age`,
     `sample: ${paths.nightlyDir}/sample-2026-11-21.tar.age`,
-    'example_app: removed example_app-2026-11-14.tar.age, older than seven days',
-    'sample: removed sample-2025-11-21.tar.age, older than seven days',
-    'sample: removed sample-2026-11-14.tar.age, older than seven days',
+    'example_app: removed example_app-2026-11-14.tar.age, older than 7 days',
+    'sample: removed sample-2025-11-21.tar.age, older than 7 days',
+    'sample: removed sample-2026-11-14.tar.age, older than 7 days',
     'example_app: uploaded example_app-2026-11-21.tar.age',
     'sample: uploaded sample-2026-11-21.tar.age',
     'The alive request was made.',
