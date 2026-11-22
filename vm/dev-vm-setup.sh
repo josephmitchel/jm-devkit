@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds the dev VM from a fresh Ubuntu Server LTS install: toolchains, Postgres,
+# Builds the development machine from a fresh Ubuntu Server LTS install: toolchains, Postgres,
 # the two unprivileged users (one for agents, one for the code reviewer), and the
 # code reviewer as a service of its own user, started by a timer.
 # Safe to run again. Run it from the admin account, from a checkout of the kit:
