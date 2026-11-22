@@ -11,6 +11,7 @@ import { UsageError } from './usage.mjs';
 export const COMMANDS = {
   list: await import('./commands/list.mjs'),
   register: await import('./commands/register.mjs'),
+  backup: await import('./commands/backup.mjs'),
   logs: await import('./commands/logs.mjs'),
 };
 
@@ -20,7 +21,7 @@ function usage() {
 }
 
 /** The CLI. Returns the exit code. */
-export async function main(argv, { run = realRun, paths = machinePaths(), out = process.stdout, err = process.stderr, uid = process.getuid() } = {}) {
+export async function main(argv, { run = realRun, paths = machinePaths(), out = process.stdout, err = process.stderr, uid = process.getuid(), now = () => new Date() } = {}) {
   const [name, ...args] = argv;
   if (!Object.hasOwn(COMMANDS, name ?? '')) {
     err.write(usage());
@@ -31,7 +32,7 @@ export async function main(argv, { run = realRun, paths = machinePaths(), out = 
     return 1;
   }
   try {
-    await COMMANDS[name].command(args, { run, paths, out, err });
+    await COMMANDS[name].command(args, { run, paths, out, err, now });
     return 0;
   } catch (e) {
     if (e instanceof UsageError) {

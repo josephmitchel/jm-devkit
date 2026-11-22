@@ -22,16 +22,21 @@ export function writeSettings(paths, app, text) {
   fs.renameSync(`${file}.new`, file);
 }
 
-/** An app's settings as an environment object. Throws, without quoting the file, when a line is not a setting. */
-export function readSettings(paths, app) {
+/** An app's settings file as it is, byte for byte. */
+export function readSettingsFile(paths, app) {
   const file = paths.settingsFile(app);
-  let text;
   try {
-    text = fs.readFileSync(file, 'utf8');
+    return fs.readFileSync(file);
   } catch (e) {
     if (e.code === 'ENOENT') throw new Error(`${app} has no settings file: ${file} is missing`);
     throw e;
   }
+}
+
+/** An app's settings as an environment object. Throws, without quoting the file, when a line is not a setting. */
+export function readSettings(paths, app) {
+  const file = paths.settingsFile(app);
+  const text = readSettingsFile(paths, app).toString('utf8');
   const settings = {};
   LINE.lastIndex = 0;
   while (LINE.lastIndex < text.length) {
