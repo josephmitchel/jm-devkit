@@ -40,5 +40,11 @@ export function machinePaths(root = '/') {
     /** The start command of the current release, which the service runs with `sh`. */
     startFile: (app) => path.join(appDir(app), 'start'),
     unitFile: (app) => path.join(root, 'etc/systemd/system', serviceName(app)),
+    /** The owner's public key for backups, in a file `age` reads recipients from. The private half is never on the machine. */
+    backupPublicKey: path.join(configDir, 'backup-public-key'),
+    /** The nights' encrypted bundles, root's alone. */
+    nightlyDir: path.join(stateDir, 'backups/nightly'),
+    /** Where a backup run works: a directory per run, removed when the run ends. */
+    backupWorkDir: path.join(stateDir, 'backups/work'),
   };
 }
