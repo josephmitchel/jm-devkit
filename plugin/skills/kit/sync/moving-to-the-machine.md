@@ -1,6 +1,6 @@
 # A pull request that moves a project to the machine
 
-A project whose default branch has a code reviewer workflow is still on GitHub Actions: the workflow runs its nightly sweep, its `landed` job and its `review-now` review there, and the code reviewer on the owner's machine leaves the project alone. A pull request that removes the workflow is a **move**: merging it is the moment the machine takes the project over. Until the merge nothing changes.
+A project whose default branch has a code reviewer workflow is still on GitHub Actions: the workflow runs its nightly sweep, its `landed` job and its `review-now` review there, and the code reviewer on the development machine leaves the project alone. A pull request that removes the workflow is a **move**: merging it is the moment the machine takes the project over. Until the merge nothing changes.
 
 The workflow is the retired kit-owned `.github/workflows/nightly-sweep.yml` (the generator prints `removed` for it), or, in a project from before the kit, a hand-copied workflow whose job `uses:` the code reviewer's action.
 
@@ -13,13 +13,13 @@ A move is the owner's decision, made by merging. So the pull request says it is 
 
 ## 2. Tell the user now
 
-In sync, before opening the pull request, tell the user in one sentence that merging it moves `<owner/name>`'s code reviewer from GitHub Actions to the owner's machine. If they did not mean to move the project, stop here: remove the worktree and its branch, and open nothing.
+In sync, before opening the pull request, tell the user in one sentence that merging it moves `<owner/name>`'s code reviewer from GitHub Actions to the development machine. If they did not mean to move the project, stop here: remove the worktree and its branch, and open nothing.
 
 In install, the plan's line for the workflow says the same thing, and the owner's yes to the plan is the answer.
 
 ## 3. The title
 
-`Move the code reviewer to the owner's machine (kit <kit>)`, whatever else the pull request changes.
+`Move the code reviewer to the development machine (kit <kit>)`, whatever else the pull request changes.
 
 ## 4. The body
 
@@ -28,7 +28,7 @@ Start the body with this section, filled in, ahead of anything else it says. Lea
 ```markdown
 ## Merging this moves the project to the machine
 
-This pull request deletes `<workflow path>`, the workflow that runs the code reviewer on GitHub Actions. The kit has retired it. **Merging is the move**: from then on the code reviewer on the owner's machine handles this project. Its nightly run sweeps the project, and its poller acts within minutes on a merged pull request, a `review-now` label, your answer to a waiting review, and a passed pull request whose head moves. Until this is merged the project stays on GitHub Actions, exactly as it is.
+This pull request deletes `<workflow path>`, the workflow that runs the code reviewer on GitHub Actions. The kit has retired it. **Merging is the move**: from then on the code reviewer on the development machine handles this project. Its nightly run sweeps the project, and its poller acts within minutes on a merged pull request, a `review-now` label, your answer to a waiting review, and a passed pull request whose head moves. Until this is merged the project stays on GitHub Actions, exactly as it is.
 
 ### Before merging
 

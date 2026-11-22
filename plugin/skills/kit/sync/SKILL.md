@@ -1,6 +1,6 @@
 ---
 name: sync
-description: Bring the project's kit-owned files level with the installed kit, and open a pull request with the change. Removes a kit-owned file the kit has retired; removing the sweep workflow moves the project's code reviewer to the owner's machine.
+description: Bring the project's kit-owned files level with the installed kit, and open a pull request with the change. Removes a kit-owned file the kit has retired; removing the sweep workflow moves the project's code reviewer to the development machine.
 disable-model-invocation: true
 ---
 
@@ -35,7 +35,7 @@ Run `node "${CLAUDE_PLUGIN_ROOT}/generator/generate.mjs" <tmp>`. It writes only 
 
 Show the user `git -C <tmp> status --short` and the diff of the written files, in full for a file that changed and as a list for a file that is new or removed, with a sentence on what the change amounts to.
 
-**If the generator printed `removed .github/workflows/nightly-sweep.yml`, this sync is a move**: merging its pull request takes the project's code reviewer off GitHub Actions and hands the project to the code reviewer on the owner's machine. Read `${CLAUDE_PLUGIN_ROOT}/skills/kit/sync/moving-to-the-machine.md` now, before going on. It has what to gather, what to tell the user before a pull request exists, and the title and opening section the pull request must carry.
+**If the generator printed `removed .github/workflows/nightly-sweep.yml`, this sync is a move**: merging its pull request takes the project's code reviewer off GitHub Actions and hands the project to the code reviewer on the development machine. Read `${CLAUDE_PLUGIN_ROOT}/skills/kit/sync/moving-to-the-machine.md` now, before going on. It has what to gather, what to tell the user before a pull request exists, and the title and opening section the pull request must carry.
 
 ## 4. Record the kit commit
 
