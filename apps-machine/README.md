@@ -77,7 +77,7 @@ sudo apps-machine register <name> <repository> <serve-port>
 sudo apps-machine register sample git@github.com:example/sample.git 8443
 ```
 
-Gives an app everything it needs before its first deploy. Register a project only once the kit's install reports its merge rule in place: a deploy trusts the default branch and runs no checks of its own.
+Gives an app everything it needs before its first deploy. Register a project only once the kit's install reports its merge rule `in place`: a deploy trusts the default branch and runs no checks of its own.
 
 - `<name>` names the app's Linux user, its Postgres role and its database: a lowercase letter, then lowercase letters, digits or underscores, 31 characters at most, and not starting `pg_`, which Postgres keeps for itself. A name the machine or Postgres already uses for something else is refused.
 - `<repository>` is the project's GitHub SSH address, `git@github.com:<owner>/<name>.git`.

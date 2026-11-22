@@ -13,7 +13,7 @@ The apps machine runs the real copies of the owner's apps, with their real data 
 
 ## What the first decision rests on
 
-A deploy does not run a project's checks again. It trusts the default branch, and that is safe only because of the merge rule (#68): every project's default branch takes changes only through pull requests whose CI has passed, with no bypass for anyone. Install puts the rule in place and sync checks it. The apps machine holds nothing for GitHub but a read-only key for each repository, so it cannot check the rule for itself: a project is registered on the apps machine only once install reports the rule in place. Weakening the rule on a project that is deployed there weakens this decision with it.
+A deploy does not run a project's checks again. It trusts the default branch, and that is safe only because of the merge rule (ADR 0006): every project's default branch takes changes only through pull requests whose CI has passed, with no bypass for anyone. Install puts the rule in place and sync checks it. The apps machine holds nothing for GitHub but a read-only key for each repository, so it cannot check the rule for itself: a project is registered on the apps machine only once install reports the rule in place. Weakening the rule on a project that is deployed there weakens this decision with it.
 
 ## Considered options
 
