@@ -236,6 +236,13 @@ test('the timer\'s service runs this command from where the setup script links i
   assert.ok(fs.existsSync(path.join(vm, 'systemd/apps-machine-backup.timer')));
 });
 
+test('the timer\'s service waits for the network, and its unit, which anyone can read, holds neither setting', () => {
+  const service = fs.readFileSync(path.join(import.meta.dirname, '../../vm/systemd/apps-machine-backup.service'), 'utf8');
+  assert.match(service, /^Wants=network-online\.target$/m);
+  assert.match(service, /^After=(\S+ )*network-online\.target( \S+)*$/m);
+  assert.doesNotMatch(service, /^\s*(Environment|EnvironmentFile|PassEnvironment|SetCredential|LoadCredential)\w*=/m);
+});
+
 test('after a run each of the night\'s bundles is on the storage, byte for byte', async () => {
   const paths = machineWithKey('sample', 'example_app');
   const result = await backup(paths);
