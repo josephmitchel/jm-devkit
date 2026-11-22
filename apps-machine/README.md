@@ -157,6 +157,16 @@ After starting the previous release, the command asks that release's health path
 
 If going back cannot be finished, because the service will not stop or start, the command says so and says which release the service points at. It removes the failed release unless the service still points at it.
 
+#### When the service stops
+
+A stop is the same whoever asks for it, the `stop` step, `sudo systemctl restart app-<name>.service` or a shutdown: systemd sends SIGTERM to the app's processes and waits for them to end. An app that answers by exiting 143, which is 128 plus the signal's number and what many servers do, has stopped cleanly: the service ends `inactive`, not `failed`, and the journal records no failure. The unit's `SuccessExitStatus=143` says so, and 143 is the only status it adds.
+
+A crash is still a failure and is still restarted. Any other non-zero status is a failure, and whatever the status, an app that exits when nobody asked systemd to stop it is started again five seconds later. A 143 that nobody asked for is among those: it is restarted and the journal has `Scheduled restart job`, but systemd does not call it a failure, because a unit cannot say that a status is clean only during a stop.
+
+The status systemd judges is the one the service's main process ends with, and that process is the `sh` that runs the `start` command. When `start` begins with `exec`, the app takes the shell's place and its status is the service's. Without `exec` the shell is the main process: the stop's SIGTERM ends it, which systemd takes as clean whatever the app then exits with, and when the app exits on its own the shell passes its status on.
+
+A change to `app.service.template` reaches an app that is already registered at its next deploy, with no need to register it again: once the setup script has replaced root's copy, `point` writes the unit again because it differs from the template and has systemd read its units again, so `start` runs the app under the new unit. The `stop` of that one deploy is still judged by the old unit.
+
 #### Rehearsing with the sample app
 
 The kit is a project with an app of its own to deploy: `sample-app/`, which the `deploy` section of the kit's `devkit.json` runs. It counts its visits in a table that its one migration makes, and needs no packages. To rehearse on a machine, register the kit's own repository and deploy it:
@@ -423,7 +433,7 @@ For whoever changes the commands. They are plain Node modules with no dependenci
 - `registry.mjs` reads and writes the registrations, and is where a name, a repository and a Serve port are checked.
 - `settings.mjs` reads an app's settings file, and runs a command as the app's user with those values in its environment.
 - `database.mjs` makes an app's role and database, dumps the database to a file, says whether a file is a dump `pg_restore` can read, and puts a dump back in place of the database.
-- `service.mjs` writes an app's unit from `app.service.template`, stops and starts the service, and points it at a release.
+- `service.mjs` writes an app's unit from `app.service.template`, stops and starts the service, and points it at a release. Pointing writes the unit again when it differs from the template and then runs `systemctl daemon-reload`, which is how a change to the template reaches the apps already registered.
 - `serve.mjs` maps an app's Serve port to its local port.
 - `app-user.mjs` makes an app's Linux user and the directories it may enter.
 - `install.mjs` makes root's copy: this directory's modules and templates. A kit file outside this directory that a command imports is added to its `KIT_FILES`, or the copy on the machine will not have it.
