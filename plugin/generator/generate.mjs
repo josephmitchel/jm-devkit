@@ -15,7 +15,7 @@ export const SWEEP_WORKFLOW = '.github/workflows/nightly-sweep.yml';
  * A project that still has one is behind, and writing removes it.
  */
 export const RETIRED = {
-  [SWEEP_WORKFLOW]: "removing it moves the project's code reviewer from GitHub Actions to the owner's machine",
+  [SWEEP_WORKFLOW]: "removing it moves the project's code reviewer from GitHub Actions to the development machine",
 };
 
 /** Every kit-owned file for `config`, as `{ path: contents }` with paths relative to the project root. */

@@ -3,7 +3,7 @@
 // repository already has is left alone. Each value goes to `gh secret set` on stdin: it is never
 // an argument, never printed and never logged.
 //
-// Install no longer runs this: the code reviewer runs on the owner's machine and a project there
+// Install no longer runs this: the code reviewer runs on the development machine and a project there
 // needs no repository secrets. It stays for a project still on GitHub Actions, whose workflow
 // reads the four, until the last one has moved.
 //

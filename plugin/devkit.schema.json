@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://raw.githubusercontent.com/josephmitchel/jm-devkit/main/plugin/devkit.schema.json",
   "title": "devkit.json",
-  "description": "A project's config: how it uses the kit, and the facts about itself the kit needs. It sits at the project root and is project-owned. The code reviewer reads it from the project's checkout on every run, and the generator turns it into the project's kit-owned files. Both validate against this file through one small interpreter (plugin/devkit-config.mjs), which understands only the keywords used here: a new keyword fails its tests until it learns it.",
+  "description": "A project's config: how it uses the kit, and the facts about itself the kit needs. It sits at the project root and is project-owned. The code reviewer reads it from the project's checkout on every run, the generator turns it into the project's kit-owned files, and the apps machine reads from it how to deploy the project. All validate against this file through one small interpreter (plugin/devkit-config.mjs), which understands only the keywords used here: a new keyword fails its tests until it learns it.",
   "type": "object",
   "required": ["modules", "reviewer"],
   "additionalProperties": false,
@@ -25,7 +25,7 @@
       "pattern": "^[0-9a-f]{7,40}$"
     },
     "sweep": {
-      "description": "Retired, and ignored by a code reviewer that runs on the owner's machine, which sweeps every project in one nightly run. Still accepted so that a project whose sweep is still dispatched by GitHub Actions keeps validating.",
+      "description": "Retired, and ignored by a code reviewer that runs on the development machine, which sweeps every project in one nightly run. Still accepted so that a project whose sweep is still dispatched by GitHub Actions keeps validating.",
       "type": "object",
       "required": ["hour"],
       "additionalProperties": false,
@@ -84,7 +84,7 @@
           "items": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" }
         },
         "services": {
-          "description": "Retired, and ignored by the code reviewer: on the owner's machine the tests get their databases from `databases`. Still accepted for a project whose tests still run in GitHub Actions: services the tests need, in the shape of a GitHub Actions job's `services:` map, keyed by the service's id. The project's sweep workflow carries them on the jobs that run the tests (`sweep` and `review-now`), as the generator wrote them before that workflow was retired; changing them here no longer changes the workflow. Their connection details reach the tests through `env`.",
+          "description": "Retired, and ignored by the code reviewer: on the development machine the tests get their databases from `databases`. Still accepted for a project whose tests still run in GitHub Actions: services the tests need, in the shape of a GitHub Actions job's `services:` map, keyed by the service's id. The project's sweep workflow carries them on the jobs that run the tests (`sweep` and `review-now`), as the generator wrote them before that workflow was retired; changing them here no longer changes the workflow. Their connection details reach the tests through `env`.",
           "type": "object",
           "propertyNames": { "pattern": "^[A-Za-z_][A-Za-z0-9_-]*$" },
           "additionalProperties": {
@@ -147,7 +147,7 @@
       }
     },
     "nightly": {
-      "description": "What the code reviewer does for the project each night besides its sweep. Read only by a code reviewer that runs on the owner's machine: a project whose sweep is still dispatched by GitHub Actions may set it, and nothing there runs it.",
+      "description": "What the code reviewer does for the project each night besides its sweep. Read only by a code reviewer that runs on the development machine: a project whose sweep is still dispatched by GitHub Actions may set it, and nothing there runs it.",
       "type": "object",
       "additionalProperties": false,
       "properties": {
@@ -175,6 +175,45 @@
           }
         }
       }
+    },
+    "deploy": {
+      "description": "How the apps machine deploys the project: what it runs to put the default branch's build in service, and how it tells that the app is up. Read from the commit being deployed. Commands run with `sh -c` from the root of a fresh checkout of that commit, as the app's own user, with the app's settings in their environment. A project that is not deployed leaves the section out, and nothing else about it changes.",
+      "type": "object",
+      "required": ["setup", "build", "start", "port", "healthPath"],
+      "additionalProperties": false,
+      "properties": {
+        "setup": {
+          "description": "Run first in the new checkout, to install dependencies and the like.",
+          "type": "string",
+          "minLength": 1
+        },
+        "build": {
+          "description": "Run after setup, to build what start runs. The app that is running is not touched until this has succeeded.",
+          "type": "string",
+          "minLength": 1
+        },
+        "migrate": {
+          "description": "Run after the running app is stopped and before the new build is started, to bring the app's database to what the new build expects. A project that migrates as it starts, or has nothing to migrate, leaves it out.",
+          "type": "string",
+          "minLength": 1
+        },
+        "start": {
+          "description": "Starts the app, and keeps running for as long as the app does. It must listen on `port`, on loopback only.",
+          "type": "string",
+          "minLength": 1
+        },
+        "port": {
+          "description": "The local port the app listens on.",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "healthPath": {
+          "description": "The path, on `port`, that answers with success once the app is healthy, `/healthz` say. A deploy asks it after starting the new build and puts the previous build back if it does not answer in time. It starts with `/` and has no spaces; it is not a whole address.",
+          "type": "string",
+          "pattern": "^/\\S*$"
+        }
+      }
     }
   },
   "examples": [
@@ -196,6 +235,21 @@
           { "name": "canvas", "command": "npm run canvas:check" },
           { "name": "links", "command": "npm run check:links" }
         ]
+      }
+    },
+    {
+      "modules": ["process"],
+      "reviewer": {
+        "setup": "npm ci",
+        "tests": [{ "name": "unit", "command": "npm test" }]
+      },
+      "deploy": {
+        "setup": "npm ci",
+        "build": "npm run build",
+        "migrate": "npm run migrate",
+        "start": "npm start",
+        "port": 3000,
+        "healthPath": "/healthz"
       }
     },
     {

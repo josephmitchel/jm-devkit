@@ -1,4 +1,4 @@
-// The secrets file on the owner's machine: the four values every project's repository secrets
+// The secrets file on the development machine: the four values every project's repository secrets
 // are set from. It lives outside any repository and is readable only by its owner. Nothing here
 // prints, logs or returns a value inside an error message.
 

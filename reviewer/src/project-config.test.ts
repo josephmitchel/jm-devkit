@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   DevkitConfigError,
   SCHEMA_PATH,
+  parseDeployConfig,
   parseDevkitConfig,
   validate,
   type JsonSchema,
@@ -249,6 +250,92 @@ describe('readProjectSetup with harness notes that are not there', () => {
   });
 });
 
+const deploy = {
+  setup: 'npm ci',
+  build: 'npm run build',
+  start: 'npm start',
+  port: 3000,
+  healthPath: '/healthz',
+};
+
+function withDeploy(section: unknown): string {
+  return JSON.stringify({ modules: ['process'], reviewer: { tests: valid.reviewer.tests }, deploy: section });
+}
+
+function deployErrors(section: unknown): string[] {
+  try {
+    parseDeployConfig(withDeploy(section));
+  } catch (err) {
+    expect(err).toBeInstanceOf(DevkitConfigError);
+    return (err as DevkitConfigError).errors;
+  }
+  return [];
+}
+
+describe('the deploy section of a devkit.json', () => {
+  it('is returned as written, with a migrate command or without one', () => {
+    expect(parseDeployConfig(withDeploy(deploy))).toEqual(deploy);
+    const migrating = { ...deploy, migrate: 'npm run migrate' };
+    expect(parseDeployConfig(withDeploy(migrating))).toEqual(migrating);
+  });
+
+  it('is none for a project that does not declare one, which is still a valid project', () => {
+    expect(parseDeployConfig(withDeploy(undefined))).toBeNull();
+  });
+
+  it('names each required field a section leaves out, and asks for no migrate command', () => {
+    expect(deployErrors({})).toEqual([
+      'deploy.setup is required',
+      'deploy.build is required',
+      'deploy.start is required',
+      'deploy.port is required',
+      'deploy.healthPath is required',
+    ]);
+  });
+
+  it('names a port that is not a port a program can listen on', () => {
+    expect(deployErrors({ ...deploy, port: 0 })).toEqual(['deploy.port must be at least 1']);
+    expect(deployErrors({ ...deploy, port: 65536 })).toEqual(['deploy.port must be at most 65535']);
+    expect(deployErrors({ ...deploy, port: 3000.5 })).toEqual(['deploy.port must be an integer']);
+    expect(deployErrors({ ...deploy, port: '3000' })).toEqual(['deploy.port must be an integer']);
+    expect(deployErrors({ ...deploy, port: 65535 })).toEqual([]);
+  });
+
+  it('names a health path that is not a path', () => {
+    for (const healthPath of ['healthz', 'http://127.0.0.1:3000/healthz', '', '/health z']) {
+      const errors = deployErrors({ ...deploy, healthPath });
+      expect(errors, healthPath).toHaveLength(1);
+      expect(errors[0], healthPath).toMatch(/^deploy\.healthPath must /);
+    }
+    expect(deployErrors({ ...deploy, healthPath: '/' })).toEqual([]);
+    expect(deployErrors({ ...deploy, healthPath: '/api/health?deep=1' })).toEqual([]);
+  });
+
+  it('names an empty command, a command that is not text, and a field it does not know', () => {
+    expect(deployErrors({ ...deploy, setup: '', build: ['npm', 'run', 'build'], migrate: '', healthCheck: '/healthz' })).toEqual([
+      'deploy.setup must not be empty',
+      'deploy.build must be a string',
+      'deploy.migrate must not be empty',
+      'deploy.healthCheck is not a known field',
+    ]);
+    expect(deployErrors({ ...deploy, start: '' })).toEqual(['deploy.start must not be empty']);
+    expect(deployErrors('npm start')).toEqual(['deploy must be an object']);
+  });
+
+  it('changes nothing about how the code reviewer sets the project up and tests it', () => {
+    const config = { modules: ['process'], reviewer: { tests: valid.reviewer.tests }, nightly: valid.nightly };
+    writeConfig(config);
+    const without = readProjectSetup(checkout, row);
+    writeConfig({ ...config, deploy: { ...deploy, migrate: 'npm run migrate' } });
+    expect(readProjectSetup(checkout, row)).toEqual(without);
+  });
+
+  it('fails a run of the code reviewer when it is malformed, as any other section does', () => {
+    writeConfig({ modules: ['process'], reviewer: { tests: valid.reviewer.tests }, deploy: { ...deploy, port: 0 } });
+    expect(setupError()).toBe('devkit.json is malformed: deploy.port must be at least 1');
+  });
+});
+
 describe('the devkit.json schema', () => {
   const schema = JSON.parse(fs.readFileSync(SCHEMA_PATH, 'utf8')) as JsonSchema & { examples: unknown[] };
 
@@ -256,7 +343,7 @@ describe('the devkit.json schema', () => {
     const kitConfig = path.resolve(path.dirname(SCHEMA_PATH), '..', 'devkit.json');
     const config = parseDevkitConfig(fs.readFileSync(kitConfig, 'utf8'));
     expect(config.modules).toContain('process');
-    expect(config.reviewer.tests.map((t) => t.name)).toEqual(['reviewer', 'plugin']);
+    expect(config.reviewer.tests.map((t) => t.name)).toEqual(['reviewer', 'plugin', 'apps-machine']);
   });
 
   it('accepts each of its own examples', () => {

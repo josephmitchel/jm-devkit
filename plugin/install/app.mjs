@@ -10,12 +10,13 @@
 //     line per hour taken, `taken <h> <owner/repo> (<where it came from>)`, and one per repository
 //     whose devkit.json could not be read, `skipped <owner/repo>: <why>`.
 //
-// Exit 2 on bad arguments or when GitHub refuses the App. Exit 3 when the App's credentials are not
-// on this machine: the question could not be asked, which is not an answer either way. They are kept
-// off a machine on purpose where agents work, so a caller must not treat 3 as "not installed".
+// Exit 2 on bad arguments or when GitHub refuses the App. Exit 3 when the App's credentials cannot
+// be read here: the question could not be asked, which is not an answer either way. On the
+// development machine they are in a file no agent can read, so a caller must not treat 3 as
+// "not installed".
 //
-// Install no longer runs `hour`: the owner's machine sweeps every project in one nightly run, so
-// there are no slots. It stays for a project still on GitHub Actions until the last one has moved.
+// Install no longer runs `hour`: the development machine sweeps every project in one nightly run,
+// so there are no slots. It stays for a project still on GitHub Actions until the last one has moved.
 //
 // The code reviewer finds its projects with `installedRepos` and `defaultBranchFile` from here
 // (reviewer/src/projects.ts), so there is one way to list what the App is installed on.
@@ -138,7 +139,7 @@ export async function takenHours({ fetch: fetchFn, credentials, repo, now }) {
     }
     try {
       const config = parseDevkitConfig(text);
-      // A project swept by the owner's machine has no sweep section, and so no hour.
+      // A project swept by the development machine has no sweep section, and so no hour.
       if (config.sweep) taken.push({ hour: config.sweep.hour, slug, from: CONFIG_FILE });
     } catch (e) {
       if (!(e instanceof DevkitConfigError)) throw e;

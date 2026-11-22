@@ -50,9 +50,10 @@ job, the `landed` job, and the `review-now` job, which is the per-PR review, run
 labelling a PR `review-now`. The kit has retired that file. The generator (`plugin/generator/`) no
 longer writes it, so no project is added to Actions any more, and a project that still has it
 keeps working there until it moves: `/devkit:sync` opens a pull request that removes the workflow,
-and merging that pull request hands the project to the machine (`projects` then shows it
-`handled`). The pull request lists what is left for the owner: the project's four repository
-secrets to remove, and its line in the Worker's list (`worker/README.md`).
+and merging that pull request hands the project to the development machine, where the code
+reviewer runs (`projects` then shows it `handled`). The pull request lists what is left for the
+owner: the project's four repository secrets to remove, and its line in the Worker's list
+(`worker/README.md`).
 
 Adding a project, which puts it on the machine from the start:
 
@@ -92,7 +93,8 @@ section holds `setup`, `tests` (`[{ "name", "command" }]`), `env`, `databases`, 
 `redundancy` and `extraContext`. Its `nightly` section holds `checks` (`[{ "name", "command" }]`),
 the project's nightly checks: see "Nightly checks" below. `sweep.hour` and `reviewer.services` are
 retired: still accepted, for a project whose sweep still runs on GitHub Actions, and ignored by the
-code reviewer.
+code reviewer. Its `deploy` section is for the apps machine, whose `deploy` command reads it
+(`apps-machine/README.md`): the code reviewer checks that it is well formed and does nothing with it.
 
 On every run, in the PR loop and in the sweep, the code reviewer reads the file from the checkout
 it has just made (so a PR that changes it is set up and tested as it says):
@@ -517,9 +519,9 @@ for the review it deletes, so labelling the pull request again starts a new one.
 
 ## The service and its timers (on the machine)
 
-`vm/dev-vm-setup.sh` installs the code reviewer on the machine as a service of the unprivileged
-`reviewer` user. Run it from a checkout of the kit, as an admin: `sudo bash vm/dev-vm-setup.sh`. It
-is safe to run again.
+`vm/dev-vm-setup.sh` installs the code reviewer on the development machine as a service of the
+unprivileged `reviewer` user. Run it from a checkout of the kit, as an admin:
+`sudo bash vm/dev-vm-setup.sh`. It is safe to run again.
 
 - **Units:** `code-reviewer-nightly.service` and `.timer` for the nightly run,
   `code-reviewer-poller.service` and `.timer` for the poller, and `code-reviewer-queue.service`
@@ -628,7 +630,7 @@ intake → audit (scout + 10 auditors) → synthesis ──┬─ clean → gate
 - `src/queue.ts` — the queue of reviews as decisions: who has the machine, which review starts next, and what a review's run leaves of its event; `src/queue-run.ts` — one turn of the queue; `src/locks.ts` — every advisory lock the code reviewer takes (migrations, a pass, the two that keep agent jobs to one at a time, a project's nightly checks) and the proof that a lock holds; `src/reply-authority.ts` — whose comment counts as the owner's word
 - `src/failure-side.ts` — which side a failed run is on, from the type of its error; `src/failure-issue.ts` — what a failure issue says and when it is opened, commented on and closed; `src/failure-report.ts` — which places a finished run is reported to, and the reporting (`reportRun`)
 - `bin/update.mjs` — brings the code reviewer's own checkout up to date before a nightly run; `src/project-row.ts` — creates a project's row the first time it is met
-- `../vm/` — the machine setup and the systemd units it installs
+- `../vm/dev-vm-setup.sh` — the development machine's setup; `../vm/systemd/code-reviewer-*` — the units it installs for the code reviewer (the other units there are the apps machine's)
 - `src/agents/run-agent.ts` — Agent SDK wrapper (structured output, session recording, resume)
 - `worker/` — the Cloudflare Worker that starts each repo's sweep on time, as the App (`worker/README.md`)
 - `prompts/` — auditor definitions (ISO 25010 verbatim) and pipeline role prompts; `prompts/sweep/` — the sweep's framing of scout, auditor, synthesis and the ticket judge
