@@ -5,10 +5,9 @@ import path from 'node:path';
 
 import { devkitSchema } from '../plugin/devkit-config.mjs';
 import { isAppName, isPort, readRegistry, registrationOf, repositoryOnGitHub, writeRegistration } from './registry.mjs';
-import { machine } from './test-helpers.mjs';
+import { SAMPLE as sample, machine, mode } from './test-helpers.mjs';
 import { UsageError } from './usage.mjs';
 
-const sample = { name: 'sample', repository: 'git@github.com:example/sample.git', servePort: 8443 };
 const example = { name: 'example_app', repository: 'git@github.com:example/example-app.git', servePort: 8444 };
 
 test('a machine nothing was registered on has no registrations', () => {
@@ -25,8 +24,8 @@ test('each registration comes back as it was written, in order of name', () => {
 test('a registration is root\'s alone, and so is the directory of them', () => {
   const paths = machine();
   writeRegistration(paths, sample);
-  assert.equal(fs.statSync(paths.appsDir).mode & 0o777, 0o700);
-  assert.equal(fs.statSync(paths.registration('sample')).mode & 0o777, 0o600);
+  assert.equal(mode(paths.appsDir), 0o700);
+  assert.equal(mode(paths.registration('sample')), 0o600);
   assert.deepEqual(fs.readdirSync(paths.appsDir), ['sample.json']);
 });
 

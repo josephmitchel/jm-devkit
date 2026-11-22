@@ -6,7 +6,7 @@ import path from 'node:path';
 import { readRegistry } from '../registry.mjs';
 import { renderUnit, servicePointsAt } from '../service.mjs';
 import { readSettings } from '../settings.mjs';
-import { appsMachine, commandLines, fakeRun, machine, machinePrograms, mode } from '../test-helpers.mjs';
+import { appsMachine, commandLines, fakeRun, machine, machinePrograms, mode, withUmask } from '../test-helpers.mjs';
 
 const SAMPLE = ['register', 'sample', 'git@github.com:example/sample.git', '8443'];
 const EXAMPLE = ['register', 'example_app', 'git@github.com:example/example-app.git', '8444'];
@@ -39,12 +39,7 @@ test('the app gets a Linux user of its own with no shell, no password and no gro
 
 test('the app\'s directories are closed to every other app: root\'s, with the app\'s group let in, and a home of its own', async () => {
   const { paths, calls, register } = world();
-  const umask = process.umask(0o077);
-  try {
-    await register(SAMPLE);
-  } finally {
-    process.umask(umask);
-  }
+  await withUmask(0o077, () => register(SAMPLE));
   assert.equal(mode(path.dirname(paths.appDir('sample'))), 0o755);
   assert.deepEqual([mode(paths.appDir('sample')), mode(paths.appHome('sample')), mode(paths.releasesDir('sample'))], [0o750, 0o700, 0o750]);
   assert.deepEqual(commandLines(calls).filter((line) => line.startsWith('chown')), [
@@ -70,12 +65,7 @@ test('the app gets a role and a database of its name, and a password only the se
 
 test('the settings file is root\'s, mode 0600, in a directory only root can enter', async () => {
   const { paths, calls, register } = world();
-  const umask = process.umask(0o022);
-  try {
-    await register(SAMPLE);
-  } finally {
-    process.umask(umask);
-  }
+  await withUmask(0o022, () => register(SAMPLE));
   const file = fs.statSync(paths.settingsFile('sample'));
   assert.equal(file.mode & 0o777, 0o600);
   assert.equal(file.uid, process.getuid());

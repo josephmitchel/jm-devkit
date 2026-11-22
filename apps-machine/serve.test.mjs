@@ -2,9 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { serveApp } from './serve.mjs';
-import { fakeRun, machine } from './test-helpers.mjs';
-
-const sample = { name: 'sample', repository: 'git@github.com:example/sample.git', servePort: 8443 };
+import { SAMPLE as sample, fakeRun, machine } from './test-helpers.mjs';
 
 test('an app\'s Serve port is mapped to its local port on loopback, and stays mapped after the command ends', () => {
   const { run, calls } = fakeRun();

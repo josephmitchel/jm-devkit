@@ -5,7 +5,7 @@ import path from 'node:path';
 
 import { createDatabase, databaseNameTaken, databasePassword, dumpDatabase, dumpFault, restoreDatabase, setDatabasePassword } from './database.mjs';
 import { Interrupted, run as realRun } from './run.mjs';
-import { fakeRun, machine, tempDir } from './test-helpers.mjs';
+import { fakeRun, machine, mode, tempDir, withUmask } from './test-helpers.mjs';
 
 const PSQL = ['-u', 'postgres', '--', 'psql', '-X', '-q', '-tA', '-v', 'ON_ERROR_STOP=1', '-d', 'postgres'];
 
@@ -65,13 +65,8 @@ function withStubbedRunuser({ code = 0 } = {}) {
 test('a dump is written by root to the file asked for, for root alone, as pg_dump made it', () => {
   const paths = machine();
   const file = path.join(paths.backupDir, 'sample with a space.dump');
-  const umask = process.umask(0o022);
-  try {
-    dumpDatabase({ run: withStubbedRunuser(), paths }, 'sample', file);
-  } finally {
-    process.umask(umask);
-  }
-  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  withUmask(0o022, () => dumpDatabase({ run: withStubbedRunuser(), paths }, 'sample', file));
+  assert.equal(mode(file), 0o600);
   const expected = Buffer.concat([Buffer.from('-u\npostgres\n--\npg_dump\n--format=custom\n--dbname=sample\n'), Buffer.from([0xff, 0x00, 0xfe])]);
   assert.deepEqual(fs.readFileSync(file), expected);
 });

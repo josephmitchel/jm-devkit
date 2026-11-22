@@ -1,19 +1,12 @@
 // Shared by the install scripts' tests: a scratch config dir, a fake `gh`, and captured output.
 
-import { after } from 'node:test';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 
-const dirs = [];
-after(() => dirs.forEach((dir) => fs.rmSync(dir, { recursive: true, force: true })));
+import { sink, tempDir } from '../test-scratch.mjs';
 
-export function tempDir(prefix = 'devkit-install-') {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-  dirs.push(dir);
-  return dir;
-}
+export { sink, tempDir };
 
 export const { privateKey: PRIVATE_KEY, publicKey: PUBLIC_KEY } = crypto.generateKeyPairSync('rsa', {
   modulusLength: 2048,
@@ -50,10 +43,4 @@ export function fakeGh(respond) {
     return { code: 0, stdout: '', stderr: '', ...respond(args, input) };
   };
   return { gh, calls };
-}
-
-/** A writable stream stand-in that keeps what was written. */
-export function sink() {
-  const s = { text: '', write: (chunk) => { s.text += chunk; return true; } };
-  return s;
 }

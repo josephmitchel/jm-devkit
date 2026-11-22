@@ -5,7 +5,7 @@ import path from 'node:path';
 
 import { BUNDLE_FILES, bundleName, isBundle, makeBundle, newWorkDir, openBundle, parseBundleName, publicKeyIsSet } from './bundle.mjs';
 import { run as realRun } from './run.mjs';
-import { archiveOf, machine, registered, tempDir } from './test-helpers.mjs';
+import { archiveOf, machine, mode, registered, tempDir, withUmask } from './test-helpers.mjs';
 
 test('a bundle is named for its app and its date, and the name reads back', () => {
   assert.equal(bundleName('sample', '2026-11-21'), 'sample-2026-11-21.tar.age');
@@ -80,16 +80,10 @@ test('a decrypted bundle is a tar archive of the manifest, the dump and the sett
   const settings = fs.readFileSync(paths.settingsFile('sample'));
   const workDir = tempDir();
   const run = withStubbedAge();
-  const umask = process.umask(0o022);
-  let file;
-  try {
-    file = makeBundle({ run, paths }, { app: 'sample', date: '2026-11-21', workDir });
-  } finally {
-    process.umask(umask);
-  }
+  const file = withUmask(0o022, () => makeBundle({ run, paths }, { app: 'sample', date: '2026-11-21', workDir }));
   assert.equal(file, path.join(paths.nightlyDir, 'sample-2026-11-21.tar.age'));
-  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
-  assert.equal(fs.statSync(paths.nightlyDir).mode & 0o777, 0o700);
+  assert.equal(mode(file), 0o600);
+  assert.equal(mode(paths.nightlyDir), 0o700);
   assert.deepEqual(fs.readdirSync(workDir), []);
 
   const listed = realRun('tar', ['--list', '--file', file]);
@@ -118,15 +112,9 @@ test('a run\'s work directory is its own and root\'s alone, and making one remov
   const killed = path.join(paths.backupWorkDir, '999999999-AbCdEf');
   const going = path.join(paths.backupWorkDir, `${process.pid}-AbCdEf`);
   for (const dir of [killed, going]) fs.mkdirSync(path.join(dir, 'sample'), { recursive: true });
-  const umask = process.umask(0o022);
-  let workDir;
-  try {
-    workDir = newWorkDir(paths);
-  } finally {
-    process.umask(umask);
-  }
+  const workDir = withUmask(0o022, () => newWorkDir(paths));
   assert.match(path.relative(paths.backupWorkDir, workDir), new RegExp(`^${process.pid}-[^/]+$`));
-  assert.equal(fs.statSync(workDir).mode & 0o777, 0o700);
+  assert.equal(mode(workDir), 0o700);
   assert.deepEqual(fs.readdirSync(paths.backupWorkDir).sort(), [path.basename(going), path.basename(workDir)].sort());
 });
 

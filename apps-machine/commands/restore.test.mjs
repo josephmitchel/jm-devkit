@@ -6,7 +6,7 @@ import path from 'node:path';
 import { makeRelease } from '../releases.mjs';
 import { Interrupted, run as realRun } from '../run.mjs';
 import { pointServiceAt } from '../service.mjs';
-import { appsMachine, archiveOf, commandLines, decryptedBundle, fakeRun, filesUnder, machine, machinePrograms, mode, registered, standInDump, standInDumpOf, standInDumpText } from '../test-helpers.mjs';
+import { DEPLOY_SECTION, appsMachine, archiveOf, commandLines, decryptedBundle, fakeRun, filesUnder, machine, machinePrograms, mode, registered, standInDump, standInDumpOf, standInDumpText, withUmask } from '../test-helpers.mjs';
 
 const USAGE = 'usage: apps-machine restore <name> <file> [--settings]\n';
 const NOW = () => new Date(Date.UTC(2026, 10, 21, 14, 30, 5));
@@ -22,7 +22,7 @@ function sampleMachine({ data = 'as it is now', deployed = true } = {}) {
   const paths = machine();
   registered(paths, { name: 'sample' });
   if (deployed) {
-    const config = { setup: 'npm ci', build: 'npm run build', start: 'node server.mjs', port: 4310, healthPath: '/healthz' };
+    const config = { ...DEPLOY_SECTION, start: 'node server.mjs', port: 4310 };
     fs.mkdirSync(paths.incomingRelease('sample'));
     const release = makeRelease({ run: fakeRun().run, paths }, 'sample', { checkout: paths.incomingRelease('sample'), commit: 'c0ffee'.padEnd(40, '0'), stamp: '20261101T090000Z', config });
     pointServiceAt({ run: fakeRun().run, paths }, 'sample', { release, start: config.start });
@@ -166,13 +166,7 @@ test('with --settings the bundle\'s settings file replaces the app\'s, byte for 
   const { paths, restore } = sampleMachine();
   const replaced = fs.readFileSync(paths.settingsFile('sample'));
   const settings = Buffer.from(`${NIGHT_SETTINGS}# caf\xe9\n`, 'latin1');
-  const umask = process.umask(0o022);
-  let done;
-  try {
-    done = await restore('sample', lastNight({ settings }), '--settings');
-  } finally {
-    process.umask(umask);
-  }
+  const done = await withUmask(0o022, () => restore('sample', lastNight({ settings }), '--settings'));
   assert.equal(done.err, '');
   assert.equal(done.code, 0);
   assert.deepEqual(fs.readFileSync(paths.settingsFile('sample')), settings);

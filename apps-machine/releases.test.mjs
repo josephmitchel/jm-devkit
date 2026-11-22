@@ -8,11 +8,10 @@ import { GITHUB_HOST_KEYS } from './github-host-keys.mjs';
 import { KEPT_RELEASES, commitOf, deployConfigOf, fetchDefaultBranch, makeRelease, projectConfigAt, pruneReleases, releasesOf, stampOf } from './releases.mjs';
 import { run as realRun } from './run.mjs';
 import { pointServiceAt, servicePointsAt } from './service.mjs';
-import { commandLines, fakeRun, machine, registered, tempDir } from './test-helpers.mjs';
+import { DEPLOY_SECTION as CONFIG, commandLines, fakeRun, machine, mode, registered, tempDir } from './test-helpers.mjs';
 
 const A = 'a'.repeat(40);
 const B = 'b'.repeat(40);
-const CONFIG = { setup: 'npm ci', build: 'npm run build', start: 'npm start', port: 3000, healthPath: '/healthz' };
 
 /** A machine with the sample app registered and these releases, named as given, in place. */
 function withReleases(...names) {
@@ -43,7 +42,7 @@ test('a release is handed to the app\'s user whole, and its directory stays clos
   const { run, calls } = fakeRun();
   const release = makeRelease({ run, paths }, 'sample', { checkout: paths.incomingRelease('sample'), commit: A, stamp: '20261121T143005Z', config: CONFIG });
   assert.deepEqual(commandLines(calls), [`chown -R sample:sample ${release}`]);
-  assert.equal(fs.statSync(paths.releasesDir('sample')).mode & 0o777, 0o750);
+  assert.equal(mode(paths.releasesDir('sample')), 0o750);
 });
 
 test('root keeps the deploy section a release was deployed with, beside the release and out of the app\'s reach', () => {

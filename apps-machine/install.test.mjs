@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url';
 
 import { ENTRY, KIT_FILES, install, main } from './install.mjs';
 import { run } from './run.mjs';
-import { fakeRun, machine, machinePrograms, sink, tempDir } from './test-helpers.mjs';
+import { fakeRun, filesUnder, machine, machinePrograms, mode, sink, tempDir, withUmask } from './test-helpers.mjs';
 
 const KIT = path.resolve(import.meta.dirname, '..');
 
@@ -24,7 +24,6 @@ function kitCopy() {
   return kitDir;
 }
 
-const files = (dir) => fs.readdirSync(dir, { recursive: true }).filter((file) => fs.statSync(path.join(dir, file)).isFile()).sort();
 
 test('the installed copy lists a new machine\'s apps with nothing else from the kit', async () => {
   const destDir = installed();
@@ -61,7 +60,7 @@ test('the installed copy registers an app, writing its unit from the template th
 });
 
 test('no test, test helper or note is installed', () => {
-  const copied = files(installed());
+  const copied = filesUnder(installed());
   assert.ok(copied.includes('apps-machine/commands/list.mjs'));
   assert.deepEqual(copied.filter((file) => !file.endsWith('.mjs') && !KIT_FILES.includes(file)), ['apps-machine/app.service.template']);
   assert.deepEqual(copied.filter((file) => /test/.test(file)), []);
@@ -91,25 +90,22 @@ test('a module the kit changed, added or dropped is the same in the copy after t
 });
 
 test('the copy is readable by all and writable by its owner alone, whatever the umask', () => {
-  const umask = process.umask(0o077);
-  try {
+  withUmask(0o077, () => {
     const destDir = installed();
-    const mode = (file) => fs.statSync(path.join(destDir, file)).mode & 0o777;
-    assert.equal(mode('.'), 0o755);
-    assert.equal(mode('apps-machine/commands'), 0o755);
-    assert.equal(mode('apps-machine/commands/list.mjs'), 0o644);
-    assert.equal(mode('plugin/devkit.schema.json'), 0o644);
-    assert.equal(mode(ENTRY), 0o755);
-  } finally {
-    process.umask(umask);
-  }
+    const modeOf = (file) => mode(path.join(destDir, file));
+    assert.equal(modeOf('.'), 0o755);
+    assert.equal(modeOf('apps-machine/commands'), 0o755);
+    assert.equal(modeOf('apps-machine/commands/list.mjs'), 0o644);
+    assert.equal(modeOf('plugin/devkit.schema.json'), 0o644);
+    assert.equal(modeOf(ENTRY), 0o755);
+  });
 });
 
 test('a copy whose modes were loosened is put right', () => {
   const destDir = installed();
   fs.chmodSync(path.join(destDir, 'apps-machine/run.mjs'), 0o666);
   assert.equal(install({ destDir }), 'installed');
-  assert.equal(fs.statSync(path.join(destDir, 'apps-machine/run.mjs')).mode & 0o777, 0o644);
+  assert.equal(mode(path.join(destDir, 'apps-machine/run.mjs')), 0o644);
 });
 
 test('the installer says what it did, and wants one absolute path', () => {

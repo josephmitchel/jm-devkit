@@ -3,10 +3,12 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { COMMANDS } from '../apps-machine.mjs';
 import { commitOf, deployConfigOf, releasesOf } from '../releases.mjs';
+import { STEPS } from './deploy.mjs';
 import { servicePointsAt } from '../service.mjs';
 import { readSettings, writeSettings } from '../settings.mjs';
-import { appsMachine, commandLines, deployPrograms, fakeRun, listening, machine, mode, registered, standInUid } from '../test-helpers.mjs';
+import { DEPLOY_SECTION, SAMPLE, appsMachine, commandLines, deployPrograms, fakeRun, listening, machine, mode, registered, standInUid } from '../test-helpers.mjs';
 
 const A = 'a'.repeat(40);
 const B = 'b'.repeat(40);
@@ -15,7 +17,7 @@ const D = 'd'.repeat(40);
 
 const NEVER_DEPLOYED = 'Nothing was stopped: app-sample.service is as it was, with no release to run.\n';
 
-const DEPLOY = { setup: 'npm ci', build: 'npm run build', migrate: 'npm run migrate', start: 'npm start', port: 3000, healthPath: '/healthz' };
+const DEPLOY = { ...DEPLOY_SECTION, migrate: 'npm run migrate' };
 /** A project config with this deploy section, or with none. */
 const config = (deploy = DEPLOY) => ({ modules: ['process'], reviewer: { tests: [{ name: 'unit', command: 'npm test' }] }, ...(deploy && { deploy }) });
 
@@ -26,7 +28,7 @@ const config = (deploy = DEPLOY) => ({ modules: ['process'], reviewer: { tests: 
  */
 function world({ remote = { commit: A, config: config() }, behaviour = {} } = {}) {
   const paths = machine();
-  const app = registered(paths, { name: 'sample', repository: 'git@github.com:example/sample.git', servePort: 8443 });
+  const app = registered(paths, SAMPLE);
   const { respond, events } = deployPrograms(paths, 'sample', remote, behaviour);
   const { run, calls } = fakeRun(respond);
   let deploys = 0;
@@ -450,4 +452,34 @@ test('a failure after the new release passed its checks leaves it in service, an
   assert.deepEqual(servicePointsAt(paths, 'sample'), { release: path.join(paths.releasesDir('sample'), `20261121T143100Z-${B}`), start: 'node server.js' });
   assert.deepEqual(systemctl(calls), ['stop', 'start'].map((verb) => `systemctl ${verb} app-sample.service`));
   assert.deepEqual(releases(), [`20261121T143000Z-${A}`, `20261121T143100Z-${B}`]);
+});
+
+test('the restore line a failed deploy prints is the restore command\'s usage filled in, and the command takes it', async () => {
+  const { paths, behaviour, deploy } = await deployedOnce();
+  behaviour.exits = { 'npm run migrate': 1 };
+  const [, printed] = /: sudo (apps-machine restore .*)$/m.exec((await deploy()).err);
+  const dump = path.join(paths.deployDumps('sample'), '20261121T143100Z.dump');
+  assert.equal(printed, COMMANDS.restore.usage.replace('<name>', 'sample').replace('<file>', dump).replace(' [--settings]', ''));
+  delete behaviour.exits;
+  const restored = await deploy(printed.split(' ').slice(1));
+  assert.equal(restored.code, 0, restored.err);
+  assert.match(restored.out, /^sample is restored and answering\.$/m);
+});
+
+/** The step names in the first cell of each row of the README table that starts with `heading`. */
+function readmeRows(heading) {
+  const readme = fs.readFileSync(path.join(import.meta.dirname, '../README.md'), 'utf8');
+  const rows = readme.split(`${heading}\n| --- | --- |\n`)[1].split('\n\n')[0].split('\n');
+  return rows.map((row) => [...row.split('|')[1].matchAll(/`(\w+)`/g)].map(([, step]) => step));
+}
+
+test('the README lists the steps in the order they run, and groups them by what the command does when one fails', () => {
+  const steps = STEPS.map(([name]) => name);
+  assert.deepEqual(readmeRows('| Step | What it does |').flat(), steps);
+  const byAftermath = [];
+  STEPS.forEach(([name, , afterFailure], i) => {
+    if (i === 0 || afterFailure !== STEPS[i - 1][2]) byAftermath.push([]);
+    byAftermath.at(-1).push(name);
+  });
+  assert.deepEqual(readmeRows('| The step that failed | What the command leaves |'), byAftermath);
 });

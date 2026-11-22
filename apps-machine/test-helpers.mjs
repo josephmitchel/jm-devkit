@@ -1,24 +1,16 @@
 // Shared by the commands' tests: a machine under a temp dir, a fake `run`, and captured output.
 
-import { after } from 'node:test';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 
+import { sink, tempDir } from '../plugin/test-scratch.mjs';
 import { COMMANDS, main } from './apps-machine.mjs';
 import { BUNDLE_FILES, BUNDLE_FORMAT } from './bundle.mjs';
 import { machinePaths } from './paths.mjs';
 import { readRegistry, registrationOf } from './registry.mjs';
 import { Interrupted, run as realRun } from './run.mjs';
 
-const dirs = [];
-after(() => dirs.forEach((dir) => fs.rmSync(dir, { recursive: true, force: true })));
-
-export function tempDir(prefix = 'apps-machine-') {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-  dirs.push(dir);
-  return dir;
-}
+export { sink, tempDir };
 
 /** The paths of a new machine whose root is a temp dir, with the directories the setup script makes. */
 export function machine() {
@@ -77,6 +69,25 @@ export const commandLines = (calls) => calls.map(({ program, args }) => [program
 /** A file's permission bits. */
 export const mode = (file) => fs.statSync(file).mode & 0o777;
 
+/** Run `act` under the umask `mask`, and put the old one back once it has ended: at once, or when its promise settles. */
+export function withUmask(mask, act) {
+  const before = process.umask(mask);
+  let settles = false;
+  try {
+    const result = act();
+    settles = typeof result?.finally === 'function';
+    return settles ? result.finally(() => process.umask(before)) : result;
+  } finally {
+    if (!settles) process.umask(before);
+  }
+}
+
+/** The registration most tests give the app `sample`. */
+export const SAMPLE = { name: 'sample', repository: 'git@github.com:example/sample.git', servePort: 8443 };
+
+/** A deploy section as a project config has it, with no migrate. */
+export const DEPLOY_SECTION = { setup: 'npm ci', build: 'npm run build', start: 'npm start', port: 3000, healthPath: '/healthz' };
+
 /** Every file under `dir`, by its path from there, sorted. */
 export const filesUnder = (dir) => fs.readdirSync(dir, { recursive: true }).filter((file) => fs.statSync(path.join(dir, file)).isFile()).sort();
 
@@ -98,12 +109,6 @@ export function standInDump(program, args, text = `dump of ${args[3]}`) {
   if (program !== '/bin/sh' || !args[1]?.includes('pg_dump')) return false;
   if (text !== null) fs.writeFileSync(args[4], standInDumpOf(text), { mode: 0o600 });
   return true;
-}
-
-/** A writable stream stand-in that keeps what was written. */
-export function sink() {
-  const s = { text: '', write: (chunk) => { s.text += chunk; return true; } };
-  return s;
 }
 
 /**
@@ -206,7 +211,7 @@ export function deployPrograms(paths, app, remote, behaviour = {}) {
     } else if (program === 'tailscale') {
       events.push('serve');
     }
-    const code = behaviour.exits?.[[program, ...args].join(' ')];
+    const code = behaviour.exits?.[commandLines([{ program, args }])[0]];
     return code === undefined ? programs(program, args, options) : { code, stderr: `${program} could not do that\n` };
   };
   return { respond, events };

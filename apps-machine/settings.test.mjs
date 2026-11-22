@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
 import { readSettings, runAsApp, writeSettings } from './settings.mjs';
-import { fakeRun, machine } from './test-helpers.mjs';
+import { fakeRun, machine, mode, withUmask } from './test-helpers.mjs';
 
 function withSettings(text) {
   const paths = machine();
@@ -13,23 +13,20 @@ function withSettings(text) {
 
 test('a settings file is root\'s alone, and so is the directory of them', () => {
   const paths = withSettings('A=1\n');
-  assert.equal(fs.statSync(paths.settingsDir).mode & 0o777, 0o700);
-  assert.equal(fs.statSync(paths.settingsFile('sample')).mode & 0o777, 0o600);
+  assert.equal(mode(paths.settingsDir), 0o700);
+  assert.equal(mode(paths.settingsFile('sample')), 0o600);
   assert.equal(fs.readFileSync(paths.settingsFile('sample'), 'utf8'), 'A=1\n');
   assert.deepEqual(fs.readdirSync(paths.settingsDir), ['sample.env']);
 });
 
 test('a settings file written over another keeps the mode, whatever the umask', () => {
-  const umask = process.umask(0o022);
-  try {
+  withUmask(0o022, () => {
     const paths = withSettings('A=1\n');
     fs.chmodSync(paths.settingsFile('sample'), 0o644);
     writeSettings(paths, 'sample', 'A=2\n');
-    assert.equal(fs.statSync(paths.settingsFile('sample')).mode & 0o777, 0o600);
+    assert.equal(mode(paths.settingsFile('sample')), 0o600);
     assert.deepEqual(readSettings(paths, 'sample'), { A: '2' });
-  } finally {
-    process.umask(umask);
-  }
+  });
 });
 
 test('settings are read as systemd reads an environment file', () => {

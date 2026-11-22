@@ -5,7 +5,7 @@ import path from 'node:path';
 
 import { machinePaths } from './paths.mjs';
 import { installService, pointServiceAt, renderUnit, servicePointsAt, startService, stopService } from './service.mjs';
-import { fakeRun, machine } from './test-helpers.mjs';
+import { fakeRun, machine, mode, withUmask } from './test-helpers.mjs';
 
 const notYetEnabled = (program, args) => (args[0] === 'is-enabled' ? { code: 1 } : {});
 
@@ -40,7 +40,7 @@ test('installing an app\'s service writes its unit and turns it on for the next 
   const { run, calls } = fakeRun(notYetEnabled);
   installService({ run, paths }, 'sample');
   assert.equal(fs.readFileSync(paths.unitFile('sample'), 'utf8'), renderUnit(paths, 'sample'));
-  assert.equal(fs.statSync(paths.unitFile('sample')).mode & 0o777, 0o644);
+  assert.equal(mode(paths.unitFile('sample')), 0o644);
   assert.deepEqual(calls.map(({ program, args }) => [program, ...args]), [
     ['systemctl', 'daemon-reload'],
     ['systemctl', 'is-enabled', '--quiet', 'app-sample.service'],
@@ -95,15 +95,10 @@ test('before a first deploy an app\'s service points at nothing', () => {
 test('a service pointed at a release runs that release with its start command', () => {
   const { paths, release } = withRelease();
   const { run } = fakeRun();
-  const umask = process.umask(0o077);
-  try {
-    pointServiceAt({ run, paths }, 'sample', { release, start: 'node server.js --port 3000' });
-  } finally {
-    process.umask(umask);
-  }
+  withUmask(0o077, () => pointServiceAt({ run, paths }, 'sample', { release, start: 'node server.js --port 3000' }));
   assert.equal(fs.realpathSync(paths.currentRelease('sample')), fs.realpathSync(release));
   assert.equal(fs.readFileSync(paths.startFile('sample'), 'utf8'), 'node server.js --port 3000\n');
-  assert.equal(fs.statSync(paths.startFile('sample')).mode & 0o777, 0o644);
+  assert.equal(mode(paths.startFile('sample')), 0o644);
   assert.deepEqual(servicePointsAt(paths, 'sample'), { release, start: 'node server.js --port 3000' });
 });
 
