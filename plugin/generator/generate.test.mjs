@@ -75,6 +75,13 @@ test('an unknown field is refused, naming it', () => {
   assert.deepEqual(generateError(config), ['reviewer.servics is not a known field']);
 });
 
+test('a deploy section gives the project no kit-owned file, and one missing a field is refused', () => {
+  const deploy = { setup: 'npm ci', build: 'npm run build', start: 'npm start', port: 3000, healthPath: '/healthz' };
+  assert.deepEqual(generate({ ...minimal, deploy }), generate(minimal));
+  const { port, ...noPort } = deploy;
+  assert.deepEqual(generateError({ ...minimal, deploy: noPort }), ['deploy.port is required']);
+});
+
 test('a missing field is refused, naming it', () => {
   const { reviewer, ...config } = minimal;
   assert.deepEqual(generateError(config), ['reviewer is required']);
