@@ -93,7 +93,8 @@ section holds `setup`, `tests` (`[{ "name", "command" }]`), `env`, `databases`, 
 `redundancy` and `extraContext`. Its `nightly` section holds `checks` (`[{ "name", "command" }]`),
 the project's nightly checks: see "Nightly checks" below. `sweep.hour` and `reviewer.services` are
 retired: still accepted, for a project whose sweep still runs on GitHub Actions, and ignored by the
-code reviewer.
+code reviewer. Its `deploy` section is for the apps machine, whose `deploy` command reads it
+(`apps-machine/README.md`): the code reviewer checks that it is well formed and does nothing with it.
 
 On every run, in the PR loop and in the sweep, the code reviewer reads the file from the checkout
 it has just made (so a PR that changes it is set up and tested as it says):
