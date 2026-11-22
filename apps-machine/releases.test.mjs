@@ -5,13 +5,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { GITHUB_HOST_KEYS } from './github-host-keys.mjs';
-import { KEPT_RELEASES, commitOf, fetchDefaultBranch, makeRelease, projectConfigAt, pruneReleases, releasesOf, stampOf } from './releases.mjs';
+import { KEPT_RELEASES, commitOf, deployConfigOf, fetchDefaultBranch, makeRelease, projectConfigAt, pruneReleases, releasesOf, stampOf } from './releases.mjs';
 import { run as realRun } from './run.mjs';
 import { pointServiceAt, servicePointsAt } from './service.mjs';
 import { fakeRun, machine, registered, tempDir } from './test-helpers.mjs';
 
 const A = 'a'.repeat(40);
 const B = 'b'.repeat(40);
+const CONFIG = { setup: 'npm ci', build: 'npm run build', start: 'npm start', port: 3000, healthPath: '/healthz' };
 const commandLines = (calls) => calls.map(({ program, args }) => [program, ...args].join(' '));
 
 /** A machine with the sample app registered and these releases, named as given, in place. */
@@ -30,7 +31,7 @@ test('a release is named for when its deploy began and the commit it holds', () 
   const checkout = paths.incomingRelease('sample');
   fs.mkdirSync(checkout);
   const { run, calls } = fakeRun();
-  const release = makeRelease({ run, paths }, 'sample', { checkout, commit: A, stamp: '20261121T143005Z' });
+  const release = makeRelease({ run, paths }, 'sample', { checkout, commit: A, stamp: '20261121T143005Z', config: CONFIG });
   assert.equal(release, path.join(paths.releasesDir('sample'), `20261121T143005Z-${A}`));
   assert.equal(commitOf(release), A);
   assert.ok(fs.statSync(release).isDirectory());
@@ -41,9 +42,19 @@ test('a release is handed to the app\'s user whole, and its directory stays clos
   const paths = withReleases();
   fs.mkdirSync(paths.incomingRelease('sample'));
   const { run, calls } = fakeRun();
-  const release = makeRelease({ run, paths }, 'sample', { checkout: paths.incomingRelease('sample'), commit: A, stamp: '20261121T143005Z' });
+  const release = makeRelease({ run, paths }, 'sample', { checkout: paths.incomingRelease('sample'), commit: A, stamp: '20261121T143005Z', config: CONFIG });
   assert.deepEqual(commandLines(calls), [`chown -R sample:sample ${release}`]);
   assert.equal(fs.statSync(paths.releasesDir('sample')).mode & 0o777, 0o750);
+});
+
+test('root keeps the deploy section a release was deployed with, beside the release and out of the app\'s reach', () => {
+  const paths = withReleases();
+  fs.mkdirSync(paths.incomingRelease('sample'));
+  const release = makeRelease({ run: fakeRun().run, paths }, 'sample', { checkout: paths.incomingRelease('sample'), commit: A, stamp: '20261121T143005Z', config: CONFIG });
+  assert.deepEqual(deployConfigOf(release), CONFIG);
+  assert.deepEqual(fs.readdirSync(release), []);
+  assert.deepEqual(names(paths), [path.basename(release), `${path.basename(release)}.json`]);
+  assert.deepEqual(releasesOf(paths, 'sample'), [release]);
 });
 
 test('an app\'s releases are listed oldest first, and nothing else in the directory is one', () => {
@@ -58,9 +69,10 @@ test('pruning keeps the three newest releases and removes the older ones, whole'
   assert.equal(KEPT_RELEASES, 3);
   const all = ['20261101T000000Z', '20261102T000000Z', '20261103T000000Z', '20261104T000000Z', '20261105T000000Z'].map((stamp) => `${stamp}-${A}`);
   const paths = withReleases(...all, 'notes');
+  for (const name of all) fs.writeFileSync(path.join(paths.releasesDir('sample'), `${name}.json`), '{}\n');
   const removed = pruneReleases(paths, 'sample');
   assert.deepEqual(removed.map((release) => path.basename(release)), all.slice(0, 2));
-  assert.deepEqual(names(paths), [...all.slice(2), 'notes']);
+  assert.deepEqual(names(paths), [...all.slice(2).flatMap((name) => [name, `${name}.json`]), 'notes']);
   assert.deepEqual(pruneReleases(paths, 'sample'), []);
 });
 

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { commitOf, releasesOf } from '../releases.mjs';
+import { commitOf, deployConfigOf, releasesOf } from '../releases.mjs';
 import { servicePointsAt } from '../service.mjs';
 import { readSettings, writeSettings } from '../settings.mjs';
 import { appsMachine, deployPrograms, fakeRun, machine, registered } from '../test-helpers.mjs';
@@ -89,6 +89,8 @@ test('after a fourth deploy only the three newest releases remain', async () => 
   assert.equal(commitOf(servicePointsAt(paths, 'sample').release), D);
   assert.match(done.out, new RegExp(`^Removed the old release 20261121T143000Z-${A}$`, 'm'));
   assert.deepEqual(fs.readdirSync(paths.appDir('sample')).sort(), ['current', 'home', 'releases', 'start']);
+  assert.deepEqual(fs.readdirSync(paths.releasesDir('sample')).sort(), releases().flatMap((name) => [name, `${name}.json`]));
+  assert.deepEqual(deployConfigOf(servicePointsAt(paths, 'sample').release), DEPLOY);
 });
 
 test('the dump is taken before anything is fetched, it is root\'s alone, and its path is printed', async () => {

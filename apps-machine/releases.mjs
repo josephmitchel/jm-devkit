@@ -1,7 +1,8 @@
 // An app's releases: one directory per deploy in `paths.releasesDir`, named for when the deploy
 // began and the commit it holds, `20261121T143005Z-<commit>`, so names sort oldest first and a
 // release's commit is read from its name. A release is a shallow clone of the repository's default
-// branch, fetched by root and then handed to the app's user. From then on root runs no git in it.
+// branch, fetched by root and then handed to the app's user. From then on root runs no git in it,
+// and reads the release's deploy section from its own record of it, `<release>.json`, beside the release.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -70,10 +71,21 @@ export function projectConfigAt(world, { checkout, commit }) {
   return shown.stdout;
 }
 
-/** Turn a fetched checkout into the app's newest release and hand it to the app's user. Returns the release directory. */
-export function makeRelease({ run, paths }, app, { checkout, commit, stamp }) {
+const recordOf = (release) => `${release}.json`;
+
+/** The deploy section a release was deployed with, as root recorded it. */
+export function deployConfigOf(release) {
+  return JSON.parse(fs.readFileSync(recordOf(release), 'utf8'));
+}
+
+/**
+ * Turn a fetched checkout into the app's newest release, record the deploy section `config` it is
+ * deployed with, and hand the release to the app's user. Returns the release directory.
+ */
+export function makeRelease({ run, paths }, app, { checkout, commit, stamp, config }) {
   const release = path.join(paths.releasesDir(app), `${stamp}-${commit}`);
   commitOf(release);
+  fs.writeFileSync(recordOf(release), `${JSON.stringify(config, null, 2)}\n`, { mode: 0o644 });
   fs.renameSync(checkout, release);
   const done = run('chown', ['-R', `${app}:${app}`, release]);
   if (done.code !== 0) throw new Error(`could not give ${release} to ${app}: ${done.stderr.trim()}`);
@@ -84,6 +96,9 @@ export function makeRelease({ run, paths }, app, { checkout, commit, stamp }) {
 export function pruneReleases(paths, app) {
   const running = servicePointsAt(paths, app)?.release;
   const old = releasesOf(paths, app).slice(0, -KEPT_RELEASES).filter((release) => release !== running);
-  for (const release of old) fs.rmSync(release, { recursive: true, force: true });
+  for (const release of old) {
+    fs.rmSync(release, { recursive: true, force: true });
+    fs.rmSync(recordOf(release), { force: true });
+  }
   return old;
 }
