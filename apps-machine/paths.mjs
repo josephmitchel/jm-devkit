@@ -52,6 +52,12 @@ export function machinePaths(root = '/') {
     incomingRelease: (app) => path.join(appDir(app), 'incoming'),
     /** The host keys root's ssh accepts from GitHub, written by a deploy before it fetches. */
     githubHostKeys: path.join(configDir, 'github-host-keys'),
+    /** Where the bundles are uploaded: one line, an rclone remote and a folder in it, `<remote>:<folder>`. */
+    backupStorage: path.join(configDir, 'backup-storage'),
+    /** The rclone config that defines that remote. It holds the storage credential, so it is root's alone. */
+    rcloneConfig: path.join(configDir, 'rclone.conf'),
+    /** The address requested when a night's bundles have all uploaded: one line, root's alone. */
+    backupAliveAddress: path.join(configDir, 'backup-alive-address'),
     /** What a restore replaced, kept so it can be undone: an app's database dump, and its settings file when that was replaced too. */
     restoreDumps: (app) => path.join(stateDir, 'backups/restores', app),
   };

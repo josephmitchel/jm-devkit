@@ -2,7 +2,11 @@
 # name starts it. By hand: sudo apps-machine backup
 [Unit]
 Description=Apps machine: the night's backup
-After=postgresql.service
+# The bundles are uploaded and the alive request made, which a run caught up at boot would
+# otherwise try before the network is there. Where they go is in files of root's, never here:
+# anyone on the machine can read a unit.
+Wants=network-online.target
+After=postgresql.service network-online.target
 
 [Service]
 Type=oneshot

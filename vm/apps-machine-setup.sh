@@ -33,6 +33,12 @@ BACKUP_DIR=/var/lib/apps-machine/backups
 BACKUP_KEY_FILE=/etc/apps-machine/backup-public-key
 # The setting that writes it. A later run without it keeps the key the machine has.
 BACKUP_PUBLIC_KEY=${BACKUP_PUBLIC_KEY:-}
+# Where the bundles are uploaded, as rclone names it; the rclone config that defines that remote
+# and holds the storage credential; and the address of the alive request. The owner writes all
+# three by hand: no setting of this script carries them, because sudo logs its command line.
+BACKUP_STORAGE_FILE=/etc/apps-machine/backup-storage
+RCLONE_CONFIG_FILE=/etc/apps-machine/rclone.conf
+ALIVE_ADDRESS_FILE=/etc/apps-machine/backup-alive-address
 
 require_sudo_on_ubuntu
 [ -f "$CHECKOUT/apps-machine/install.mjs" ] \
@@ -102,6 +108,25 @@ else
   echo "No public key is set for the backups, so the timer is not turned on."
 fi
 
+step "The backups' storage and alive address"
+# Each file starts as comments saying what goes in it, and is left alone once it is there.
+if [ ! -e "$BACKUP_STORAGE_FILE" ]; then
+  cat > "$BACKUP_STORAGE_FILE" <<EOF
+# Where the night's bundles are uploaded, on one line: <remote>:<folder>
+# <remote> is the name of a remote defined with: sudo rclone config --config $RCLONE_CONFIG_FILE
+EOF
+  echo "Made $BACKUP_STORAGE_FILE, which names no storage yet."
+fi
+if [ ! -e "$ALIVE_ADDRESS_FILE" ]; then
+  cat > "$ALIVE_ADDRESS_FILE" <<EOF
+# The address requested when a night's bundles have all uploaded, on one line: https://...
+# It belongs to a service that alerts the owner when the request stops arriving.
+EOF
+  echo "Made $ALIVE_ADDRESS_FILE, which holds no address yet."
+fi
+chmod 0600 "$BACKUP_STORAGE_FILE" "$ALIVE_ADDRESS_FILE"
+[ ! -e "$RCLONE_CONFIG_FILE" ] || chmod 0600 "$RCLONE_CONFIG_FILE"
+
 step "Check: the commands run, and the apps registered here"
 hash -r
 command -v apps-machine >/dev/null || fail "$COMMAND is not on root's path, which is $PATH"
@@ -130,3 +155,21 @@ private half there, and run this script again with the public half, which turns 
   sudo BACKUP_PUBLIC_KEY=age1... bash vm/apps-machine-setup.sh
 EOF
 fi
+cat <<EOF
+
+Where the bundles are uploaded and who notices a missed night are set by hand, in files only
+root can read and never on a command line:
+  The storage:
+    sudo rclone config --config $RCLONE_CONFIG_FILE
+        defines a remote and keeps its credential
+    sudoedit $BACKUP_STORAGE_FILE
+        one line, <remote>:<folder>
+    Give the machine a credential of its own, confined to that one folder where the storage
+    provider allows it. Where it does not, use an account that holds nothing but the backups.
+    Until the storage is set, a backup makes the bundles, says uploads are not set up and fails.
+  The alive address:
+    sudoedit $ALIVE_ADDRESS_FILE
+        one line, the https address of a service that alerts you when the request stops arriving
+    Without one the backups run, and nothing notices when they stop.
+apps-machine/README.md says more about both.
+EOF

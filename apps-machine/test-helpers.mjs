@@ -190,6 +190,32 @@ export function deployPrograms(paths, app, remote, behaviour = {}) {
 }
 
 /**
+ * A `respond` for `fakeRun` that adds to `programs` an `rclone` keeping what it is given in
+ * `stored` (a Map from `<remote>:<path>` to the file's bytes) and a `curl` recording in `requests`
+ * each address its config asked for.
+ */
+export function offsitePrograms(programs = backupPrograms()) {
+  const stored = new Map();
+  const requests = [];
+  const respond = (program, args, options = {}) => {
+    if (program === 'rclone') {
+      const [verb, ...rest] = args;
+      const [first, second] = rest.filter((arg, i) => !arg.startsWith('--') && rest[i - 1] !== '--config');
+      if (verb === 'copyto') stored.set(second, fs.readFileSync(first));
+      if (verb === 'deletefile') stored.delete(first);
+      if (verb === 'lsf') return { stdout: [...stored.keys()].filter((at) => path.posix.dirname(at) === first).map((at) => `${path.posix.basename(at)}\n`).join('') };
+      return {};
+    }
+    if (program === 'curl') {
+      requests.push(/^url = "(.*)"$/m.exec(options.input ?? '')?.[1]);
+      return {};
+    }
+    return programs(program, args, options);
+  };
+  return { respond, stored, requests };
+}
+
+/**
  * A tar archive made by the machine's own `tar`, in a temp dir of its own, of `members`: each name
  * with its contents, or with `{ linkTo }` for a symbolic link. Returns the archive's path.
  */
