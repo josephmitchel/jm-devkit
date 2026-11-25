@@ -1,5 +1,4 @@
 import fs from 'node:fs';
-import { parseArgs } from 'node:util';
 import { and, desc, eq, inArray, notInArray } from 'drizzle-orm';
 import { db, pool, schema } from './db/client.js';
 import { fileReport, parseReport } from './failure-report.js';
@@ -22,7 +21,6 @@ import { queueStatus } from './queue.js';
 import { queueStatusFacts, runQueueTurn } from './queue-run.js';
 import { listProjects, projectLine } from './projects.js';
 import { runReview } from './review-loop.js';
-import { cloneUrl } from './project-row.js';
 import { errorTypeLine } from './run-vocabulary.js';
 import { nightlyStatus, otherRunsStatus, recentNightlyRuns, recentRunsOnTheirOwn, stopCommandsOnSignal } from './runs.js';
 import { runSweep } from './sweep/loop.js';
@@ -87,12 +85,6 @@ Usage:
                                                 and the machine's after a run it stopped)
   code-reviewer carry-gate <owner/repo> <pr#>   gate a passed PR's new head if it holds reviewed code
   code-reviewer git-credential get              git credential helper (minted App token)
-  code-reviewer repo add <owner/repo> [opts]    register a repo
-      --setup <cmd>                             setup command (e.g. "npm ci")
-      --tests <name=cmd>                        test suite (repeatable)
-      --harness-notes-file <path>               per-repo notes for the testing auditor
-      --redundancy <n>                          auditors per characteristic (default 1)
-  code-reviewer repo set <owner/repo> [opts]    update repo config (same options)
   code-reviewer status [owner/repo]             show reviews and their states, the recent
                                                 nightly runs with each project's result, the
                                                 recent runs started by hand, what
@@ -258,12 +250,6 @@ async function main() {
       if (answer) process.stdout.write(answer);
       break;
     }
-    case 'repo': {
-      const [sub, slug] = rest;
-      if ((sub !== 'add' && sub !== 'set') || !slug) return usageExit();
-      await repoUpsert(sub, slug, rest.slice(2));
-      break;
-    }
     case 'status':
       await showStatus(rest[0]);
       break;
@@ -281,50 +267,6 @@ async function main() {
 function usageExit(): never {
   console.error(USAGE);
   process.exit(2);
-}
-
-async function repoUpsert(mode: 'add' | 'set', slug: string, argv: string[]): Promise<void> {
-  const { values } = parseArgs({
-    args: argv,
-    options: {
-      setup: { type: 'string' },
-      tests: { type: 'string', multiple: true },
-      'harness-notes-file': { type: 'string' },
-      redundancy: { type: 'string' },
-      'extra-context': { type: 'string' },
-    },
-  });
-
-  const testCommands = (values.tests ?? []).map((t) => {
-    const idx = t.indexOf('=');
-    if (idx === -1) throw new Error(`--tests expects name=command, got: ${t}`);
-    return { name: t.slice(0, idx), command: t.slice(idx + 1) };
-  });
-  const harnessNotes = values['harness-notes-file']
-    ? fs.readFileSync(values['harness-notes-file'], 'utf8').trim()
-    : undefined;
-
-  const patch: Record<string, unknown> = {};
-  if (values.setup !== undefined) patch.setupCommand = values.setup;
-  if (testCommands.length > 0) patch.testCommands = testCommands;
-  if (harnessNotes !== undefined) patch.harnessNotes = harnessNotes;
-  if (values.redundancy !== undefined) patch.redundancy = Number(values.redundancy);
-  if (values['extra-context'] !== undefined) patch.extraContext = values['extra-context'];
-
-  const [existing] = await db.select().from(schema.repos).where(eq(schema.repos.slug, slug));
-  if (mode === 'add') {
-    if (existing) throw new Error(`repo ${slug} already registered — use repo set`);
-    await db.insert(schema.repos).values({
-      slug,
-      cloneUrl: cloneUrl(slug),
-      ...patch,
-    });
-    console.log(`registered ${slug}`);
-  } else {
-    if (!existing) throw new Error(`repo ${slug} not registered`);
-    await db.update(schema.repos).set(patch).where(eq(schema.repos.id, existing.id));
-    console.log(`updated ${slug}`);
-  }
 }
 
 /**
@@ -506,7 +448,7 @@ async function showStatus(slug?: string): Promise<void> {
     ? await db.select().from(schema.repos).where(eq(schema.repos.slug, slug))
     : await db.select().from(schema.repos);
   for (const repo of repos) {
-    console.log(`\n${repo.slug} (tests: ${repo.testCommands.map((t) => t.name).join(', ') || 'none'})`);
+    console.log(`\n${repo.slug}`);
     const reviews = await db
       .select()
       .from(schema.reviews)

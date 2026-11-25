@@ -11,16 +11,7 @@ import {
   validate,
   type JsonSchema,
 } from '../../plugin/devkit-config.mjs';
-import { readProjectSetup, type ProjectRow } from './project-config.js';
-
-/** What a project registered by hand has in its database row. */
-const row: ProjectRow = {
-  setupCommand: 'make deps',
-  testCommands: [{ name: 'row-suite', command: 'make check' }],
-  redundancy: 3,
-  harnessNotes: 'notes kept in the database',
-  extraContext: 'context kept in the database',
-};
+import { readProjectSetup } from './project-config.js';
 
 let checkout: string;
 
@@ -39,7 +30,7 @@ function writeConfig(config: unknown): void {
 
 function setupError(): string {
   try {
-    readProjectSetup(checkout, row);
+    readProjectSetup(checkout);
   } catch (err) {
     expect(err).toBeInstanceOf(DevkitConfigError);
     return (err as Error).message;
@@ -72,13 +63,12 @@ const valid = {
 };
 
 describe('readProjectSetup with a devkit.json', () => {
-  it('answers from the file, not the database row', () => {
+  it('answers from the file', () => {
     fs.mkdirSync(path.join(checkout, 'docs'));
     fs.writeFileSync(path.join(checkout, 'docs/harness.md'), '# Harness\nVitest, one file per module.\n');
     writeConfig(valid);
 
-    expect(readProjectSetup(checkout, row)).toEqual({
-      source: 'devkit.json',
+    expect(readProjectSetup(checkout)).toEqual({
       setupCommand: 'npm ci',
       testCommands: [
         { name: 'unit', command: 'npm test' },
@@ -96,11 +86,10 @@ describe('readProjectSetup with a devkit.json', () => {
     });
   });
 
-  it('takes a field the file leaves out as none, never as the row value', () => {
+  it('takes a field the file leaves out as none', () => {
     writeConfig({ modules: ['process'], sweep: { hour: 0 }, reviewer: { tests: [{ name: 'unit', command: 'npm test' }] } });
 
-    expect(readProjectSetup(checkout, row)).toEqual({
-      source: 'devkit.json',
+    expect(readProjectSetup(checkout)).toEqual({
       setupCommand: null,
       testCommands: [{ name: 'unit', command: 'npm test' }],
       redundancy: 1,
@@ -115,32 +104,37 @@ describe('readProjectSetup with a devkit.json', () => {
   it('takes a nightly section that lists no checks as naming none', () => {
     const reviewer = { tests: [{ name: 'unit', command: 'npm test' }] };
     writeConfig({ modules: ['process'], reviewer, nightly: {} });
-    expect(readProjectSetup(checkout, row).nightlyChecks).toEqual([]);
+    expect(readProjectSetup(checkout).nightlyChecks).toEqual([]);
     writeConfig({ modules: ['process'], reviewer, nightly: { checks: [] } });
-    expect(readProjectSetup(checkout, row).nightlyChecks).toEqual([]);
+    expect(readProjectSetup(checkout).nightlyChecks).toEqual([]);
   });
 
   it('accepts a file with no sweep section, now that there are no sweep slots', () => {
     writeConfig({ modules: ['process'], reviewer: { tests: [{ name: 'unit', command: 'npm test' }] } });
-    expect(readProjectSetup(checkout, row).source).toBe('devkit.json');
+    expect(readProjectSetup(checkout).testCommands).toEqual([{ name: 'unit', command: 'npm test' }]);
   });
 
   it('accepts the retired sweep.hour and reviewer.services, and takes nothing from them', () => {
     const tests = [{ name: 'unit', command: 'npm test' }];
     writeConfig({ modules: ['process'], reviewer: { tests } });
-    const without = readProjectSetup(checkout, row);
+    const without = readProjectSetup(checkout);
     writeConfig({
       modules: ['process'],
       sweep: { hour: 7 },
       reviewer: { tests, services: { postgres: { image: 'postgres:16' } } },
     });
-    expect(readProjectSetup(checkout, row)).toEqual(without);
+    expect(readProjectSetup(checkout)).toEqual(without);
   });
 });
 
-describe('readProjectSetup without a devkit.json', () => {
-  it('answers from the database row, with no databases and no nightly checks', () => {
-    expect(readProjectSetup(checkout, row)).toEqual({ source: 'database', ...row, env: {}, databases: [], nightlyChecks: [] });
+describe('readProjectSetup for a project not under the kit', () => {
+  it('refuses a project with no devkit.json, naming install', () => {
+    expect(setupError()).toMatch(/no devkit\.json: run \/devkit:install in the project/);
+  });
+
+  it('refuses a devkit.json whose modules leave out process, naming install', () => {
+    writeConfig({ ...valid, modules: ['web'] });
+    expect(setupError()).toMatch(/modules must include "process".*: run \/devkit:install in the project/);
   });
 });
 
@@ -325,9 +319,9 @@ describe('the deploy section of a devkit.json', () => {
   it('changes nothing about how the code reviewer sets the project up and tests it', () => {
     const config = { modules: ['process'], reviewer: { tests: valid.reviewer.tests }, nightly: valid.nightly };
     writeConfig(config);
-    const without = readProjectSetup(checkout, row);
+    const without = readProjectSetup(checkout);
     writeConfig({ ...config, deploy: { ...deploy, migrate: 'npm run migrate' } });
-    expect(readProjectSetup(checkout, row)).toEqual(without);
+    expect(readProjectSetup(checkout)).toEqual(without);
   });
 
   it('fails a run of the code reviewer when it is malformed, as any other section does', () => {

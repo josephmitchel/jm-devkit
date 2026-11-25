@@ -14,6 +14,7 @@ import { settleOwnerDecisions } from './judge.js';
 import { collectIssueAnswers } from './answers.js';
 import { publishIssues } from './publish.js';
 import { judgeTickets } from './tickets.js';
+import { ensureProjectRow } from '../project-row.js';
 
 type State = (typeof schema.sweepState.enumValues)[number];
 type Partial = Pick<SweepSummary, 'judged' | 'answered' | 'commits' | 'tickets'>;
@@ -31,8 +32,8 @@ type Partial = Pick<SweepSummary, 'judged' | 'answered' | 'commits' | 'tickets'>
  * the output is GitHub issues. State lives in Postgres, so a killed run resumes where it stopped.
  */
 export async function runSweep(repoSlug: string): Promise<'swept' | 'failed'> {
+  await ensureProjectRow(repoSlug);
   const [repo] = await db.select().from(schema.repos).where(eq(schema.repos.slug, repoSlug));
-  if (!repo) throw new Error(`repo ${repoSlug} not registered — run: code-reviewer repo add ${repoSlug} …`);
 
   const ctx: SweepCtx = {
     repo,
@@ -183,11 +184,7 @@ async function loadOrCreateSweep(repo: RepoRow): Promise<SweepRow> {
     return latest;
   }
 
-  // Asked rather than trusted: the column defaults to `main` and nothing else maintains it.
   const branch = await getDefaultBranch(repo.slug);
-  if (branch !== repo.defaultBranch) {
-    await db.update(schema.repos).set({ defaultBranch: branch }).where(eq(schema.repos.id, repo.id));
-  }
   const baseSha = latest?.headSha ?? (await getBranchHead(repo.slug, branch));
   const [sweep] = await db
     .insert(schema.sweeps)
@@ -263,10 +260,9 @@ async function runSweepIntake(ctx: SweepCtx): Promise<number> {
 async function prepareSweepWorkspace(ctx: SweepCtx): Promise<void> {
   const headSha = ctx.sweep.headSha;
   if (!headSha) throw new Error(`sweep ${ctx.sweep.id} in state ${ctx.sweep.state} has no head`);
-  ctx.workspaceDir = await prepareWorkspace(ctx.repo.slug, ctx.repo.cloneUrl, ctx.sweep.branch, headSha);
+  ctx.workspaceDir = await prepareWorkspace(ctx.repo.slug, ctx.sweep.branch, headSha);
   console.log(`workspace ready at ${ctx.workspaceDir}`);
-  const read = readProjectSetup(ctx.workspaceDir, ctx.repo);
-  console.log(`project setup read from ${read.source === 'devkit.json' ? 'devkit.json' : 'the database row'}`);
+  const read = readProjectSetup(ctx.workspaceDir);
   const project = await provideTestDatabases(`sweep:${ctx.sweep.id}`, read);
   ctx.project = project;
   if (project.setupCommand) {

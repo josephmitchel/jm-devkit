@@ -12,16 +12,10 @@ Extracted from one project's in-repo audit system. State lives in Postgres (`cod
 
 ## Usage
 
+A project needs no registration: its `devkit.json` says how it is set up and tested, and its
+database row is made the first time a command meets it.
+
 ```sh
-# one-time repo registration; a project with a devkit.json needs no options
-node bin/code-reviewer.mjs repo add owner/name
-
-# the fallback for a project with no devkit.json: its setup and tests go in the database row
-node bin/code-reviewer.mjs repo add owner/name \
-  --setup "npm ci" \
-  --tests "unit=npm test" --tests "db=npm run test:db" \
-  --harness-notes-file ./notes.md
-
 # run (or resume) the review loop for a PR
 node bin/code-reviewer.mjs run owner/name 42
 
@@ -65,8 +59,8 @@ Adding a project, which puts it on the machine from the start:
    cannot add a repository to an App's installation.
 3. Create what install said is missing for the summaries (see "The night's summary").
 
-The nightly run creates the project's database row the first night it meets the project. A project
-still on GitHub Actions got its row from `node bin/code-reviewer.mjs repo add owner/name`.
+The first run that meets the project creates its database row. The row keeps only what the code
+reviewer has learned: its policies, its digest issue and its past reviews and sweeps.
 
 The App needs these repository permissions: Contents, Issues, Pull requests, Commit statuses,
 Actions and **Discussions** (all read and write), Metadata (read), and **Workflows (read and
@@ -86,8 +80,7 @@ house standards hold in every project, including one with no `CODING_STANDARDS.m
 
 ## The project config: `devkit.json`
 
-A project can say how it is set up and tested in a `devkit.json` at its root, instead of in its
-database row. The format is defined once, as a JSON Schema at `plugin/devkit.schema.json`, whose
+A project says how it is set up and tested in a `devkit.json` at its root. The format is defined once, as a JSON Schema at `plugin/devkit.schema.json`, whose
 descriptions document each field; the kit's own `devkit.json` is an example. Its `reviewer`
 section holds `setup`, `tests` (`[{ "name", "command" }]`), `env`, `databases`, `harnessNotes`,
 `redundancy` and `extraContext`. Its `nightly` section holds `checks` (`[{ "name", "command" }]`),
@@ -99,15 +92,15 @@ code reviewer. Its `deploy` section is for the apps machine, whose `deploy` comm
 On every run, in the PR loop and in the sweep, the code reviewer reads the file from the checkout
 it has just made (so a PR that changes it is set up and tested as it says):
 
-- **With a `devkit.json`**, its `reviewer` section is the whole answer and the database row's setup,
-  tests, harness notes, redundancy and extra context are not consulted; a field the file leaves out
+- **With a `devkit.json`**, its `reviewer` section is the whole answer: a field the file leaves out
   means none (redundancy 1). `harnessNotes` is a path to a doc in the project, which must exist.
   `env` is applied to the project's setup, test and nightly check commands only; the action's `repo-env` input is
   applied over it and wins on a name both set, because the input is where a secret comes from.
   `databases` names the variables that each get an empty database: see below.
-- **Without one**, everything comes from the database row, exactly as before.
+- **Without one**, or with one whose `modules` leave out `process`, the run fails as the project's
+  fault, with a message saying to run `/devkit:install` in the project.
 - **A malformed one** fails the run, with a message naming each field at fault
-  (`reviewer.tests[0].command is required`). It never falls back to the row.
+  (`reviewer.tests[0].command is required`).
 
 The code reviewer validates the file with the kit's one small interpreter of the schema's keywords
 (`plugin/devkit-config.mjs`, which the generator uses too), so the schema stays the one

@@ -16,6 +16,7 @@ import { runGating } from './stages/gate.js';
 import { markGate, progressStep, startProgress } from './stages/progress.js';
 import { MAX_ROUNDS, requireRound, type Ctx } from './stages/context.js';
 import { droppingTestDatabases } from './test-databases.js';
+import { ensureProjectRow } from './project-row.js';
 
 type State = (typeof schema.reviewState.enumValues)[number];
 
@@ -31,8 +32,8 @@ async function setState(ctx: Ctx, state: State, error: string | null = null): Pr
 }
 
 async function loadCtx(repoSlug: string, prNumber: number): Promise<Ctx> {
+  await ensureProjectRow(repoSlug);
   const [repo] = await db.select().from(schema.repos).where(eq(schema.repos.slug, repoSlug));
-  if (!repo) throw new Error(`repo ${repoSlug} not registered — run: code-reviewer repo add ${repoSlug} …`);
 
   let [review] = await db
     .select()
@@ -253,12 +254,7 @@ async function stateAfterReport(ctx: Ctx): Promise<State> {
  */
 async function runIntakeWorkspaceOnly(ctx: Ctx): Promise<void> {
   if (!ctx.round) throw new Error(`state ${ctx.review.state} with no current round`);
-  ctx.workspaceDir = await prepareWorkspace(
-    ctx.repo.slug,
-    ctx.repo.cloneUrl,
-    ctx.review.prBranch,
-    ctx.round.headSha,
-  );
+  ctx.workspaceDir = await prepareWorkspace(ctx.repo.slug, ctx.review.prBranch, ctx.round.headSha);
   await readProject(ctx);
   await runSetup(ctx);
 }

@@ -166,7 +166,6 @@ describe('whose databases a nightly run drops as it starts, with the machine in 
 
 describe('withAddresses', () => {
   const project: ProjectSetup = {
-    source: 'devkit.json',
     setupCommand: 'npm ci',
     testCommands: [{ name: 'db', command: 'npm run test:db' }],
     redundancy: 1,
@@ -267,7 +266,6 @@ describe('on a machine with no way to create databases', () => {
   });
 
   const project: ProjectSetup = {
-    source: 'devkit.json',
     setupCommand: null,
     testCommands: [{ name: 'unit', command: 'npm test' }],
     redundancy: 1,

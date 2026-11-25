@@ -182,8 +182,7 @@ export async function runSetup(ctx: Ctx): Promise<void> {
  * its own `devkit.json`.
  */
 export async function readProject(ctx: Ctx): Promise<void> {
-  const project = readProjectSetup(requireWorkspace(ctx), ctx.repo);
-  console.log(`project setup read from ${project.source === 'devkit.json' ? 'devkit.json' : 'the database row'}`);
+  const project = readProjectSetup(requireWorkspace(ctx));
   ctx.project = await provideTestDatabases(`review:${ctx.review.id}`, project);
 }
 
@@ -245,12 +244,7 @@ export async function runIntake(ctx: Ctx): Promise<void> {
   }
   ctx.round = round;
 
-  ctx.workspaceDir = await prepareWorkspace(
-    ctx.repo.slug,
-    ctx.repo.cloneUrl,
-    pr.headRef,
-    pr.headSha,
-  );
+  ctx.workspaceDir = await prepareWorkspace(ctx.repo.slug, pr.headRef, pr.headSha);
   console.log(`workspace ready at ${ctx.workspaceDir}`);
   await readProject(ctx);
 

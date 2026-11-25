@@ -48,16 +48,20 @@ async function git(cwd: string, args: string[]): Promise<string> {
 }
 
 /** Clone once, then fetch + checkout the PR branch hard-reset to the given SHA. */
+/** Where a project is cloned from: its slug on GitHub, which is all the code reviewer keeps of it. */
+export function cloneUrl(slug: string): string {
+  return `https://github.com/${slug}.git`;
+}
+
 export async function prepareWorkspace(
   repoSlug: string,
-  cloneUrl: string,
   branch: string,
   headSha: string,
   dir: string = workspacePath(repoSlug),
 ): Promise<string> {
   if (!fs.existsSync(path.join(dir, '.git'))) {
     fs.mkdirSync(path.dirname(dir), { recursive: true });
-    await execFileAsync('git', ['clone', cloneUrl, dir]);
+    await execFileAsync('git', ['clone', cloneUrl(repoSlug), dir]);
   }
   await git(dir, ['fetch', 'origin', '--prune']);
   await ensureCommitPresent(dir, headSha);
