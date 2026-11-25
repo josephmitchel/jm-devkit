@@ -41,7 +41,6 @@ async function exists(database: string): Promise<boolean> {
 
 function projectNaming(databases: string[]): ProjectSetup {
   return {
-    source: 'devkit.json',
     setupCommand: null,
     testCommands: [{ name: 'db', command: 'true' }],
     redundancy: 1,

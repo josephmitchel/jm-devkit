@@ -91,13 +91,6 @@ export interface FixPlan {
 export const repos = pgTable('repos', {
   id: serial('id').primaryKey(),
   slug: text('slug').notNull().unique(), // owner/name
-  cloneUrl: text('clone_url').notNull(),
-  defaultBranch: text('default_branch').notNull().default('main'),
-  setupCommand: text('setup_command'),
-  testCommands: jsonb('test_commands').$type<TestCommand[]>().notNull().default([]),
-  redundancy: integer('redundancy').notNull().default(1),
-  harnessNotes: text('harness_notes'),
-  extraContext: text('extra_context'),
   // The long-lived issue the sweep keeps per repo: a rolling list of minor findings. Created on the
   // first sweep, edited ever after.
   digestIssueNumber: integer('digest_issue_number'),

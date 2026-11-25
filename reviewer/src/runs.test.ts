@@ -97,7 +97,7 @@ describe('how a run ended, from what was seen of its command', () => {
   });
 
   it('failed while starting when it stopped before any stage', () => {
-    const output = [at('repo acme/widgets not registered — run: code-reviewer repo add acme/widgets …'), `${ID} error type: Error`].join('\n');
+    const output = [at('connect ECONNREFUSED 127.0.0.1:5432'), `${ID} error type: Error`].join('\n');
     expect(runResult(ID, { exitCode: 1, signal: null, output })).toEqual({
       state: 'failed',
       stage: 'starting',

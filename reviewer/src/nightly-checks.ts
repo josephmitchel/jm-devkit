@@ -1,14 +1,11 @@
-import { eq } from 'drizzle-orm';
 
 import { CONFIG_FILE, parseDevkitConfig } from '../../plugin/devkit-config.mjs';
-import { db, schema } from './db/client.js';
 import type { TestCommand } from './db/schema.js';
 import { NightlyCheckError, SetupCommandError } from './failure-side.js';
 import { getBranchHead, getDefaultBranch, getDefaultBranchFile } from './github.js';
 import { markStage } from './heartbeat.js';
 import { CHECKS_LOCK_CLASS, checksLockKey, locksHeld, tryLock } from './locks.js';
-import { readProjectSetup, type ProjectRow, type ProjectSetup } from './project-config.js';
-import { cloneUrl } from './project-row.js';
+import { readProjectSetup, type ProjectSetup } from './project-config.js';
 import { takeRecordedStep } from './recorded-step.js';
 import { howEnded, type CHECKS_STAGES } from './run-vocabulary.js';
 import type { Run } from './runs.js';
@@ -109,9 +106,6 @@ export async function runChecks(
   return results;
 }
 
-// A project that names checks has a project config, so nothing is ever taken from a database row.
-const NO_ROW: ProjectRow = { setupCommand: null, testCommands: [], redundancy: 1, harnessNotes: null, extraContext: null };
-
 function enter(stage: (typeof CHECKS_STAGES)[number]): void {
   markStage(stage);
   console.log(`\n=== checks state: ${stage} ===`);
@@ -136,13 +130,11 @@ export async function runProjectChecks(slug: string): Promise<void> {
 }
 
 async function checkProject(slug: string): Promise<void> {
-  const [repo] = await db.select().from(schema.repos).where(eq(schema.repos.slug, slug));
   const branch = await getDefaultBranch(slug);
   const head = await getBranchHead(slug, branch);
-  // The checks need no row of the project's; one that is there says where it is cloned from.
-  const dir = await prepareWorkspace(slug, repo?.cloneUrl ?? cloneUrl(slug), branch, head, checksWorkspacePath(slug));
+  const dir = await prepareWorkspace(slug, branch, head, checksWorkspacePath(slug));
   console.log(`checkout of ${branch} at ${head.slice(0, 10)} ready at ${dir}`);
-  const read = readProjectSetup(dir, NO_ROW);
+  const read = readProjectSetup(dir);
   if (read.nightlyChecks.length === 0) {
     console.log(`${slug} names no nightly checks at ${head.slice(0, 10)}: nothing to run`);
     return;

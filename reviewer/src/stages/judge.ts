@@ -23,7 +23,7 @@ export async function runJudging(ctx: Ctx): Promise<{ judged: number; resolved: 
         `remote is now ${postFixSha.slice(0, 10)}); comment on the PR to start a fresh round`,
     );
   }
-  await prepareWorkspace(ctx.repo.slug, ctx.repo.cloneUrl, ctx.review.prBranch, postFixSha);
+  await prepareWorkspace(ctx.repo.slug, ctx.review.prBranch, postFixSha);
 
   const addressedSlugs = new Set(plan.steps.map((s) => s.concernSlug));
   const candidates = (await reviewConcerns(ctx)).filter(
