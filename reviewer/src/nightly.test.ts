@@ -26,7 +26,7 @@ describe("the nightly run's order of work", () => {
         { project: 'acme/widgets', kind: 'summary' },
       ],
       skipped: [
-        'Acme/bare skipped: its default branch has no devkit.json',
+        'Acme/bare skipped: its default branch has no devkit.json: run /devkit:install in the project to bring it under the kit',
         'acme/gadgets still on Actions: its default branch has .github/workflows/nightly-sweep.yml',
       ],
     });
@@ -50,7 +50,7 @@ describe('a project the machine would handle, whose project config is invalid', 
         { project: 'acme/widgets', kind: 'summary' },
       ],
       skipped: [
-        'Acme/bare skipped: its default branch has no devkit.json',
+        'Acme/bare skipped: its default branch has no devkit.json: run /devkit:install in the project to bring it under the kit',
         'acme/gadgets still on Actions: its default branch has .github/workflows/nightly-sweep.yml',
       ],
     });

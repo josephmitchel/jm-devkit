@@ -24,21 +24,29 @@ export interface ProjectSetup {
   nightlyChecks: TestCommand[];
 }
 
-const INSTALL = 'run /devkit:install in the project to bring it under the kit';
+export const INSTALL = 'run /devkit:install in the project to bring it under the kit';
+
+/** A project with no `devkit.json` is not under the kit, which is not the same as having an invalid one. */
+export class NotUnderKitError extends DevkitConfigError {
+  constructor() {
+    super(`the project has no ${CONFIG_FILE}: ${INSTALL}`);
+    this.name = 'NotUnderKitError';
+  }
+}
 
 /**
  * The one place a run learns how to set up and test the project in `checkoutDir`, from the
  * `reviewer` section of its `devkit.json`: a field the file leaves out means none (or, for
- * redundancy, 1). A project with no `devkit.json`, one that does not use the process module, a
- * file the schema rejects, or harness notes it points at that are not there throws a
- * {@link DevkitConfigError}, which fails the run as the project's fault.
+ * redundancy, 1). A project with no `devkit.json` throws a {@link NotUnderKitError}; one that does
+ * not use the process module, a file the schema rejects, or harness notes it points at that are not
+ * there throws a {@link DevkitConfigError}. Either fails the run as the project's fault.
  */
 export function readProjectSetup(checkoutDir: string): ProjectSetup {
   const file = path.join(checkoutDir, CONFIG_FILE);
   if (!fs.existsSync(file)) {
-    throw new DevkitConfigError(`the project has no ${CONFIG_FILE}: ${INSTALL}`);
+    throw new NotUnderKitError();
   }
-  const config = parseForReviewer(fs.readFileSync(file, 'utf8'));
+  const config = parseProjectConfig(fs.readFileSync(file, 'utf8'));
   const reviewer = config.reviewer;
   return {
     setupCommand: reviewer.setup ?? null,
@@ -53,7 +61,7 @@ export function readProjectSetup(checkoutDir: string): ProjectSetup {
 }
 
 /** A `modules` the schema rejects means the project is not under the process module, which install puts it under. */
-function parseForReviewer(text: string): ReturnType<typeof parseDevkitConfig> {
+export function parseProjectConfig(text: string): ReturnType<typeof parseDevkitConfig> {
   try {
     return parseDevkitConfig(text);
   } catch (err) {

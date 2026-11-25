@@ -11,7 +11,9 @@ import {
   validate,
   type JsonSchema,
 } from '../../plugin/devkit-config.mjs';
+import { projectFault } from './failure-side.js';
 import { readProjectSetup } from './project-config.js';
+import { errorType } from './run-vocabulary.js';
 
 let checkout: string;
 
@@ -130,6 +132,17 @@ describe('readProjectSetup with a devkit.json', () => {
 describe('readProjectSetup for a project not under the kit', () => {
   it('refuses a project with no devkit.json, naming install', () => {
     expect(setupError()).toMatch(/no devkit\.json: run \/devkit:install in the project/);
+  });
+
+  it('refuses a project with no devkit.json as not under the kit, not as having an invalid one', () => {
+    let thrown: unknown;
+    try {
+      readProjectSetup(checkout);
+    } catch (err) {
+      thrown = err;
+    }
+    expect(errorType(thrown)).toBe('NotUnderKitError');
+    expect(projectFault(errorType(thrown))).toMatch(/has no project config \(`devkit\.json`\).*\/devkit:install/);
   });
 
   it('refuses a devkit.json whose modules leave out process, naming install', () => {

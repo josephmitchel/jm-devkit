@@ -141,7 +141,7 @@
           "minimum": 1
         },
         "extraContext": {
-          "description": "Free text about the project for the code reviewer, carried over from the database row it replaces.",
+          "description": "Free text about the project for the code reviewer.",
           "type": "string"
         }
       }

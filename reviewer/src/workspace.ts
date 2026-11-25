@@ -47,12 +47,12 @@ async function git(cwd: string, args: string[]): Promise<string> {
   return stdout.trim();
 }
 
-/** Clone once, then fetch + checkout the PR branch hard-reset to the given SHA. */
 /** Where a project is cloned from: its slug on GitHub, which is all the code reviewer keeps of it. */
 export function cloneUrl(slug: string): string {
   return `https://github.com/${slug}.git`;
 }
 
+/** Clone once, then fetch + checkout the PR branch hard-reset to the given SHA. */
 export async function prepareWorkspace(
   repoSlug: string,
   branch: string,

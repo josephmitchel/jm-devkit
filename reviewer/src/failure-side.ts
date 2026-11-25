@@ -26,6 +26,7 @@ export class NightlyCheckError extends Error {
  * and add its name here. A type not listed is the code reviewer's side.
  */
 const PROJECT_FAULTS = new Map<string, string>([
+  ['NotUnderKitError', 'it has no project config (`devkit.json`), so it is not under the kit: run `/devkit:install` in it'],
   ['DevkitConfigError', 'its project config (`devkit.json`) is invalid'],
   ['SetupCommandError', 'its setup command failed'],
   ['MissingDiscussionCategoryError', "it has discussions turned off, or no discussion category for the code reviewer's summaries"],
