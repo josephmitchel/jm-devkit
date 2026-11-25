@@ -10,5 +10,5 @@ Everything the kit needs to know about a project lives in that project's `devkit
 ## Consequences
 
 - Install touches only the project. The remaining human step is installing the App on the repository.
-- The code reviewer names no project. On the development machine it finds them through the App, and each night's run sweeps every one it handles (ADR 0007). Before that move, the sweep Worker found them the same way and read each one's sweep hour from its config. Sweep hours are retired, and the Worker goes with the kit's Actions support.
+- The code reviewer names no project. On the development machine it finds them through the App, and each night's run sweeps every one it handles (ADR 0007). Before that move, the sweep Worker never did: it kept its own list of projects, each with a cron, in its source. Sweep hours are retired, and the Worker and its list go with the kit's Actions support.
 - The code reviewer's database keeps what it has learned about a project (its policies, its digest issue) but no longer holds how to set the project up or test it.
