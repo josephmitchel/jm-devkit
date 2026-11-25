@@ -14,28 +14,18 @@ const kitRoot = fileURLToPath(new URL('../../', import.meta.url));
 
 const minimal = {
   modules: ['process'],
-  sweep: { hour: 3 },
   reviewer: { tests: [{ name: 'unit', command: 'npm test' }] },
 };
 
 const withDatabase = {
   modules: ['process'],
-  sweep: { hour: 5 },
   reviewer: {
     setup: 'npm ci',
     tests: [
       { name: 'unit', command: 'npm test' },
       { name: 'db', command: 'npm run test:db' },
     ],
-    env: { TEST_DATABASE_URL: 'postgresql://postgres:postgres@localhost:5432/app_test' },
-    services: {
-      postgres: {
-        image: 'postgres:16',
-        env: { POSTGRES_USER: 'postgres', POSTGRES_PASSWORD: 'postgres' },
-        ports: ['5432:5432'],
-        options: '--health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5',
-      },
-    },
+    databases: ['TEST_DATABASE_URL'],
   },
 };
 
@@ -114,7 +104,7 @@ test('--check lists a project that still has the sweep workflow as behind, says 
   const run = cli(dir, '--check');
   assert.equal(run.code, 1);
   assert.equal(run.stdout, `${SWEEP_WORKFLOW}\n`);
-  assert.match(run.stderr, /^\.github\/workflows\/nightly-sweep\.yml is retired: removing it moves the project's code reviewer from GitHub Actions to the development machine$/m);
+  assert.match(run.stderr, /^\.github\/workflows\/nightly-sweep\.yml is retired: removing it lets the code reviewer on the development machine handle the project, which it leaves alone while the file is there$/m);
   assert.equal(fs.readFileSync(file, 'utf8'), workflow);
 });
 

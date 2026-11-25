@@ -34,7 +34,7 @@ describe('timestampConsole', () => {
 });
 
 describe('printRaw', () => {
-  // The action greps `^outcome: ` from the run's output and captures `next` whole.
+  // A script reads an `outcome: ` line, or `next`'s output, whole.
   it('writes the line unstamped, even once the console is stamped', () => {
     const out = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
     timestampConsole(() => AT);

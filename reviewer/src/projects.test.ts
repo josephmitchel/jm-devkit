@@ -4,7 +4,6 @@ import { classifyProjects, projectLine, projectState } from './projects.js';
 
 const config = JSON.stringify({
   modules: ['process'],
-  sweep: { hour: 4 },
   reviewer: { tests: [{ name: 'unit', command: 'npm test' }] },
 });
 
@@ -48,7 +47,7 @@ describe('projectState', () => {
   });
 
   it('is skipped with a project config that is not valid, saying what is wrong with it and that it has one', () => {
-    expect(projectState({ config: '{"modules":["process"],"sweep":{"hour":4}}', sweepWorkflow: false })).toEqual({
+    expect(projectState({ config: '{"modules":["process"]}', sweepWorkflow: false })).toEqual({
       state: 'skipped',
       reason: 'devkit.json is malformed: reviewer is required',
       invalidConfig: true,

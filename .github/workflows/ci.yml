@@ -48,7 +48,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          # The code reviewer pins no version of its own; its action defaults to 24.
+          # The code reviewer pins no version of its own; the development machine runs 24.
           node-version: 24
           cache: npm
           cache-dependency-path: reviewer/package-lock.json
@@ -56,8 +56,7 @@ jobs:
       # The package has no typecheck script; its tsconfig is noEmit, so tsc is the typecheck.
       - name: Typecheck
         run: npx --no-install tsc -p .
-      # Covers src/ and the Worker's tests (worker/src/index.test.ts) through vitest.config.ts.
-      - name: Test the code reviewer and the Worker
+      - name: Test the code reviewer
         run: npm test
         env:
           # src/db/client.ts throws at import time without it, and six test files import it.

@@ -30,26 +30,21 @@ node bin/code-reviewer.mjs reset owner/name 42   # forget a review (keeps concer
 `projects` needs the App's credentials in the environment (`REVIEWER_APP_CLIENT_ID`,
 `REVIEWER_APP_PRIVATE_KEY`). It prints one line per project, in name order: `handled` when the
 project's default branch has a valid `devkit.json` and no sweep workflow, `still on Actions` while
-the workflow is there, and `skipped` with the reason otherwise. It exits non-zero when GitHub
+the old workflow is there (see below), and `skipped` with the reason otherwise. It exits non-zero when GitHub
 refuses the App.
 
-## On GitHub Actions
+## Where it runs
 
-`action.yml` runs one slice of the loop on a GitHub runner, so reviews happen on GitHub rather
-than on your machine. State lives in Postgres and nothing blocks: a review that needs an answer
-exits, and a later run continues it once you have replied.
+The code reviewer runs on the development machine, as a service (ADR 0007): see "The nightly run"
+and "The poller" below. State lives in Postgres and nothing blocks: a review that needs an answer
+stops, and the poller continues it once you have replied.
 
-A project on GitHub Actions has the kit-owned `.github/workflows/nightly-sweep.yml`: the `sweep`
-job, the `landed` job, and the `review-now` job, which is the per-PR review, run on demand by
-labelling a PR `review-now`. The kit has retired that file. The generator (`plugin/generator/`) no
-longer writes it, so no project is added to Actions any more, and a project that still has it
-keeps working there until it moves: `/devkit:sync` opens a pull request that removes the workflow,
-and merging that pull request hands the project to the development machine, where the code
-reviewer runs (`projects` then shows it `handled`). The pull request lists what is left for the
-owner: the project's four repository secrets to remove, and its line in the Worker's list
-(`worker/README.md`).
+It used to run on GitHub Actions, from a kit-owned `.github/workflows/nightly-sweep.yml` in each
+project. Every project has moved, and the kit no longer has the action that workflow used. The
+generator still knows the file as retired: a project that somehow still has one is left alone by
+the machine (`projects` shows it `still on Actions`), and the next `/devkit:sync` removes it.
 
-Adding a project, which puts it on the machine from the start:
+Adding a project:
 
 1. Run `/devkit:install` in the project. It writes `devkit.json`, creates the `review-now` label,
    and checks two things it cannot do itself: that the App is installed, and that the project has
@@ -62,8 +57,8 @@ Adding a project, which puts it on the machine from the start:
 The first run that meets the project creates its database row. The row keeps only what the code
 reviewer has learned: its policies, its digest issue and its past reviews and sweeps.
 
-The App needs these repository permissions: Contents, Issues, Pull requests, Commit statuses,
-Actions and **Discussions** (all read and write), Metadata (read), and **Workflows (read and
+The App needs these repository permissions: Contents, Issues, Pull requests, Commit statuses
+and **Discussions** (all read and write), Metadata (read), and **Workflows (read and
 write)** — without the last one, GitHub rejects any fix that touches a file under
 `.github/workflows/`, and the push fails with nothing else in the system able to explain why.
 Discussions is what lets the code reviewer post each night's summary (see "The night's summary").
@@ -84,9 +79,9 @@ A project says how it is set up and tested in a `devkit.json` at its root. The f
 descriptions document each field; the kit's own `devkit.json` is an example. Its `reviewer`
 section holds `setup`, `tests` (`[{ "name", "command" }]`), `env`, `databases`, `harnessNotes`,
 `redundancy` and `extraContext`. Its `nightly` section holds `checks` (`[{ "name", "command" }]`),
-the project's nightly checks: see "Nightly checks" below. `sweep.hour` and `reviewer.services` are
-retired: still accepted, for a project whose sweep still runs on GitHub Actions, and ignored by the
-code reviewer. Its `deploy` section is for the apps machine, whose `deploy` command reads it
+the project's nightly checks: see "Nightly checks" below. A `devkit.json` that still has `sweep` or
+`reviewer.services`, from when the code reviewer ran on GitHub Actions, is invalid, and the error says
+to remove it. Its `deploy` section is for the apps machine, whose `deploy` command reads it
 (`apps-machine/README.md`): the code reviewer checks that it is well formed and does nothing with it.
 
 On every run, in the PR loop and in the sweep, the code reviewer reads the file from the checkout
@@ -94,8 +89,8 @@ it has just made (so a PR that changes it is set up and tested as it says):
 
 - **With a `devkit.json`**, its `reviewer` section is the whole answer: a field the file leaves out
   means none (redundancy 1). `harnessNotes` is a path to a doc in the project, which must exist.
-  `env` is applied to the project's setup, test and nightly check commands only; the action's `repo-env` input is
-  applied over it and wins on a name both set, because the input is where a secret comes from.
+  `env` is applied to the project's setup, test and nightly check commands only. The file is
+  committed, so it holds no secret.
   `databases` names the variables that each get an empty database: see below.
 - **Without one**, or with one whose `modules` leave out `process`, the run fails as the project's
   fault, with a message saying to run `/devkit:install` in the project.
@@ -121,7 +116,7 @@ The server they are created on is the setting `REVIEWER_TEST_DATABASES_URL`: a P
 (`postgres://role:password@host:5432/postgres`) as a role that may create databases. Give it a role
 of its own that cannot open the code reviewer's database, because the project's commands are handed
 that role's addresses. With `reviewer.databases` set and the setting absent the run fails, saying
-so; GitHub Actions has no such server, so a project adds `databases` when it moves to the machine.
+so.
 
 Every database is recorded in the `test_databases` table before it is created, under the review,
 the sweep or the project's nightly checks it is for, and only a recorded database is ever dropped.
@@ -184,17 +179,14 @@ settle owner decisions → read answers → audit base...head → synthesis → 
   the plugin's `plugin/docs/issue-tracker.md`.
 - **What happened:** every action leaves a comment on the issue it touched, and the run's log
   ends with the synthesis's account of the night. On the machine that account is also posted as a
-  discussion in the project ("The night's summary"). A sweep that stops fails its Actions run, so
-  GitHub's failed-run notification is the alert; the next run resumes where it stopped.
-  `code-reviewer status` lists the recent sweeps.
+  discussion in the project ("The night's summary"). A sweep that stops opens a failure issue where
+  the fault is ("When a run fails"); the next run resumes where it stopped. `code-reviewer status`
+  lists the recent sweeps.
 
-Run it with `node bin/code-reviewer.mjs sweep owner/name`, or on Actions with the retired
-`.github/workflows/nightly-sweep.yml` of a project that has not moved (`command: sweep`). GitHub's `schedule` trigger is
-best-effort (hours late in practice), so the schedule lives in a Cloudflare Worker that dispatches
-each repo's workflow on the minute as the reviewer's App: `worker/README.md`. That workflow also carries a
-`review-now` job: label a PR `review-now` to get the full PR review on demand. The two modes share
-the database, the concerns and the policies, so an answer given on a PR binds the sweep and vice
-versa; running both on the same repo at the same moment is not supported.
+Run it with `node bin/code-reviewer.mjs sweep owner/name`; the nightly run below runs it for every
+handled project. Label a PR `review-now` to get the full PR review on demand: the poller starts it.
+The two share the database, the concerns and the policies, so an answer given on a PR binds the
+sweep and vice versa.
 
 ## The nightly run (on the machine)
 
@@ -215,7 +207,7 @@ A nightly run has the machine for the night. If a review is running when it star
 that review to finish and then goes; while it is going no review starts, and a second nightly run
 does not start beside it (see "The queue of reviews").
 
-A sweep has five and a half hours, as a run on GitHub Actions had, and the summary step, which
+A sweep has five and a half hours, and the summary step, which
 runs no agents, has ten minutes. One that runs longer is stopped,
 with the agents and commands it started, and the run goes on to the next step. Told to stop
 (SIGTERM, as when its service is stopped), the nightly run stops the step it is on and takes no
@@ -421,7 +413,7 @@ alone for that pass and the others are still handled; the command then exits non
 
 ## The queue of reviews (on the machine)
 
-The per-PR review runs on the machine without Actions. A pass of the poller finds the reviews to
+The per-PR review runs on the machine. A pass of the poller finds the reviews to
 run and puts them on record; `node bin/code-reviewer.mjs queue` takes one turn of the queue, in
 which at most one of them does any work. A review can run for five and a half hours, and a pass
 must stay short and keep running so that `landed` is never held up, so a pass only decides and
@@ -455,8 +447,7 @@ run that starts while a review is running waits for that review (at most its tim
 goes: the night is put back, never skipped. Once a nightly run is going no review starts until it
 is over, even between its sweeps, so a queue of reviews cannot put the night's sweeps back. A
 second nightly run beside one that is going does not start. `landed`, `carry-gate`, the summary
-and the nightly checks run no agents and take neither lock. Nor do `sweep` and `run` themselves:
-a project still on Actions runs them against the same database. The locks are taken by the
+and the nightly checks run no agents and take neither lock. Nor do `sweep` and `run` themselves: the locks are taken by the
 `nightly` and `queue` commands, so a `sweep` or `run` started by hand is outside the rule.
 
 The locks belong to a database session, so they hold only on a direct address. Before the nightly
@@ -495,9 +486,6 @@ the review is in afterwards:
 - stopped by its time limit for the third time in a row: handled, like a stop in a stage, so a
   review that keeps running out its limit is resumed twice and then waits for the owner's comment.
   The count is `reviews.time_limit_stops`; it starts again from none whenever the event is handled.
-
-This replaces the workflow dispatch hand-off (`REVIEWER_DISPATCH_WORKFLOW`), which a project still
-on Actions keeps.
 
 **Recorded and reported.** Each review the queue starts is a run of kind `review` in the `runs`
 table, started through `runCommand`: it has the five and a half hours an agent job has, and one
@@ -609,7 +597,7 @@ intake → audit (scout + 10 auditors) → synthesis ──┬─ clean → gate
 - The gate only ever follows a clean audit of the current head — fix commits are always re-audited.
 - Until then `code-reviewer/gate` sits at pending with the current stage (`Round 2: making fixes`), and turns red if the review stops.
 - Once a fix cycle starts ("Got it" after your answers), one progress comment is edited as it moves, up to the next report. A stopped review posts a comment saying where and why.
-- A passed PR whose head later moves to already-reviewed code (merging a PR stacked on it leaves such a merge commit) gets its gate carried to the new head: on Actions on the push or on any comment, on the machine by the poller, once for each new head. Only identical code qualifies, and only when the reviews cover everything since the PR's own gated commit.
+- A passed PR whose head later moves to already-reviewed code (merging a PR stacked on it leaves such a merge commit) gets its gate carried to the new head by the poller, once for each new head. Only identical code qualifies, and only when the reviews cover everything since the PR's own gated commit.
 
 ## Layout
 
@@ -626,7 +614,6 @@ intake → audit (scout + 10 auditors) → synthesis ──┬─ clean → gate
 - `bin/update.mjs` — brings the code reviewer's own checkout up to date before a nightly run; `src/project-row.ts` — creates a project's row the first time it is met
 - `../vm/dev-vm-setup.sh` — the development machine's setup; `../vm/systemd/code-reviewer-*` — the units it installs for the code reviewer (the other units there are the apps machine's)
 - `src/agents/run-agent.ts` — Agent SDK wrapper (structured output, session recording, resume)
-- `worker/` — the Cloudflare Worker that starts each repo's sweep on time, as the App (`worker/README.md`)
 - `prompts/` — auditor definitions (ISO 25010 verbatim) and pipeline role prompts; `prompts/sweep/` — the sweep's framing of scout, auditor, synthesis and the ticket judge
 - `src/test-databases.ts` — the databases a project's tests are given: naming, the record of what to drop, creating and dropping
 - `src/db/schema.ts` — repos, reviews, sweeps, rounds, concerns, findings, questions, policies, agent_sessions, github_artifacts, test_databases, runs

@@ -6,7 +6,7 @@ import { configureAppAuth } from './gh-auth.js';
 import { gitCredential } from './git-credential.js';
 import { startHeartbeat } from './heartbeat.js';
 import { printRaw, timestampConsole } from './log.js';
-import { dispatchWorkflow, getDefaultBranch, getPr, listOpenPrNumbers } from './github.js';
+import { getPr, listOpenPrNumbers } from './github.js';
 import { carryGate } from './stages/carry-gate.js';
 import { ACTIVE_WORK_STATES, resolveSlot } from './stages/intake.js';
 import { markGate, progressStep } from './stages/progress.js';
@@ -121,10 +121,6 @@ async function main() {
         });
       }
       printRaw(`outcome: ${outcome}`);
-      // The slot just freed, so wake whatever was queued behind this review rather than making
-      // it wait for the scheduled sweep. A review that threw is covered by the sweep instead.
-      const dispatch = process.env.REVIEWER_DISPATCH_WORKFLOW;
-      if (outcome === 'passed' && dispatch) await handOffToQueue(slug, dispatch);
       break;
     }
     case 'sweep': {
@@ -316,8 +312,8 @@ async function abandonReview(slug: string, prNumber: number, reason: string): Pr
 }
 
 /**
- * Prints the PR number of the review that should run next, and nothing else — the Actions
- * workflow dispatches whatever lands on stdout, so every diagnostic goes to stderr.
+ * Prints the PR number of the review that should run next, and nothing else, so every diagnostic
+ * goes to stderr.
  *
  * A review turned away by `claimReviewSlot` is left in `pending`, so that is the queue. It is
  * drained oldest first, and a queued PR that has since been closed is retired here rather
@@ -326,18 +322,6 @@ async function abandonReview(slug: string, prNumber: number, reason: string): Pr
 async function showNextQueued(slug: string): Promise<void> {
   const pr = await nextQueuedPr(slug);
   if (pr !== null) printRaw(String(pr));
-}
-
-/** Dispatch the review workflow again so the queued PR starts now. */
-async function handOffToQueue(slug: string, workflowFile: string): Promise<void> {
-  const pr = await nextQueuedPr(slug);
-  if (pr === null) return;
-  // Every project this reviewer is pointed at may name its default branch differently, so ask
-  // rather than assume: a dispatch to a ref that does not exist is rejected, and the queued PR
-  // would then wait for the scheduled sweep with nothing saying why.
-  const ref = process.env.REVIEWER_DISPATCH_REF?.trim() || (await getDefaultBranch(slug));
-  await dispatchWorkflow(slug, workflowFile, ref);
-  console.log(`dispatched ${workflowFile} on ${ref} for queued PR #${pr}`);
 }
 
 async function nextQueuedPr(slug: string): Promise<number | null> {
@@ -359,7 +343,7 @@ async function nextQueuedPr(slug: string): Promise<number | null> {
       return slot.conflict.pr;
     }
     console.error(
-      `PR #${slot.conflict.pr} still holds the slot (${slot.conflict.state}) — nothing to dispatch`,
+      `PR #${slot.conflict.pr} still holds the slot (${slot.conflict.state}) — nothing to start`,
     );
     return null;
   }

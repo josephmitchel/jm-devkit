@@ -71,12 +71,6 @@ export async function getTreeSha(repoSlug: string, sha: string): Promise<string>
   return (await ghJson<{ tree: { sha: string } }>(['api', `repos/${repoSlug}/git/commits/${sha}`])).tree.sha;
 }
 
-/** The Actions run this process belongs to, or null outside CI. */
-export function actionsRunUrl(): string | null {
-  const { GITHUB_SERVER_URL: server, GITHUB_REPOSITORY: repo, GITHUB_RUN_ID: runId } = process.env;
-  return server && repo && runId ? `${server}/${repo}/actions/runs/${runId}` : null;
-}
-
 export async function postComment(
   repoSlug: string,
   prNumber: number,
@@ -206,7 +200,7 @@ export async function listOpenPrNumbers(repoSlug: string): Promise<number[]> {
   return prs.map((p) => p.number).sort((a, b) => a - b);
 }
 
-/** The repo's default branch — the ref a dispatch has to name, and not always `main`. */
+/** The repo's default branch, which is not always `main`. */
 export async function getDefaultBranch(repoSlug: string): Promise<string> {
   return (await ghJson<{ default_branch: string }>(['api', `repos/${repoSlug}`])).default_branch;
 }
@@ -219,22 +213,6 @@ export async function getDefaultBranchFile(repoSlug: string, filePath: string): 
     if (/HTTP 404/.test((err as { stderr?: string }).stderr ?? '')) return null;
     throw err;
   }
-}
-
-/**
- * Fire a `workflow_dispatch` so the next queued review starts at once instead of waiting for
- * the scheduled sweep. Dispatches are the one event type GitHub still delivers when the actor
- * is a token it would otherwise suppress, so this chain cannot be broken by loop protection.
- */
-export async function dispatchWorkflow(repoSlug: string, workflowFile: string, ref: string): Promise<void> {
-  await gh([
-    'api',
-    '-X',
-    'POST',
-    `repos/${repoSlug}/actions/workflows/${workflowFile}/dispatches`,
-    '-f',
-    `ref=${ref}`,
-  ]);
 }
 
 export async function getViewerLogin(): Promise<string> {

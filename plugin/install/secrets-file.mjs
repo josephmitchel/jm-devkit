@@ -1,6 +1,7 @@
-// The secrets file on the development machine: the four values every project's repository secrets
-// are set from. It lives outside any repository and is readable only by its owner. Nothing here
-// prints, logs or returns a value inside an error message.
+// The secrets file on the development machine: the code reviewer's GitHub App credentials, which
+// install reads to check that the App is installed on a project. It lives outside any repository
+// and is readable only by its owner. Nothing here prints, logs or returns a value inside an error
+// message.
 
 import fs from 'node:fs';
 import os from 'node:os';
@@ -9,8 +10,8 @@ import path from 'node:path';
 export const SECRETS_FILE = 'secrets.env';
 export const KEY_FILE = 'reviewer-app-private-key.pem';
 
-/** The repository secrets a project needs, in the order the plan lists them. */
-export const SECRET_NAMES = ['DATABASE_URL', 'CLAUDE_CODE_OAUTH_TOKEN', 'REVIEWER_APP_CLIENT_ID', 'REVIEWER_APP_PRIVATE_KEY'];
+/** The App's credentials, in the order a problem with them is named. */
+export const APP_SECRET_NAMES = ['REVIEWER_APP_CLIENT_ID', 'REVIEWER_APP_PRIVATE_KEY'];
 
 /** The one secret that comes from its own file instead of a line in secrets.env. */
 const FROM_KEY_FILE = 'REVIEWER_APP_PRIVATE_KEY';
@@ -64,7 +65,7 @@ function ownerOnly(file, problems) {
  * The values of `names`, read from `dir`. Throws SecretsFileError naming every problem at once
  * (a missing file, a file others can read, a name with no value) and never a value.
  */
-export function readSecrets(names = SECRET_NAMES, dir = configDir()) {
+export function readSecrets(names = APP_SECRET_NAMES, dir = configDir()) {
   const problems = [];
   const values = {};
   const fromEnv = names.filter((n) => n !== FROM_KEY_FILE);

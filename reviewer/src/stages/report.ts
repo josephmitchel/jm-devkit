@@ -1,6 +1,6 @@
 import { eq, inArray } from 'drizzle-orm';
 import { db, schema } from '../db/client.js';
-import { actionsRunUrl, postComment } from '../github.js';
+import { postComment } from '../github.js';
 import {
   renderFailure,
   renderReport,
@@ -132,10 +132,10 @@ export async function runReport(ctx: Ctx): Promise<void> {
 export async function postFailureNotice(
   repoSlug: string,
   review: { id: number; prNumber: number },
-  input: Omit<FailureInput, 'runUrl'>,
+  input: Omit<FailureInput, 'runId'>,
 ): Promise<void> {
   try {
-    const commentId = await postComment(repoSlug, review.prNumber, renderFailure({ ...input, runUrl: actionsRunUrl() }));
+    const commentId = await postComment(repoSlug, review.prNumber, renderFailure({ ...input, runId: process.env.REVIEWER_RUN_ID ?? null }));
     await db.insert(schema.githubArtifacts).values({
       reviewId: review.id,
       kind: 'failure_comment',

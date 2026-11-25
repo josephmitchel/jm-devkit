@@ -43,9 +43,18 @@ export function parseDeployConfig(text) {
   return parseDevkitConfig(text).deploy ?? null;
 }
 
+/** Fields the schema once had, each with what to do about one a project still has. */
+const RETIRED_FIELDS = new Map([
+  ['sweep', 'sweep is retired: remove it from devkit.json. The code reviewer sweeps every project in one nightly run'],
+  ['reviewer.services', 'reviewer.services is retired: remove it from devkit.json, and name in reviewer.databases each variable the tests need a database in'],
+]);
+
 /** Validate an already-parsed devkit.json, returning it unchanged or throwing with every error. */
 export function checkDevkitConfig(value) {
-  const errors = validate(devkitSchema(), value, '');
+  const errors = validate(devkitSchema(), value, '').map((e) => {
+    const field = e.match(/^(.+) is not a known field$/)?.[1];
+    return RETIRED_FIELDS.get(field) ?? e;
+  });
   if (errors.length > 0) {
     throw new DevkitConfigError(`${CONFIG_FILE} is malformed: ${errors.join('; ')}`, errors);
   }

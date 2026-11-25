@@ -60,7 +60,7 @@ export function commandArgs({ command, project, pr }: ProjectCommand): string[] 
 export function commandKind(command: ProjectCommand['command']): RunKind {
   return command === 'run' ? 'review' : command;
 }
-// What a run on GitHub Actions was given (`timeout-minutes: 330`).
+// Five and a half hours: what a run on GitHub Actions was given, kept on the machine.
 const AGENT_JOB_LIMIT_MS = 5.5 * 60 * 60 * 1000;
 // They finish in seconds; the limit is for a call that hangs.
 const SHORT_STEPS: ReadonlySet<ProjectCommand['command']> = new Set(['landed', 'carry-gate', 'summary'] as const);
@@ -76,8 +76,7 @@ export function timeLimitMs({ command }: Pick<ProjectCommand, 'command'>, env: N
 
 /**
  * A sweep needs nothing: it resumes from its own state. A review killed mid-stage would hold its
- * project's slot and restart from the wrong place, so it is recorded as stopped, as a cancelled run
- * on GitHub Actions is.
+ * project's slot and restart from the wrong place, so it is recorded as stopped.
  */
 export function afterInterruption({ command, project, pr }: ProjectCommand, reason: StopReason): string[] | null {
   if (command !== 'run') return null;

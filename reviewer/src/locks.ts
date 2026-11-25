@@ -19,8 +19,8 @@ export const MIGRATE_LOCK = 1;
 export const PASS_LOCK = 2;
 /**
  * Held by whoever is running an agent job on the machine. Only the `nightly` and `queue` commands
- * take it and the next (`machineFor` in queue.ts says who may). `sweep` and `run` do not: a project
- * still on GitHub Actions runs them against the same database and must not wait.
+ * take it and the next (`machineFor` in queue.ts says who may). `sweep` and `run` do not, so one
+ * started by hand is outside the rule.
  */
 export const MACHINE_LOCK = 3;
 /** Held by a nightly run from its start to its end, its wait for the machine included. */

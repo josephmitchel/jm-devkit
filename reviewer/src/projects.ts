@@ -17,7 +17,8 @@ export type ProjectState =
   | { state: 'still on Actions' | 'skipped'; reason: string; invalidConfig?: true };
 
 export function projectState(observed: Observed): ProjectState {
-  // Checked first: a project is reviewed from one place, and the workflow means Actions still does it.
+  // Checked first: a project is reviewed from one place. The kit no longer has the workflow's
+  // action, but a project that still has the workflow is left alone until it is removed.
   if (observed.sweepWorkflow) {
     return { state: 'still on Actions', reason: `its default branch has ${SWEEP_WORKFLOW}` };
   }

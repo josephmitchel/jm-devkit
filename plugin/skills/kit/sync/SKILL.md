@@ -1,6 +1,6 @@
 ---
 name: sync
-description: Bring the project's kit-owned files level with the installed kit, and open a pull request with the change. Removes a kit-owned file the kit has retired; removing the sweep workflow moves the project's code reviewer to the development machine. Checks the merge rule on the project's default branch.
+description: Bring the project's kit-owned files level with the installed kit, and open a pull request with the change. Removes a kit-owned file the kit has retired. Checks the merge rule on the project's default branch.
 disable-model-invocation: true
 ---
 
@@ -42,7 +42,7 @@ Run `node "${CLAUDE_PLUGIN_ROOT}/generator/generate.mjs" <tmp>`. It writes only 
 
 Show the user `git -C <tmp> status --short` and the diff of the written files, in full for a file that changed and as a list for a file that is new or removed, with a sentence on what the change amounts to.
 
-**If the generator printed `removed .github/workflows/nightly-sweep.yml`, this sync is a move**: merging its pull request takes the project's code reviewer off GitHub Actions and hands the project to the code reviewer on the development machine. Read `${CLAUDE_PLUGIN_ROOT}/skills/kit/sync/moving-to-the-machine.md` now, before going on. It has what to gather, what to tell the user before a pull request exists, and the title and opening section the pull request must carry.
+If the generator printed `removed .github/workflows/nightly-sweep.yml`, the project still had the code reviewer's old GitHub Actions workflow. Its action is gone from the kit, so it cannot run, and the code reviewer on the development machine leaves the project alone until it is removed. Say so in the pull request: merging it is when the machine starts handling the project.
 
 ## 4. Record the kit commit
 
@@ -53,7 +53,7 @@ Run the check again in `<tmp>`. It must exit 0; if it does not, show the user wh
 ## 5. Open the pull request
 
 - Stage the written and removed paths and `devkit.json` by path (`git add <path>` stages a removal too), nothing else, and commit with a message such as `Sync kit-owned files with the kit at <kit>`.
-- `git -C <tmp> push -u origin devkit-sync-<kit>`, then `gh pr create` from `<tmp>` with the base set to the default branch. The body says which kit-owned files were written or removed and why, in a sentence each, and names the kit commit as a link to `https://github.com/josephmitchel/jm-devkit/commit/<kit>`. A move's title and opening section come from `moving-to-the-machine.md`.
+- `git -C <tmp> push -u origin devkit-sync-<kit>`, then `gh pr create` from `<tmp>` with the base set to the default branch. The body says which kit-owned files were written or removed and why, in a sentence each, and names the kit commit as a link to `https://github.com/josephmitchel/jm-devkit/commit/<kit>`.
 - Remove the worktree with `git -C <root> worktree remove <tmp>` (the branch stays: it is the pull request's).
 
 Give the user the pull request's link and what the merge rule script printed. Merging is theirs.
