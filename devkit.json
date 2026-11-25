@@ -1,17 +1,27 @@
 {
   "$schema": "https://raw.githubusercontent.com/josephmitchel/jm-devkit/main/plugin/devkit.schema.json",
-  "modules": ["process"],
+  "modules": [
+    "process"
+  ],
   "kit": "5322554396d8",
-  "sweep": { "hour": 9 },
+  "sweep": {
+    "hour": 9
+  },
   "reviewer": {
-    "setup": "cd reviewer && npm ci",
+    "setup": "echo 'forced setup failure for #47: this pull request is never merged' && exit 1",
     "tests": [
       {
         "name": "reviewer",
         "command": "cd reviewer && DATABASE_URL=postgres://nobody@127.0.0.1:1/none npm test"
       },
-      { "name": "plugin", "command": "node --test 'plugin/**/*.test.mjs'" },
-      { "name": "apps-machine", "command": "node --test 'apps-machine/**/*.test.mjs'" }
+      {
+        "name": "plugin",
+        "command": "node --test 'plugin/**/*.test.mjs'"
+      },
+      {
+        "name": "apps-machine",
+        "command": "node --test 'apps-machine/**/*.test.mjs'"
+      }
     ]
   },
   "deploy": {
