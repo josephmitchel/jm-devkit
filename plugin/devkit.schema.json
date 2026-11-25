@@ -24,20 +24,6 @@
       "type": "string",
       "pattern": "^[0-9a-f]{7,40}$"
     },
-    "sweep": {
-      "description": "Retired, and ignored by a code reviewer that runs on the development machine, which sweeps every project in one nightly run. Still accepted so that a project whose sweep is still dispatched by GitHub Actions keeps validating.",
-      "type": "object",
-      "required": ["hour"],
-      "additionalProperties": false,
-      "properties": {
-        "hour": {
-          "description": "Retired with `sweep`. The hour of the day, in UTC, at which a project still on GitHub Actions has its nightly sweep dispatched.",
-          "type": "integer",
-          "minimum": 0,
-          "maximum": 23
-        }
-      }
-    },
     "reviewer": {
       "description": "How the code reviewer sets the project up and tests it. Commands run with `sh -c` from the project root of a fresh checkout, without the code reviewer's own credentials in their environment.",
       "type": "object",
@@ -72,7 +58,7 @@
           }
         },
         "env": {
-          "description": "Environment variables for the project's setup, test and nightly check commands, and only for them. The same role as the action's `repo-env` input, which wins on a name both set: the input is where a secret can come from, and this file is committed. A name the code reviewer keeps for itself, `DATABASE_URL` say, may be set here; it reaches the project's commands without ever entering the code reviewer's own environment.",
+          "description": "Environment variables for the project's setup, test and nightly check commands, and only for them. This file is committed, so it holds no secret. A name the code reviewer keeps for itself, `DATABASE_URL` say, may be set here; it reaches the project's commands without ever entering the code reviewer's own environment.",
           "type": "object",
           "propertyNames": { "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
           "additionalProperties": { "type": "string" }
@@ -82,53 +68,6 @@
           "type": "array",
           "uniqueItems": true,
           "items": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" }
-        },
-        "services": {
-          "description": "Retired, and ignored by the code reviewer: on the development machine the tests get their databases from `databases`. Still accepted for a project whose tests still run in GitHub Actions: services the tests need, in the shape of a GitHub Actions job's `services:` map, keyed by the service's id. The project's sweep workflow carries them on the jobs that run the tests (`sweep` and `review-now`), as the generator wrote them before that workflow was retired; changing them here no longer changes the workflow. Their connection details reach the tests through `env`.",
-          "type": "object",
-          "propertyNames": { "pattern": "^[A-Za-z_][A-Za-z0-9_-]*$" },
-          "additionalProperties": {
-            "type": "object",
-            "required": ["image"],
-            "additionalProperties": false,
-            "properties": {
-              "image": {
-                "description": "The Docker image to run, `postgres:16` say.",
-                "type": "string",
-                "minLength": 1
-              },
-              "env": {
-                "description": "Environment variables for the service container.",
-                "type": "object",
-                "propertyNames": { "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
-                "additionalProperties": { "type": "string" }
-              },
-              "ports": {
-                "description": "Ports to publish, as GitHub Actions takes them: `5432:5432` or a bare container port.",
-                "type": "array",
-                "items": { "type": ["string", "integer"] }
-              },
-              "volumes": {
-                "description": "Volumes to mount, as GitHub Actions takes them.",
-                "type": "array",
-                "items": { "type": "string" }
-              },
-              "options": {
-                "description": "Extra `docker create` options, a health check say.",
-                "type": "string"
-              },
-              "credentials": {
-                "description": "Registry credentials for a private image.",
-                "type": "object",
-                "required": ["username", "password"],
-                "additionalProperties": false,
-                "properties": {
-                  "username": { "type": "string" },
-                  "password": { "type": "string" }
-                }
-              }
-            }
-          }
         },
         "harnessNotes": {
           "description": "Path, relative to the project root, to a project-owned doc of notes for the testing auditor: how the suites are laid out and the conventions they follow. It must exist in the checkout; a path that leaves the project is refused.",
@@ -147,7 +86,7 @@
       }
     },
     "nightly": {
-      "description": "What the code reviewer does for the project each night besides its sweep. Read only by a code reviewer that runs on the development machine: a project whose sweep is still dispatched by GitHub Actions may set it, and nothing there runs it.",
+      "description": "What the code reviewer does for the project each night besides its sweep.",
       "type": "object",
       "additionalProperties": false,
       "properties": {
@@ -256,22 +195,14 @@
       "$schema": "https://raw.githubusercontent.com/josephmitchel/jm-devkit/main/plugin/devkit.schema.json",
       "modules": ["process", "web"],
       "kit": "0123abc",
-      "sweep": { "hour": 22 },
       "reviewer": {
         "setup": "npm ci",
         "tests": [
           { "name": "unit", "command": "npm test" },
           { "name": "db", "command": "npm run test:db" }
         ],
-        "env": { "TEST_DATABASE_URL": "postgres://postgres:postgres@localhost:5432/app_test" },
-        "services": {
-          "postgres": {
-            "image": "postgres:16",
-            "env": { "POSTGRES_PASSWORD": "postgres", "POSTGRES_DB": "app_test" },
-            "ports": ["5432:5432"],
-            "options": "--health-cmd pg_isready --health-interval 5s --health-retries 10"
-          }
-        },
+        "env": { "TZ": "UTC" },
+        "databases": ["TEST_DATABASE_URL"],
         "harnessNotes": "docs/agents/harness-notes.md",
         "redundancy": 2,
         "extraContext": "The billing module is generated; review its generator, not its output."

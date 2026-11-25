@@ -7,14 +7,14 @@ describe('renderFailure', () => {
     roundNo: 1,
     headSha: '19f3ec6d26113897eda36d1601321aa73bb89751',
     error: 'Error: agent fixer failed after 1 attempts: StreamStalledError: stream stalled',
-    runUrl: 'https://github.com/o/r/actions/runs/1',
+    runId: 'run-20261125T175756Z-9291bd',
   };
 
   it('names the stage, round and head, and links the run', () => {
     const body = renderFailure(base);
     expect(body).toContain('`fixing` stage on round 1 (`19f3ec6d26`)');
     expect(body).toContain('StreamStalledError: stream stalled');
-    expect(body).toContain('Full log: https://github.com/o/r/actions/runs/1');
+    expect(body).toContain("The whole output is in run `run-20261125T175756Z-9291bd`'s log on the code reviewer's machine.");
   });
 
   it("keeps only the error's first line off the repo's command output", () => {
@@ -29,9 +29,9 @@ describe('renderFailure', () => {
   });
 
   it('omits what it does not know', () => {
-    const body = renderFailure({ ...base, roundNo: null, headSha: null, runUrl: null });
+    const body = renderFailure({ ...base, roundNo: null, headSha: null, runId: null });
     expect(body).toContain('in the `fixing` stage. The gate stays blocked');
-    expect(body).not.toContain('Full log');
+    expect(body).not.toContain('whole output');
   });
 });
 

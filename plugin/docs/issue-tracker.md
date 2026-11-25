@@ -29,12 +29,12 @@ the project's standards.
   close the ticket on merge. (The merge automation reopens a ticket closed that way and labels it
   anyway, but do not rely on it.)
 - Once the PR is **merged**, two things happen to every ticket it addresses, automatically (the
-  `landed` job in `.github/workflows/nightly-sweep.yml` runs on the merge): the ticket's status
+  code reviewer's poller runs `landed` within a few minutes of the merge): the ticket's status
   becomes `needs-judging` (replacing `ready-for-agent` or whatever it carried), and its blocking
   edges are lifted — each "blocked by" edge on the tickets it blocks becomes "relates to", so they
   can start today rather than after the judge runs. Check the
-  ticket's thread for the "PR #N landed" comment; if it is missing (the workflow failed, or the PR
-  body named the ticket some other way), do both by hand:
+  ticket's thread for the "PR #N landed" comment; if it is still missing after ten minutes (the
+  run failed, or the PR body named the ticket some other way), do both by hand:
   ```
   gh issue edit <N> --add-label needs-judging --remove-label ready-for-agent,needs-work
   # the tickets #N blocks, and the node ids the mutations need; rerun with

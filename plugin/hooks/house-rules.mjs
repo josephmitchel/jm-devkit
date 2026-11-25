@@ -37,8 +37,8 @@ export async function nudgeFor(projectDir) {
     const [first, ...rest] = retired;
     const lead = behind
       ? `${NUDGE} ${also(first)}`
-      : `This project still has ${first}, a kit-owned file the kit has retired, and it keeps working as it is. ` +
-        `/devkit:sync opens a pull request that removes it, and ${RETIRED[first]}: run sync only when the owner means that to happen.`;
+      : `This project still has ${first}, a kit-owned file the kit has retired, which can no longer run: the kit no longer has its action. ` +
+        `/devkit:sync opens a pull request that removes it, and ${RETIRED[first]}.`;
     return [lead, ...rest.map(also)].join(' ');
   } catch {
     return null;

@@ -20,7 +20,7 @@ export const reviewerRoot = projectRoot;
 
 /**
  * Where reviewed repositories are checked out. Default (a laptop) keeps them under the project, but
- * on a runner the project IS the action's install tree — the reviewed repo would sit beneath the
+ * on the machine that is the code reviewer's own checkout: the reviewed repo would sit beneath the
  * reviewer's own node_modules and git config, where one of its scripts could rewrite the live
  * credential helper, and where its test suite resolves modules by walking up into ours.
  */
@@ -226,15 +226,6 @@ const REVIEWER_ONLY_ENV = [
 ];
 
 /**
- * Variables the reviewed repo's own commands need, carried as newline-separated KEY=VALUE lines
- * (a database URL for its test suite, say). They arrive in ONE variable and are applied only to
- * the child's environment — never exported into the reviewer's own process, which is what the
- * first version of this did: a repo could then name `DATABASE_URL` or any `REVIEWER_*` variable
- * and repoint the reviewer at a database of its choosing.
- */
-const REPO_ENV_CARRIER = 'REVIEWER_REPO_ENV';
-
-/**
  * A home directory of its own for the reviewed repo's commands.
  *
  * Moving the checkout out of the reviewer's install tree did not protect the thing that mattered
@@ -259,9 +250,8 @@ function repoCommandHome(source: NodeJS.ProcessEnv): string | null {
 
 /**
  * The environment a reviewed repo's own command gets: ours, minus anything that is ours, plus what
- * the project asks for — its `devkit.json` env, then the `repo-env` input over it. The input wins a
- * name both set because it is the only one of the two that can carry a secret, and the per-run
- * value a workflow sets on purpose should not be undone by a committed default.
+ * the project asks for in its `devkit.json` env. That is applied only to the child's environment,
+ * never to the reviewer's own, so a project naming `DATABASE_URL` cannot repoint the reviewer.
  */
 export function repoCommandEnv(
   source: NodeJS.ProcessEnv = process.env,
@@ -273,20 +263,9 @@ export function repoCommandEnv(
   for (const key of REVIEWER_ONLY_ENV) delete env[key];
   for (const key of Object.keys(env)) if (key.startsWith('REVIEWER_')) delete env[key];
 
-  // Both applied after the strip, so a repo CAN legitimately set a name on the strip list for its
-  // own commands — which is the point — without that name ever having existed in the reviewer's
-  // environment.
+  // Applied after the strip, so a repo CAN set a name on the strip list for its own commands
+  // without that name ever having existed in the reviewer's environment.
   Object.assign(env, projectEnv);
-  for (const line of (source[REPO_ENV_CARRIER] ?? '').split('\n')) {
-    const trimmed = line.trim();
-    if (trimmed === '' || trimmed.startsWith('#')) continue;
-    const at = trimmed.indexOf('=');
-    if (at < 1) {
-      console.warn(`ignoring malformed repo-env line: ${trimmed.slice(0, 40)}`);
-      continue;
-    }
-    env[trimmed.slice(0, at)] = trimmed.slice(at + 1);
-  }
   return env;
 }
 

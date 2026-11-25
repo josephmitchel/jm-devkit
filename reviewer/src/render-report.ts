@@ -163,12 +163,13 @@ export interface FailureInput {
   roundNo: number | null;
   headSha: string | null;
   error: string;
-  runUrl: string | null;
+  /** The run on the machine whose log has the whole output, when there is one. */
+  runId: string | null;
 }
 
 /**
  * Only the error's first line goes on the PR. The rest can carry the reviewed repo's own command
- * output, and a public comment is no place for that — the run log behind `runUrl` has all of it.
+ * output, and a public comment is no place for that — the run's log on the machine has all of it.
  */
 export function renderFailure(input: FailureInput): string {
   const where =
@@ -186,7 +187,7 @@ export function renderFailure(input: FailureInput): string {
     '```',
     '',
   ];
-  if (input.runUrl) lines.push(`Full log: ${input.runUrl}`, '');
+  if (input.runId) lines.push(`The whole output is in run \`${input.runId}\`'s log on the code reviewer's machine.`, '');
   lines.push('_Comment on this PR to retry. A retry resumes from this stage unless the error above says otherwise._');
   return lines.join('\n');
 }

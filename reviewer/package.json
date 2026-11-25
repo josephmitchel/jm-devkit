@@ -6,9 +6,7 @@
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:postgres": "vitest run --config vitest.postgres.config.ts",
-    "worker:deploy": "npx --yes wrangler@4.153.0 deploy --config worker/wrangler.toml",
-    "worker:tail": "npx --yes wrangler@4.153.0 tail --config worker/wrangler.toml"
+    "test:postgres": "vitest run --config vitest.postgres.config.ts"
   },
   "keywords": [],
   "author": "",

@@ -8,7 +8,7 @@ disable-model-invocation: true
 
 Install brings the project in the current directory under the kit's **process module**: tickets, the label scheme, the code reviewer's per-PR review on demand and its nightly sweep. The project may be new, or already hold some of the pieces, or older copies of them. Install offers only the process module and writes no product code.
 
-The code reviewer runs on the development machine and finds its projects through its GitHub App: a project with the App installed, a `devkit.json` on its default branch and no code reviewer workflow there is swept that night. So install sets nothing up on GitHub Actions: it writes no workflow, sets no repository secret and gives the project no sweep slot.
+The code reviewer runs on the development machine and finds its projects through its GitHub App: a project with the App installed, a `devkit.json` on its default branch and no code reviewer workflow there is swept that night. So install sets nothing up on GitHub Actions: it writes no workflow and sets no repository secret.
 
 Install also sees that the project's default branch carries the **merge rule**, which every project under the kit has whichever modules it uses.
 
@@ -42,7 +42,7 @@ The scripts below are the parts that must not be left to judgement. Run each as 
    - **The App**: `app.mjs installed $REPO`. Exit 2 blocks the plan (below). Exit 3 does not: it is a check that could not be made, and goes under "Left for you".
    - **`devkit.json`**: see "Writing devkit.json". Write the proposed file into the scratch worktree; that is a scratch copy, not the project.
    - **Discussions**: `discussions.mjs $REPO`. On exit 1, what it prints goes under "Left for you" as it is. On exit 2, put what it printed on stderr there instead, as a check that could not be made.
-   - **Kit-owned files**: `generate.mjs <worktree> --check` with the proposed `devkit.json` in place. Each path it prints is a write, except one that stderr calls retired, which is a removal. See "A project still on GitHub Actions".
+   - **Kit-owned files**: `generate.mjs <worktree> --check` with the proposed `devkit.json` in place. Each path it prints is a write, except one that stderr calls retired, which is a removal. See "A leftover code reviewer workflow".
    - **`CODING_STANDARDS.md`**: a write only if it is missing. It is project-owned: never edit one that exists.
    - **Copies of what the plugin supplies**: see "What the plugin now supplies".
    - **Permission prompts**: `settings.mjs <worktree> --dry-run`.
@@ -61,8 +61,8 @@ Gather every open question into one message, each with the answer you recommend,
 
 `devkit.json` is project-owned and validated against `${CLAUDE_PLUGIN_ROOT}/devkit.schema.json`; read the schema's descriptions for what each field means.
 
-- **An existing valid `devkit.json` keeps the owner's values.** Install changes only `kit`. That includes `sweep.hour` and `reviewer.services` in a project that has them: both are retired, still accepted, and read by nothing on the development machine. An invalid `devkit.json` blocks the plan: show the generator's errors.
-- **A new one** has, in this order: `$schema` (`https://raw.githubusercontent.com/josephmitchel/jm-devkit/main/plugin/devkit.schema.json`), `modules: ["process"]`, `kit`, `reviewer`, then `nightly` if the project has nightly checks, two-space indented with a final newline. It has no `sweep` and no `reviewer.services`. It has no `deploy` either: the owner adds that section, last, when the apps machine is to deploy the project.
+- **An existing valid `devkit.json` keeps the owner's values.** Install changes only `kit`. An invalid `devkit.json` blocks the plan: show the generator's errors. A `sweep` section or `reviewer.services` left from GitHub Actions makes it invalid, and the error says what to do: ask the owner, in the open questions, whether to remove it in this pull request, and for `reviewer.services` which variables to name in `reviewer.databases` instead.
+- **A new one** has, in this order: `$schema` (`https://raw.githubusercontent.com/josephmitchel/jm-devkit/main/plugin/devkit.schema.json`), `modules: ["process"]`, `kit`, `reviewer`, then `nightly` if the project has nightly checks, two-space indented with a final newline. It has no `deploy`: the owner adds that section, last, when the apps machine is to deploy the project.
 - **`reviewer`**: infer it, in this order of trust:
   1. The project's own CI workflows: the steps that install dependencies are `setup` (joined with `&&`, `cd <dir> &&` for a subdirectory), and each step that runs a test suite or a typecheck is one entry in `tests` (`name`, `command`). Leave out lint and format. The environment its test steps set becomes `env`; a value that is a `${{ secrets.… }}` expression cannot be committed, so ask about it. A test job's `services:` map is not copied: see `reviewer.databases`.
   2. The package manifests and lockfiles, for a language CI does not cover: `package-lock.json` gives `npm ci` and the `test` script, `pnpm-lock.yaml` gives `pnpm install --frozen-lockfile`, `uv.lock` gives `uv sync` and `uv run pytest`, `go.mod` gives `go test ./...`, `Cargo.toml` gives `cargo test`, and so on.
@@ -81,16 +81,14 @@ A project set up before the kit holds copies of what the plugin now supplies. Re
 - **The `## Agent skills` block** in `CLAUDE.md` or `AGENTS.md`: remove its generic subsections (issue tracker, triage or ticket labels, domain docs, and any that only points at a removed doc) and keep the project's own, a Design section say. Remove the heading if nothing is left under it.
 - **The house rules**, wherever they appear in `CLAUDE.md` or `AGENTS.md`: the Git rule always, and any other rule in `${CLAUDE_PLUGIN_ROOT}/house-rules.md` the file repeats. The plugin puts them in every session (ADR 0003). Leave the rest of the file exactly as it is.
 - **Permission prompts** that contradict the Git house rule: what `settings.mjs` lists.
-- **Hand-copied code reviewer workflows**: a workflow that is not kit-owned (a kit-owned file's first line is `# Generated by the devkit generator`) whose job `uses:` the code reviewer's action (`josephmitchel/code-reviewer@…` or `josephmitchel/jm-devkit/reviewer@…`), the old per-PR `code-review.yml` say. Nothing replaces it: the code reviewer on the development machine does that work. Removing it is a move: see "A project still on GitHub Actions".
+- **Hand-copied code reviewer workflows**: a workflow that is not kit-owned (a kit-owned file's first line is `# Generated by the devkit generator`) whose job `uses:` the code reviewer's action (`josephmitchel/code-reviewer@…` or `josephmitchel/jm-devkit/reviewer@…`), the old per-PR `code-review.yml` say. Nothing replaces it: the code reviewer on the development machine does that work. See "A leftover code reviewer workflow".
 - **References** in the project's own docs to a file install removes: repoint them at the plugin (`/devkit:<skill>` or "the plugin's tracker rules") or drop them.
 
-## A project still on GitHub Actions
+## A leftover code reviewer workflow
 
-A project whose default branch has a code reviewer workflow has its code reviewer on GitHub Actions today, and removing the workflow is a **move**: merging the pull request hands the project to the code reviewer on the development machine. The workflow is the retired kit-owned `.github/workflows/nightly-sweep.yml`, which the generator's check lists, or a hand-copied one.
+The code reviewer no longer runs on GitHub Actions, and the kit no longer has the action its workflows used, so a code reviewer workflow left in a project cannot run. It is the retired kit-owned `.github/workflows/nightly-sweep.yml`, which the generator's check lists, or a hand-copied one. The code reviewer on the development machine leaves alone a project whose default branch has one, so a project is never reviewed from two places: the plan removes it, and its line says that the machine handles the project once the pull request is merged.
 
-When the plan removes one, read `${CLAUDE_PLUGIN_ROOT}/skills/kit/sync/moving-to-the-machine.md` and follow it: the plan's line for the workflow says that merging moves the project, the pull request's title and opening section are the ones it gives, and the steps it leaves the owner go under "Left for you".
-
-If the owner answers the plan by saying the project should stay on GitHub Actions for now, take the workflow out of the plan and leave it exactly as it is. In step 4, after the generator has run, put a workflow it removed back with `git -C <worktree> checkout -- <path>`; `--check` then lists that path alone.
+The repository may still hold the secrets the workflow read. If `gh secret list -R <owner/name>` shows any of `DATABASE_URL`, `CLAUDE_CODE_OAUTH_TOKEN`, `REVIEWER_APP_CLIENT_ID` and `REVIEWER_APP_PRIVATE_KEY`, nothing reads them any more: add a line under "Left for you" to delete those it shows, with `gh secret delete <NAME> -R <owner/name>` for each. Never read their values.
 
 ## The merge rule
 
@@ -117,7 +115,7 @@ Write
   devkit.json                          new: setup `npm ci`; tests unit `npm test`; databases TEST_DATABASE_URL (from .github/workflows/ci.yml)
   CODING_STANDARDS.md                  missing: the kit's starter (project-owned)
 Remove or edit
-  .github/workflows/code-review.yml    remove: hand-copied code reviewer workflow. Merging this pull request moves the code reviewer from GitHub Actions to the development machine
+  .github/workflows/code-review.yml    remove: hand-copied code reviewer workflow, which can no longer run. The machine handles the project once this is merged
   docs/agents/triage-labels.md         remove: the plugin's label scheme replaces it
   docs/agents/implement-spec.md        edit: keep only the worktree setup and the ports to leave alone
   CLAUDE.md                            edit: remove "## Agent skills" > Issue tracker, Triage labels, Domain docs, and the Git rule; keep "### Design"
@@ -133,7 +131,7 @@ Left for you
   https://github.com/settings/installations
   <what discussions.mjs printed, as it is>
   <each line merge-rule.mjs printed for the owner, as it is>
-  After merging: remove the four repository secrets, and take <owner/name> out of the Worker's list
+  Delete the repository secrets the old workflow read: gh secret delete DATABASE_URL -R <owner/name> (and each other one listed)
 Blocked
   <a script's message, verbatim>
 ```

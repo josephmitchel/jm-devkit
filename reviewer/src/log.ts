@@ -20,8 +20,8 @@ export function timestampConsole(now: () => Date = () => new Date()): void {
 }
 
 /**
- * A line a script reads back — the action greps `^outcome: ` and captures `next`'s PR number —
- * so it goes to stdout exactly as given, with no timestamp in front.
+ * A line a script reads back (an `outcome: ` line, `next`'s PR number), so it goes to stdout
+ * exactly as given, with no timestamp in front.
  */
 export function printRaw(line: string): void {
   process.stdout.write(`${line}\n`);

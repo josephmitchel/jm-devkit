@@ -61,7 +61,7 @@ export function renderRepoStandards(workspace: string): string {
 }
 
 // The kit's own rules, held in every project alongside the repo's file. Resolved from this source
-// file, not the working directory: the action runs from the kit's checkout, and the repo under
+// file, not the working directory: the code reviewer runs from the kit's checkout, and the repo under
 // review is a separate checkout that knows nothing of it.
 export const HOUSE_STANDARDS_PATH = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),

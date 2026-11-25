@@ -15,8 +15,6 @@ export const { privateKey: PRIVATE_KEY, publicKey: PUBLIC_KEY } = crypto.generat
 });
 
 export const VALUES = {
-  DATABASE_URL: 'postgres://u:p@db.example.test/neon?sslmode=require&channel_binding=require',
-  CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-a=b&c=d',
   REVIEWER_APP_CLIENT_ID: 'Iv23liTESTCLIENT',
 };
 

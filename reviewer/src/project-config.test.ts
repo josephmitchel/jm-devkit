@@ -42,7 +42,6 @@ function setupError(): string {
 
 const valid = {
   modules: ['process'],
-  sweep: { hour: 4 },
   reviewer: {
     setup: 'npm ci',
     tests: [
@@ -51,7 +50,6 @@ const valid = {
     ],
     env: { TEST_DATABASE_URL: 'postgres://localhost:5432/example_test' },
     databases: ['APP_DATABASE_URL', 'AUDIT_DATABASE_URL'],
-    services: { postgres: { image: 'postgres:16', ports: ['5432:5432'] } },
     harnessNotes: 'docs/harness.md',
     redundancy: 2,
     extraContext: 'The example app has no UI.',
@@ -89,7 +87,7 @@ describe('readProjectSetup with a devkit.json', () => {
   });
 
   it('takes a field the file leaves out as none', () => {
-    writeConfig({ modules: ['process'], sweep: { hour: 0 }, reviewer: { tests: [{ name: 'unit', command: 'npm test' }] } });
+    writeConfig({ modules: ['process'], reviewer: { tests: [{ name: 'unit', command: 'npm test' }] } });
 
     expect(readProjectSetup(checkout)).toEqual({
       setupCommand: null,
@@ -116,16 +114,12 @@ describe('readProjectSetup with a devkit.json', () => {
     expect(readProjectSetup(checkout).testCommands).toEqual([{ name: 'unit', command: 'npm test' }]);
   });
 
-  it('accepts the retired sweep.hour and reviewer.services, and takes nothing from them', () => {
-    const tests = [{ name: 'unit', command: 'npm test' }];
-    writeConfig({ modules: ['process'], reviewer: { tests } });
-    const without = readProjectSetup(checkout);
-    writeConfig({
-      modules: ['process'],
-      sweep: { hour: 7 },
-      reviewer: { tests, services: { postgres: { image: 'postgres:16' } } },
-    });
-    expect(readProjectSetup(checkout)).toEqual(without);
+  it('refuses the retired sweep and reviewer.services, saying to remove each', () => {
+    writeConfig({ ...valid, sweep: { hour: 7 }, reviewer: { ...valid.reviewer, services: { postgres: { image: 'postgres:16' } } } });
+    const message = setupError();
+    expect(message).toContain('sweep is retired: remove it from devkit.json');
+    expect(message).toContain('reviewer.services is retired: remove it from devkit.json, and name in reviewer.databases');
+    expect(message).not.toContain('not a known field');
   });
 });
 
@@ -165,10 +159,10 @@ describe('readProjectSetup with a malformed devkit.json', () => {
   });
 
   it('names a value of the wrong type or out of range', () => {
-    writeConfig({ ...valid, sweep: { hour: 24 }, reviewer: { ...valid.reviewer, redundancy: '2' } });
-    const message = setupError();
-    expect(message).toContain('sweep.hour must be at most 23');
-    expect(message).toContain('reviewer.redundancy must be an integer');
+    writeConfig({ ...valid, reviewer: { ...valid.reviewer, redundancy: '2' } });
+    expect(setupError()).toContain('reviewer.redundancy must be an integer');
+    writeConfig({ ...valid, reviewer: { ...valid.reviewer, redundancy: 0 } });
+    expect(setupError()).toContain('reviewer.redundancy must be at least 1');
   });
 
   it('names an empty list of tests and an env value that is not a string', () => {
@@ -218,7 +212,7 @@ describe('readProjectSetup with a malformed devkit.json', () => {
   });
 
   it('names a missing section and modules without the process module', () => {
-    writeConfig({ modules: ['web'], sweep: { hour: 1 } });
+    writeConfig({ modules: ['web'] });
     const message = setupError();
     expect(message).toContain('reviewer is required');
     expect(message).toContain('modules must include "process"');

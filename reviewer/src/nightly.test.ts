@@ -6,7 +6,6 @@ import { classifyProjects } from './projects.js';
 
 const config = JSON.stringify({
   modules: ['process'],
-  sweep: { hour: 4 },
   reviewer: { tests: [{ name: 'unit', command: 'npm test' }] },
 });
 
