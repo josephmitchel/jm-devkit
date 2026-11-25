@@ -1,7 +1,8 @@
-import { CONFIG_FILE, DevkitConfigError, parseDevkitConfig } from '../../plugin/devkit-config.mjs';
+import { CONFIG_FILE, DevkitConfigError } from '../../plugin/devkit-config.mjs';
 import { SWEEP_WORKFLOW } from '../../plugin/generator/generate.mjs';
 import { GitHubError, defaultBranchFile, installedRepos } from '../../plugin/install/app.mjs';
 import { appCredentials } from './gh-auth.js';
+import { INSTALL, parseProjectConfig } from './project-config.js';
 
 export interface Observed {
   /** The text of its devkit.json, or null when it has none. */
@@ -20,9 +21,9 @@ export function projectState(observed: Observed): ProjectState {
   if (observed.sweepWorkflow) {
     return { state: 'still on Actions', reason: `its default branch has ${SWEEP_WORKFLOW}` };
   }
-  if (observed.config === null) return { state: 'skipped', reason: `its default branch has no ${CONFIG_FILE}` };
+  if (observed.config === null) return { state: 'skipped', reason: `its default branch has no ${CONFIG_FILE}: ${INSTALL}` };
   try {
-    const config = parseDevkitConfig(observed.config);
+    const config = parseProjectConfig(observed.config);
     return { state: 'handled', nightlyChecks: config.nightly?.checks?.length ?? 0 };
   } catch (err) {
     if (!(err instanceof DevkitConfigError)) throw err;

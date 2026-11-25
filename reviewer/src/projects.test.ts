@@ -37,8 +37,14 @@ describe('projectState', () => {
   it('is skipped with no project config', () => {
     expect(projectState({ config: null, sweepWorkflow: false })).toEqual({
       state: 'skipped',
-      reason: 'its default branch has no devkit.json',
+      reason: 'its default branch has no devkit.json: run /devkit:install in the project to bring it under the kit',
     });
+  });
+
+  it('names install for a project config whose modules leave out process', () => {
+    const state = projectState({ config: JSON.stringify({ ...JSON.parse(config), modules: ['web'] }), sweepWorkflow: false });
+    expect(state).toMatchObject({ state: 'skipped', invalidConfig: true });
+    expect(state).toHaveProperty('reason', expect.stringMatching(/modules must include "process".*: run \/devkit:install in the project/));
   });
 
   it('is skipped with a project config that is not valid, saying what is wrong with it and that it has one', () => {
@@ -67,7 +73,7 @@ describe('the list of projects', () => {
     ]);
     expect(projects.map(projectLine)).toEqual([
       'acme/anvils handled',
-      'Acme/bare skipped: its default branch has no devkit.json',
+      'Acme/bare skipped: its default branch has no devkit.json: run /devkit:install in the project to bring it under the kit',
       'acme/gadgets still on Actions: its default branch has .github/workflows/nightly-sweep.yml',
       'acme/widgets handled',
     ]);

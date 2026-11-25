@@ -13,11 +13,12 @@ export type CarryOutcome = 'carried' | 'gated' | 'nothing';
  */
 export async function carryGate(slug: string, prNumber: number): Promise<CarryOutcome> {
   const [repo] = await db.select().from(schema.repos).where(eq(schema.repos.slug, slug));
-  if (!repo) throw new Error(`repo ${slug} not registered`);
-  const passed = await db
-    .select()
-    .from(schema.reviews)
-    .where(and(eq(schema.reviews.repoId, repo.id), eq(schema.reviews.state, 'passed')));
+  const passed = repo
+    ? await db
+        .select()
+        .from(schema.reviews)
+        .where(and(eq(schema.reviews.repoId, repo.id), eq(schema.reviews.state, 'passed')))
+    : [];
   const own = passed.find((r) => r.prNumber === prNumber);
   if (!own) {
     console.log(`#${prNumber} has no passed review — no gate to carry`);

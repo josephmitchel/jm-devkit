@@ -53,7 +53,7 @@ describe('a review queued for a project the machine no longer handles', () => {
     expect(noLongerHandled(['acme/widgets', 'acme/gadgets', 'acme/bare', 'Zenith/anvils'], lastSeen)).toEqual(
       new Map([
         ['acme/widgets', 'still on Actions: its default branch has .github/workflows/nightly-sweep.yml'],
-        ['acme/bare', 'skipped: its default branch has no devkit.json'],
+        ['acme/bare', 'skipped: its default branch has no devkit.json: run /devkit:install in the project to bring it under the kit'],
         ['Zenith/anvils', "the code reviewer's App is no longer installed on it"],
       ]),
     );

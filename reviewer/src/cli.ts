@@ -281,11 +281,13 @@ function usageExit(): never {
  */
 async function abandonReview(slug: string, prNumber: number, reason: string): Promise<void> {
   const [repo] = await db.select().from(schema.repos).where(eq(schema.repos.slug, slug));
-  if (!repo) throw new Error(`repo ${slug} not registered`);
-  const [review] = await db
-    .select()
-    .from(schema.reviews)
-    .where(and(eq(schema.reviews.repoId, repo.id), eq(schema.reviews.prNumber, prNumber)));
+  // No row means the code reviewer has never reviewed the project, so there is no review either.
+  const [review] = repo
+    ? await db
+        .select()
+        .from(schema.reviews)
+        .where(and(eq(schema.reviews.repoId, repo.id), eq(schema.reviews.prNumber, prNumber)))
+    : [];
   if (!review) {
     console.log(`no review for ${slug}#${prNumber} — nothing to record`);
     return;
@@ -340,7 +342,7 @@ async function handOffToQueue(slug: string, workflowFile: string): Promise<void>
 
 async function nextQueuedPr(slug: string): Promise<number | null> {
   const [repo] = await db.select().from(schema.repos).where(eq(schema.repos.slug, slug));
-  if (!repo) throw new Error(`repo ${slug} not registered`);
+  if (!repo) return null;
 
   // Asking only whether a non-terminal review exists is not enough: a holder whose PR has since
   // been closed is dead (nothing re-enters it, since `closed` is not a trigger) and would block
@@ -495,7 +497,7 @@ async function showStatus(slug?: string): Promise<void> {
 
 async function resetReview(slug: string, prNumber: number): Promise<void> {
   const [repo] = await db.select().from(schema.repos).where(eq(schema.repos.slug, slug));
-  if (!repo) throw new Error(`repo ${slug} not registered`);
+  if (!repo) throw new Error(`no review for ${slug}#${prNumber}: the code reviewer has never reviewed ${slug}`);
   const [review] = await db
     .select()
     .from(schema.reviews)

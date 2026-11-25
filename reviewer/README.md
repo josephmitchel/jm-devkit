@@ -308,7 +308,8 @@ and reported the same way, and exits 1 when a check failed.
 A run that fails tells the owner through an issue, filed where the fault is. `reportRun`
 (`src/failure-report.ts`) is called with every finished run and decides the rest.
 
-- **The project's side:** its project config is invalid, its setup command failed, it has no
+- **The project's side:** it has no project config (so it is not under the kit), its project config
+  is invalid, its setup command failed, it has no
   discussion category for the night's summary, or one of its nightly checks failed. The issue is
   opened in that project, with the end of the run's output. Which types of error are a project's
   fault is one list in `src/failure-side.ts`. The addresses of the run's test databases, and the
